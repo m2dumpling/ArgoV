@@ -791,153 +791,386 @@ XRAYCONF
 }
 
 #==============================================================================
-# 增量添加节点（不重装，逐步交互）
+# 管理节点（添加 / 编辑 / 删除，不重装）
 #==============================================================================
-add_protocol() {
+manage_protocols() {
     load_conf
     clear
     [ ! -f "$CONFIG_FILE" ] && { red_msg "请先完成首次安装！"; return; }
 
-    # 检查已安装
-    local has_ss_argo=0 has_reality=0 has_ss_direct=0 avail=0
-    jq -e '.inbounds[] | select(.tag=="ss-ws")' "$CONFIG_FILE" &>/dev/null && has_ss_argo=1
-    jq -e '.inbounds[] | select(.tag=="reality")' "$CONFIG_FILE" &>/dev/null && has_reality=1
-    jq -e '.inbounds[] | select(.tag=="ss-direct")' "$CONFIG_FILE" &>/dev/null && has_ss_direct=1
-    [ "$has_ss_argo" = 0 ] && avail=$((avail+1))
-    [ "$has_reality" = 0 ] && avail=$((avail+1))
-    [ "$has_ss_direct" = 0 ] && avail=$((avail+1))
+    local has_ss_argo=0 has_reality=0 has_ss_direct=0
+    jq -e '.inbounds[] | select(.tag=="ss-ws")'      "$CONFIG_FILE" &>/dev/null && has_ss_argo=1
+    jq -e '.inbounds[] | select(.tag=="reality")'     "$CONFIG_FILE" &>/dev/null && has_reality=1
+    jq -e '.inbounds[] | select(.tag=="ss-direct")'   "$CONFIG_FILE" &>/dev/null && has_ss_direct=1
 
-    if [ "$avail" = 0 ]; then
-        echo ""; green_msg "全部可选协议已安装！"; echo ""; read -p "  按回车键返回..." -r; return
-    fi
+    while true; do
+        clear
+        echo ""
+        echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
+        echo -e " ${purple}║${re}         ${white}管理节点${re}                          ${purple}║${re}"
+        echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
+        echo ""
 
-    # --- 第一步：选协议 ---
+        # 已安装的
+        [ "$has_ss_argo" = 1 ] || [ "$has_reality" = 1 ] || [ "$has_ss_direct" = 1 ] && \
+            echo -e "  ${white}── 已安装 · 可编辑 ──${re}" && echo ""
+
+        local ea=0 er=0 es=0
+        if [ "$has_ss_argo" = 1 ]; then
+            local sp; sp=$(jq -r '.inbounds[] | select(.tag=="ss-ws") | .port // empty' "$CONFIG_FILE" 2>/dev/null)
+            local sm; sm=$(jq -r '.inbounds[] | select(.tag=="ss-ws") | .settings.method // empty' "$CONFIG_FILE" 2>/dev/null)
+            ea=$((ea+1)); echo -e "  ${green}e${ea}${re}. Shadowsocks + Argo  ${cyan}${sm}${re}  端口 ${cyan}${sp}${re}"
+        fi
+        if [ "$has_reality" = 1 ]; then
+            local rp; rp=$(jq -r '.inbounds[] | select(.tag=="reality") | .port // empty' "$CONFIG_FILE" 2>/dev/null)
+            local rs; rs=$(jq -r '.inbounds[] | select(.tag=="reality") | .streamSettings.realitySettings.serverNames[0] // empty' "$CONFIG_FILE" 2>/dev/null)
+            er=$((er+1)); echo -e "  ${green}e${er}${re}. VLESS Reality      ${cyan}${rs}${re}  端口 ${cyan}${rp}${re}"
+        fi
+        if [ "$has_ss_direct" = 1 ]; then
+            local dp; dp=$(jq -r '.inbounds[] | select(.tag=="ss-direct") | .port // empty' "$CONFIG_FILE" 2>/dev/null)
+            local dm; dm=$(jq -r '.inbounds[] | select(.tag=="ss-direct") | .settings.method // empty' "$CONFIG_FILE" 2>/dev/null)
+            es=$((es+1)); echo -e "  ${green}e${es}${re}. Shadowsocks 直连    ${cyan}${dm}${re}  端口 ${cyan}${dp}${re}"
+        fi
+
+        # 可添加的
+        local avail=0
+        [ "$has_ss_argo" = 0 ] || [ "$has_reality" = 0 ] || [ "$has_ss_direct" = 0 ] && \
+            echo "" && echo -e "  ${white}── 可添加 ──${re}" && echo ""
+
+        local aa=0
+        if [ "$has_ss_argo" = 0 ]; then aa=$((aa+1)); echo -e "  ${cyan}a${aa}${re}. Shadowsocks + Argo"; fi
+        if [ "$has_reality" = 0 ]; then aa=$((aa+1)); echo -e "  ${cyan}a${aa}${re}. VLESS Reality 直连"; fi
+        if [ "$has_ss_direct" = 0 ]; then aa=$((aa+1)); echo -e "  ${cyan}a${aa}${re}. Shadowsocks 直连"; fi
+
+        # 删除
+        [ "$has_ss_argo" = 1 ] || [ "$has_reality" = 1 ] || [ "$has_ss_direct" = 1 ] && \
+            echo "" && echo -e "  ${red}d${re}. 删除节点"
+
+        echo ""
+        echo -e "  ${red}0${re}. 返回主菜单"
+        echo ""
+        echo -e " ${purple}────────────────────────────────────────${re}"
+        read -p "  请输入: " ac
+
+        [ "$ac" = "0" ] && return
+
+        # === 编辑模式 ===
+        local edit_tag="" edit_label=""
+        if [ "$has_ss_argo" = 1 ] && [ "$ac" = "e1" ]; then edit_tag="ss-ws"; edit_label="Shadowsocks + Argo"; fi
+        if [ "$has_reality" = 1 ] && [ "$ac" = "e1" ] && [ "$edit_tag" != "ss-ws" ]; then edit_tag="reality"; edit_label="VLESS Reality"; fi
+        if [ "$has_reality" = 1 ] && [ "$ac" = "e${er}" ] && [ -z "$edit_tag" ]; then edit_tag="reality"; edit_label="VLESS Reality"; fi
+        if [ "$has_ss_direct" = 1 ] && [ "$ac" = "e${es}" ] && [ -z "$edit_tag" ]; then edit_tag="ss-direct"; edit_label="Shadowsocks 直连"; fi
+
+        # Fix e numbering: reality might be e1 if ss-argo not installed, etc.
+        [ -z "$edit_tag" ] && [ "$has_reality" = 1 ] && [ "$ac" = "e1" ] && [ "$has_ss_argo" = 0 ] && { edit_tag="reality"; edit_label="VLESS Reality"; }
+        [ -z "$edit_tag" ] && [ "$has_ss_direct" = 1 ] && [ "$ac" = "e1" ] && [ "$has_ss_argo" = 0 ] && [ "$has_reality" = 0 ] && { edit_tag="ss-direct"; edit_label="Shadowsocks 直连"; }
+
+        if [ -n "$edit_tag" ]; then
+            edit_protocol "$edit_tag" "$edit_label"; load_conf
+            has_ss_argo=0; has_reality=0; has_ss_direct=0
+            jq -e '.inbounds[] | select(.tag=="ss-ws")'      "$CONFIG_FILE" &>/dev/null && has_ss_argo=1
+            jq -e '.inbounds[] | select(.tag=="reality")'     "$CONFIG_FILE" &>/dev/null && has_reality=1
+            jq -e '.inbounds[] | select(.tag=="ss-direct")'   "$CONFIG_FILE" &>/dev/null && has_ss_direct=1
+            continue
+        fi
+
+        # === 添加模式 ===
+        local add_proto=""
+        if [ "$ac" = "a1" ]; then
+            [ "$has_ss_argo" = 0 ] && add_proto="ss-argo"
+            [ "$has_ss_argo" = 1 ] && [ "$has_reality" = 0 ] && add_proto="reality"
+            [ "$has_ss_argo" = 1 ] && [ "$has_reality" = 1 ] && [ "$has_ss_direct" = 0 ] && add_proto="ss-direct"
+        elif [ "$ac" = "a2" ]; then
+            [ "$has_ss_argo" = 0 ] && [ "$has_reality" = 0 ] && add_proto="reality"
+            [ "$has_ss_argo" = 0 ] && [ "$has_reality" = 1 ] && add_proto="ss-direct"
+            [ "$has_ss_argo" = 1 ] && [ "$has_reality" = 0 ] && add_proto="ss-direct"
+        elif [ "$ac" = "a3" ]; then
+            add_proto="ss-direct"
+        fi
+
+        if [ -n "$add_proto" ]; then
+            add_single_protocol "$add_proto"; load_conf
+            has_ss_argo=0; has_reality=0; has_ss_direct=0
+            jq -e '.inbounds[] | select(.tag=="ss-ws")'      "$CONFIG_FILE" &>/dev/null && has_ss_argo=1
+            jq -e '.inbounds[] | select(.tag=="reality")'     "$CONFIG_FILE" &>/dev/null && has_reality=1
+            jq -e '.inbounds[] | select(.tag=="ss-direct")'   "$CONFIG_FILE" &>/dev/null && has_ss_direct=1
+            continue
+        fi
+
+        # === 删除模式 ===
+        if [ "$ac" = "d" ] || [ "$ac" = "D" ]; then
+            delete_protocol
+            load_conf
+            has_ss_argo=0; has_reality=0; has_ss_direct=0
+            jq -e '.inbounds[] | select(.tag=="ss-ws")'      "$CONFIG_FILE" &>/dev/null && has_ss_argo=1
+            jq -e '.inbounds[] | select(.tag=="reality")'     "$CONFIG_FILE" &>/dev/null && has_reality=1
+            jq -e '.inbounds[] | select(.tag=="ss-direct")'   "$CONFIG_FILE" &>/dev/null && has_ss_direct=1
+            continue
+        fi
+
+        red_msg "无效输入。"; sleep 1
+    done
+}
+
+# --- 编辑单个协议 ---
+edit_protocol() {
+    local tag="$1" label="$2" uuid; uuid=$(get_uuid)
+    local cur_port cur_method cur_sni cur_pass proto_type=""
+
+    case "$tag" in
+        ss-ws)
+            proto_type="ss-argo"
+            cur_port=$(jq -r '.inbounds[] | select(.tag=="ss-ws") | .port // empty' "$CONFIG_FILE" 2>/dev/null)
+            cur_method=$(jq -r '.inbounds[] | select(.tag=="ss-ws") | .settings.method // empty' "$CONFIG_FILE" 2>/dev/null)
+            cur_pass=$(jq -r '.inbounds[] | select(.tag=="ss-ws") | .settings.password // empty' "$CONFIG_FILE" 2>/dev/null)
+            SS_METHOD="$cur_method"
+            ;;
+        reality)
+            proto_type="reality"
+            cur_port=$(jq -r '.inbounds[] | select(.tag=="reality") | .port // empty' "$CONFIG_FILE" 2>/dev/null)
+            cur_sni=$(jq -r '.inbounds[] | select(.tag=="reality") | .streamSettings.realitySettings.serverNames[0] // empty' "$CONFIG_FILE" 2>/dev/null)
+            REALITY_SNI="$cur_sni"
+            ;;
+        ss-direct)
+            proto_type="ss-direct"
+            cur_port=$(jq -r '.inbounds[] | select(.tag=="ss-direct") | .port // empty' "$CONFIG_FILE" 2>/dev/null)
+            cur_method=$(jq -r '.inbounds[] | select(.tag=="ss-direct") | .settings.method // empty' "$CONFIG_FILE" 2>/dev/null)
+            cur_pass=$(jq -r '.inbounds[] | select(.tag=="ss-direct") | .settings.password // empty' "$CONFIG_FILE" 2>/dev/null)
+            SS_METHOD="$cur_method"
+            ;;
+    esac
+
+    clear
     echo ""
     echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
-    echo -e " ${purple}║${re}       ${white}添加节点 · 逐步交互配置${re}              ${purple}║${re}"
+    echo -e " ${purple}║${re}     ${white}编辑 ${label}${re}"
     echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
     echo ""
-    local opt=1 ma=0 mr=0 ms=0
-    [ "$has_ss_argo" = 0 ]   && echo -e "  ${green}${opt}${re}. Shadowsocks + Argo"   && eval "ma=${opt}" && opt=$((opt+1))
-    [ "$has_reality" = 0 ]   && echo -e "  ${green}${opt}${re}. VLESS Reality 直连"   && eval "mr=${opt}" && opt=$((opt+1))
-    [ "$has_ss_direct" = 0 ] && echo -e "  ${green}${opt}${re}. Shadowsocks 直连"     && eval "ms=${opt}" && opt=$((opt+1))
-    [ "$has_ss_argo" = 1 ]   && echo -e "  ${red}—${re} Shadowsocks + Argo ${red}(已安装)${re}"
-    [ "$has_reality" = 1 ]   && echo -e "  ${red}—${re} VLESS Reality 直连 ${red}(已安装)${re}"
-    [ "$has_ss_direct" = 1 ] && echo -e "  ${red}—${re} Shadowsocks 直连 ${red}(已安装)${re}"
-    echo ""; echo -e "  ${red}0${re}. 返回"
-    echo ""; echo -e " ${purple}────────────────────────────────────────${re}"
-    read -p "  请选择: " ac; [ "$ac" = "0" ] && return
 
-    local proto=""
-    [ "$ac" = "$ma" ] && proto="ss-argo"
-    [ "$ac" = "$mr" ] && proto="reality"
-    [ "$ac" = "$ms" ] && proto="ss-direct"
-    [ -z "$proto" ] && { red_msg "无效选择。"; sleep 1; return; }
+    local new_port="$cur_port" new_method="$cur_method" new_pass="$cur_pass" new_sni="$cur_sni"
 
-    local uuid; uuid=$(get_uuid)
-    local s_method="$SS_METHOD" s_pass="" s_port="" r_sni="$REALITY_SNI" r_port=""
-
-    # --- 第二步：逐项交互配置 ---
-    clear
-    case "$proto" in
+    case "$proto_type" in
         ss-argo|ss-direct)
-            local ptype; [ "$proto" = "ss-argo" ] && ptype="Shadowsocks + Argo" || ptype="Shadowsocks 直连"
-            echo ""
-            echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
-            echo -e " ${purple}║${re}     ${white}配置 ${ptype}${re}"
-            echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
-            echo ""
-
-            # ① 加密方式
+            # ① 加密
             echo -e " ${white}━━━ ① 加密方式 ━━━${re}"
             for i in "${!SS_METHODS[@]}"; do
-                local mark=" "; [ "${SS_METHODS[$i]}" = "$s_method" ] && mark="★"
-                echo -e "  ${green}$((i+1))${re}.${mark} ${SS_METHODS[$i]}"
+                local mk=" "; [ "${SS_METHODS[$i]}" = "$new_method" ] && mk="★"
+                echo -e "  ${green}$((i+1))${re}.${mk} ${SS_METHODS[$i]}"
             done; echo ""
-            read -p "  选择 [默认 ${s_method}]: " sm
-            local sm_idx=$(( ${sm:-0} - 1 ))
-            [ "$sm_idx" -ge 0 ] 2>/dev/null && [ "$sm_idx" -lt "${#SS_METHODS[@]}" ] && s_method="${SS_METHODS[$sm_idx]}"
-            echo -e "  → ${green}${s_method}${re}\n"
+            echo -e "  ${yellow}当前: ${cyan}${new_method}${re}"
+            read -p "  新加密 [回车保持]: " sm
+            if [ -n "$sm" ]; then
+                local sm_idx=$(( sm - 1 ))
+                [ "$sm_idx" -ge 0 ] 2>/dev/null && [ "$sm_idx" -lt "${#SS_METHODS[@]}" ] && new_method="${SS_METHODS[$sm_idx]}"
+            fi
+            echo -e "  → ${green}${new_method}${re}\n"
 
             # ② 密码
             echo -e " ${white}━━━ ② 密码 ━━━${re}"
-            local default_pass
-            if [[ "$s_method" =~ 2022 ]]; then
-                default_pass=$(gen_ss2022_pass "$s_method")
-                echo -e "  ${yellow}SS2022 需 base64 密钥，留空自动生成。${re}"
+            local pw_hint; pw_hint=$(echo "$cur_pass" | cut -c1-24)
+            echo -e "  ${yellow}当前: ${cyan}${pw_hint}...${re}"
+            if [[ "$new_method" =~ 2022 ]]; then
+                echo -e "  ${yellow}SS2022 需 base64 密钥。留空保持当前/自动生成。${re}"
             else
-                default_pass="$uuid"
-                echo -e "  ${yellow}AEAD 加密可用任意密码，留空使用 UUID。${re}"
+                echo -e "  ${yellow}留空保持当前。输入 new 自动生成新密码。${re}"
             fi
-            read -p "  密码 [默认自动生成]: " s_pass
-            [ -z "$s_pass" ] && s_pass="$default_pass"
-            echo -e "  → ${green}$(echo "$s_pass" | cut -c1-20)...${re}\n"
+            read -p "  新密码 [回车保持]: " np
+            if [ -n "$np" ]; then
+                if [ "$np" = "new" ] || [ "$np" = "NEW" ]; then
+                    [[ "$new_method" =~ 2022 ]] && new_pass=$(gen_ss2022_pass "$new_method") || new_pass=$(cat /proc/sys/kernel/random/uuid)
+                else
+                    new_pass="$np"
+                fi
+            fi
+            echo -e "  → ${green}$(echo "$new_pass" | cut -c1-24)...${re}\n"
 
             # ③ 端口
             echo -e " ${white}━━━ ③ 端口 ━━━${re}"
-            local default_port
-            if [ "$proto" = "ss-argo" ]; then
-                default_port=$(find_free_port "${SS_WS_PORT:-8083}")
-                echo -e "  ${yellow}仅 127.0.0.1 监听，通过 Argo 隧道访问。${re}"
+            if [ "$proto_type" = "ss-argo" ]; then
+                echo -e "  ${yellow}仅 127.0.0.1，通过 Argo 隧道。${re}"
             else
-                default_port=$(find_free_port "${SS_DIRECT_PORT:-0}")
-                [ "$default_port" = "0" ] && default_port=$(find_free_port "$(shuf -i 10000-60000 -n 1)")
                 echo -e "  ${yellow}公网端口，需防火墙放行。${re}"
             fi
-            read -p "  端口 [${default_port}]: " s_port
-            s_port="${s_port:-$default_port}"
-            echo -e "  → ${green}${s_port}${re}\n"
+            echo -e "  ${yellow}当前: ${cyan}${cur_port}${re}"
+            read -p "  新端口 [回车保持]: " np2
+            [ -n "$np2" ] && ! port_in_use "$np2" && new_port="$np2"
+            [ -n "$np2" ] && port_in_use "$np2" && red_msg "端口 ${np2} 被占用，保持原端口。"
+            echo -e "  → ${green}${new_port}${re}\n"
             ;;
         reality)
-            echo ""
-            echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
-            echo -e " ${purple}║${re}     ${white}配置 VLESS Reality 直连${re}"
-            echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
-            echo ""
-
-            # ① 伪装域名
-            echo -e " ${white}━━━ ① 伪装域名 (SNI) ━━━${re}"
+            # ① SNI
+            echo -e " ${white}━━━ ① 伪装域名 ━━━${re}"
             for i in "${!REALITY_SNIS[@]}"; do
-                local mark=" "; [ "${REALITY_SNIS[$i]}" = "$r_sni" ] && mark="★"
-                echo -e "  ${green}$((i+1))${re}.${mark} ${REALITY_SNIS[$i]}"
+                local mk=" "; [ "${REALITY_SNIS[$i]}" = "$new_sni" ] && mk="★"
+                echo -e "  ${green}$((i+1))${re}.${mk} ${REALITY_SNIS[$i]}"
             done; echo ""
-            read -p "  选择 [默认 ${r_sni}]: " rs
-            local rs_idx=$(( ${rs:-0} - 1 ))
-            [ "$rs_idx" -ge 0 ] 2>/dev/null && [ "$rs_idx" -lt "${#REALITY_SNIS[@]}" ] && r_sni="${REALITY_SNIS[$rs_idx]}"
-            echo -e "  → ${green}${r_sni}${re}\n"
+            echo -e "  ${yellow}当前: ${cyan}${new_sni}${re}"
+            read -p "  新 SNI [回车保持]: " rs
+            if [ -n "$rs" ]; then
+                local rs_idx=$(( rs - 1 ))
+                [ "$rs_idx" -ge 0 ] 2>/dev/null && [ "$rs_idx" -lt "${#REALITY_SNIS[@]}" ] && new_sni="${REALITY_SNIS[$rs_idx]}"
+            fi
+            echo -e "  → ${green}${new_sni}${re}\n"
 
             # ② 端口
             echo -e " ${white}━━━ ② 端口 ━━━${re}"
-            echo -e "  ${yellow}公网端口，需防火墙放行。${re}"
-            local default_rp; default_rp=$(find_free_port "${REALITY_PORT:-0}")
-            [ "$default_rp" = "0" ] && default_rp=$(find_free_port "$(shuf -i 10000-60000 -n 1)")
-            read -p "  端口 [${default_rp}]: " r_port
-            r_port="${r_port:-$default_rp}"
+            echo -e "  ${yellow}公网端口，当前: ${cyan}${cur_port}${re}"
+            read -p "  新端口 [回车保持]: " np2
+            [ -n "$np2" ] && ! port_in_use "$np2" && new_port="$np2"
+            [ -n "$np2" ] && port_in_use "$np2" && red_msg "端口 ${np2} 被占用，保持原端口。"
+            echo -e "  → ${green}${new_port}${re}\n"
+
+            # ③ 密钥
+            echo -e " ${white}━━━ ③ x25519 密钥 ━━━${re}"
+            echo -e "  ${yellow}当前私钥: ${cyan}$(jq -r '.inbounds[] | select(.tag=="reality") | .streamSettings.realitySettings.privateKey // empty' "$CONFIG_FILE" 2>/dev/null | cut -c1-24)...${re}"
+            echo -e "  ${yellow}输入 new 重新生成密钥对。${re}"
+            read -p "  [回车保持]: " rk
+            if [ "$rk" = "new" ] || [ "$rk" = "NEW" ]; then
+                gen_reality_keys
+                echo -e "  → ${green}新密钥已生成${re}"
+            fi
+            echo ""
+            ;;
+    esac
+
+    # 确认
+    echo -e " ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
+    echo -e " ${white}确认修改：${re}"
+    case "$proto_type" in
+        ss-argo|ss-direct)
+            echo -e "  加密: ${cyan}${cur_method}${re} → ${green}${new_method}${re}"
+            echo -e "  端口: ${cyan}${cur_port}${re} → ${green}${new_port}${re}"
+            [ "$new_pass" != "$cur_pass" ] && echo -e "  密码: ${cyan}已更新${re}" ;;
+        reality)
+            echo -e "  SNI : ${cyan}${cur_sni}${re} → ${green}${new_sni}${re}"
+            echo -e "  端口: ${cyan}${cur_port}${re} → ${green}${new_port}${re}" ;;
+    esac
+    echo -e " ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
+    echo ""
+    echo -ne "  ${yellow}确认修改? (y/n) [y]: ${re}"; read cf
+    [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "已取消。"; return; }
+
+    # 应用修改
+    case "$proto_type" in
+        ss-argo|ss-direct)
+            jq --arg m "$new_method" --arg p "$new_pass" --argjson pt "$new_port" \
+               '(.inbounds[] | select(.tag=="'"${tag}"'") | .settings.method) = $m |
+                (.inbounds[] | select(.tag=="'"${tag}"'") | .settings.password) = $p |
+                (.inbounds[] | select(.tag=="'"${tag}"'") | .port) = $pt' \
+               "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+            SS_METHOD="$new_method"
+            [ "$proto_type" = "ss-argo" ] && SS_WS_PORT="$new_port" || SS_DIRECT_PORT="$new_port"
+            ;;
+        reality)
+            jq --arg sni "$new_sni" --argjson pt "$new_port" \
+               '(.inbounds[] | select(.tag=="reality") | .port) = $pt |
+                (.inbounds[] | select(.tag=="reality") | .streamSettings.realitySettings.dest) = ($sni + ":443") |
+                (.inbounds[] | select(.tag=="reality") | .streamSettings.realitySettings.serverNames) = [$sni, ""]' \
+               "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+            REALITY_PORT="$new_port"; REALITY_SNI="$new_sni"
+            # 更新密钥（如果重新生成了）
+            if [ "$rk" = "new" ] || [ "$rk" = "NEW" ]; then
+                jq --arg priv "$REALITY_PRIV" --arg pub "$REALITY_PUB" \
+                   '(.inbounds[] | select(.tag=="reality") | .streamSettings.realitySettings.privateKey) = $priv |
+                    (.inbounds[] | select(.tag=="reality") | .streamSettings.realitySettings.publicKey) = $pub' \
+                   "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+            fi
+            ;;
+    esac
+    save_conf
+
+    yellow_msg "重启 Xray..."
+    systemctl restart xray 2>/dev/null; sleep 2
+    get_status; green_msg "修改完成！"
+
+    # 显示更新后的链接
+    echo ""; echo -e " ${white}━━━ 更新后链接 ━━━${re}"; echo ""
+    local ip_addr hd cd cp; ip_addr=$(get_ip); hd=$(get_argo_domain); cd=$(get_cdn); cp=$(get_cdn_port)
+    [ "$ARGO_MODE" = "fixed-token" ] && hd="$ARGO_FIXED_DOMAIN"
+
+    case "$proto_type" in
+        ss-argo)
+            [ -z "$hd" ] && { sleep 3; hd=$(get_argo_domain); }
+            [ -n "$hd" ] && echo -e "  ${green}$(gen_ss_link "$new_method" "$new_pass" "$cd" "$cp" "${NODE_NAME}-SS-Argo")${re}" ;;
+        ss-direct)
+            [ -n "$ip_addr" ] && echo -e "  ${green}$(gen_ss_link "$new_method" "$new_pass" "$ip_addr" "$new_port" "${NODE_NAME}-SS-Direct")${re}" ;;
+        reality)
+            [ -n "$ip_addr" ] && echo -e "  ${green}$(gen_reality_link "$uuid" "$ip_addr" "$new_port" "$new_sni" "$REALITY_PUB")${re}" ;;
+    esac
+    echo ""
+    read -p "  按回车键继续..." -r
+}
+
+# --- 添加单个协议 ---
+add_single_protocol() {
+    local proto="$1" uuid; uuid=$(get_uuid)
+    local s_method="$SS_METHOD" s_pass="" s_port="" r_sni="$REALITY_SNI" r_port=""
+
+    clear
+    case "$proto" in
+        ss-argo|ss-direct)
+            local ptitle; [ "$proto" = "ss-argo" ] && ptitle="Shadowsocks + Argo" || ptitle="Shadowsocks 直连"
+            echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
+            echo -e " ${purple}║${re}     ${white}添加 ${ptitle}${re}"
+            echo -e " ${purple}╚══════════════════════════════════════════╝${re}"; echo ""
+            # ① 加密
+            echo -e " ${white}━━━ ① 加密方式 ━━━${re}"
+            for i in "${!SS_METHODS[@]}"; do
+                local mk=" "; [ "${SS_METHODS[$i]}" = "$s_method" ] && mk="★"
+                echo -e "  ${green}$((i+1))${re}.${mk} ${SS_METHODS[$i]}"
+            done; echo ""; read -p "  选择 [默认 ${s_method}]: " sm
+            local si=$(( ${sm:-0} - 1 ))
+            [ "$si" -ge 0 ] 2>/dev/null && [ "$si" -lt "${#SS_METHODS[@]}" ] && s_method="${SS_METHODS[$si]}"
+            echo -e "  → ${green}${s_method}${re}\n"
+            # ② 密码
+            echo -e " ${white}━━━ ② 密码 ━━━${re}"
+            local dp; [[ "$s_method" =~ 2022 ]] && dp=$(gen_ss2022_pass "$s_method") || dp="$uuid"
+            [[ "$s_method" =~ 2022 ]] && echo -e "  ${yellow}SS2022 需 base64 密钥，留空自动生成。${re}" || echo -e "  ${yellow}留空使用 UUID。${re}"
+            read -p "  密码 [自动]: " s_pass; [ -z "$s_pass" ] && s_pass="$dp"
+            echo -e "  → ${green}$(echo "$s_pass" | cut -c1-20)...${re}\n"
+            # ③ 端口
+            echo -e " ${white}━━━ ③ 端口 ━━━${re}"
+            local dp2
+            if [ "$proto" = "ss-argo" ]; then
+                dp2=$(find_free_port "${SS_WS_PORT:-8083}"); echo -e "  ${yellow}仅 127.0.0.1。${re}"
+            else
+                dp2=$(find_free_port "${SS_DIRECT_PORT:-0}"); [ "$dp2" = "0" ] && dp2=$(find_free_port "$(shuf -i 10000-60000 -n 1)")
+                echo -e "  ${yellow}公网端口。${re}"
+            fi
+            read -p "  端口 [${dp2}]: " s_port; s_port="${s_port:-$dp2}"
+            echo -e "  → ${green}${s_port}${re}\n"
+            ;;
+        reality)
+            echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
+            echo -e " ${purple}║${re}     ${white}添加 VLESS Reality${re}"
+            echo -e " ${purple}╚══════════════════════════════════════════╝${re}"; echo ""
+            # ① SNI
+            echo -e " ${white}━━━ ① 伪装域名 ━━━${re}"
+            for i in "${!REALITY_SNIS[@]}"; do
+                local mk=" "; [ "${REALITY_SNIS[$i]}" = "$r_sni" ] && mk="★"
+                echo -e "  ${green}$((i+1))${re}.${mk} ${REALITY_SNIS[$i]}"
+            done; echo ""; read -p "  选择 [默认 ${r_sni}]: " rs
+            local ri=$(( ${rs:-0} - 1 ))
+            [ "$ri" -ge 0 ] 2>/dev/null && [ "$ri" -lt "${#REALITY_SNIS[@]}" ] && r_sni="${REALITY_SNIS[$ri]}"
+            echo -e "  → ${green}${r_sni}${re}\n"
+            # ② 端口
+            echo -e " ${white}━━━ ② 端口 ━━━${re}"; echo -e "  ${yellow}公网端口。${re}"
+            local rdp; rdp=$(find_free_port "$(shuf -i 10000-60000 -n 1)")
+            read -p "  端口 [${rdp}]: " r_port; r_port="${r_port:-$rdp}"
             echo -e "  → ${green}${r_port}${re}\n"
             ;;
     esac
 
-    # --- 确认 ---
+    # 确认
     echo -e " ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
-    echo -e " ${white}确认添加：${re}"
-    case "$proto" in
-        ss-argo)   echo -e "  协议: Shadowsocks + Argo  加密: ${s_method}  端口: ${s_port} (内部)" ;;
-        reality)   echo -e "  协议: VLESS Reality     SNI: ${r_sni}  端口: ${r_port} (公网)" ;;
-        ss-direct) echo -e "  协议: Shadowsocks 直连   加密: ${s_method}  端口: ${s_port} (公网)" ;;
-    esac
-    echo -e " ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
-    echo ""
     echo -ne "  ${yellow}确认添加? (y/n) [y]: ${re}"; read cf
     [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "已取消。"; return; }
 
-    # --- 生成 inbound 并写入 config ---
     local new_inbound=""
     case "$proto" in
         ss-argo)
             new_inbound='{"port":'"${s_port}"',"listen":"127.0.0.1","protocol":"shadowsocks","tag":"ss-ws","settings":{"method":"'"${s_method}"'","password":"'"${s_pass}"'","network":"tcp,udp"},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/ss-argo"}}}'
-            jq --argjson fb '{"path":"/ss-argo","dest":'"${s_port}"'}' \
-               '(.inbounds[] | select(.tag=="argo-in") | .settings.fallbacks) += [$fb]' \
-               "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+            jq --argjson fb '{"path":"/ss-argo","dest":'"${s_port}"'}' '(.inbounds[]|select(.tag=="argo-in")|.settings.fallbacks)+=[$fb]' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
             SS_WS_PORT="$s_port"; SS_METHOD="$s_method"; ENABLE_SS_ARGO=1 ;;
         reality)
             gen_reality_keys
@@ -948,41 +1181,81 @@ add_protocol() {
             SS_DIRECT_PORT="$s_port"; SS_METHOD="$s_method"; ENABLE_SS_DIRECT=1 ;;
     esac
 
-    jq --argjson inbound "$new_inbound" '.inbounds += [$inbound]' \
-       "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+    jq --argjson inbound "$new_inbound" '.inbounds += [$inbound]' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
     save_conf
 
-    yellow_msg "重启 Xray..."
-    systemctl restart xray 2>/dev/null; sleep 2
+    yellow_msg "重启 Xray..."; systemctl restart xray 2>/dev/null; sleep 2
     get_status; green_msg "添加完成！"
 
-    # --- 输出链接 ---
-    echo ""
-    echo -e " ${white}━━━ 新节点链接 ━━━${re}"
-    echo ""
-    local ip_addr; ip_addr=$(get_ip)
-    local hd cd cp; hd=$(get_argo_domain); cd=$(get_cdn); cp=$(get_cdn_port)
+    echo ""; echo -e " ${white}━━━ 新节点链接 ━━━${re}"; echo ""
+    local ip_addr hd cd cp; ip_addr=$(get_ip); hd=$(get_argo_domain); cd=$(get_cdn); cp=$(get_cdn_port)
     [ "$ARGO_MODE" = "fixed-token" ] && hd="$ARGO_FIXED_DOMAIN"
-
     case "$proto" in
         ss-argo)
             [ -z "$hd" ] && { sleep 3; hd=$(get_argo_domain); }
-            if [ -n "$hd" ]; then
-                local sl; sl=$(gen_ss_link "$s_method" "$s_pass" "$cd" "$cp" "${NODE_NAME}-SS-Argo")
-                echo -e "  ${green}${sl}${re}"
-                echo -e "  ${cyan}加密${re}: ${s_method}  路径: /ss-argo  WS+TLS  伪装: ${hd}"
-            fi ;;
+            [ -n "$hd" ] && { echo -e "  ${green}$(gen_ss_link "$s_method" "$s_pass" "$cd" "$cp" "${NODE_NAME}-SS-Argo")${re}"
+                echo -e "  ${cyan}加密${re}: ${s_method}  路径: /ss-argo  WS+TLS  伪装: ${hd}"; } ;;
         reality)
-            [ -n "$ip_addr" ] && {
-                local rl; rl=$(gen_reality_link "$uuid" "$ip_addr" "$r_port" "$r_sni" "$REALITY_PUB")
-                echo -e "  ${green}${rl}${re}"; } ;;
+            [ -n "$ip_addr" ] && echo -e "  ${green}$(gen_reality_link "$uuid" "$ip_addr" "$r_port" "$r_sni" "$REALITY_PUB")${re}" ;;
         ss-direct)
-            [ -n "$ip_addr" ] && {
-                local sdl; sdl=$(gen_ss_link "$s_method" "$s_pass" "$ip_addr" "$s_port" "${NODE_NAME}-SS-Direct")
-                echo -e "  ${green}${sdl}${re}"; } ;;
+            [ -n "$ip_addr" ] && echo -e "  ${green}$(gen_ss_link "$s_method" "$s_pass" "$ip_addr" "$s_port" "${NODE_NAME}-SS-Direct")${re}" ;;
     esac
+    echo ""; read -p "  按回车键返回..." -r
+}
+
+# --- 删除协议 ---
+delete_protocol() {
+    clear
+    local has_ss_argo=0 has_reality=0 has_ss_direct=0
+    jq -e '.inbounds[] | select(.tag=="ss-ws")'      "$CONFIG_FILE" &>/dev/null && has_ss_argo=1
+    jq -e '.inbounds[] | select(.tag=="reality")'     "$CONFIG_FILE" &>/dev/null && has_reality=1
+    jq -e '.inbounds[] | select(.tag=="ss-direct")'   "$CONFIG_FILE" &>/dev/null && has_ss_direct=1
+
+    local total=$((has_ss_argo + has_reality + has_ss_direct))
+    [ "$total" = 0 ] && { echo ""; green_msg "无可删除的协议。"; echo ""; read -p "  按回车键返回..." -r; return; }
+
     echo ""
-    read -p "  按回车键返回..." -r
+    echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
+    echo -e " ${purple}║${re}         ${red}删除节点${re}                          ${purple}║${re}"
+    echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
+    echo ""
+
+    local d1=0 d2=0 d3=0
+    [ "$has_ss_argo" = 1 ] && d1=$((d1+1)) && echo -e "  ${red}${d1}${re}. Shadowsocks + Argo"
+    [ "$has_reality" = 1 ] && d2=$((d2+1)) && echo -e "  ${red}${d2}${re}. VLESS Reality 直连"
+    [ "$has_ss_direct" = 1 ] && d3=$((d3+1)) && echo -e "  ${red}${d3}${re}. Shadowsocks 直连"
+    echo -e "  ${cyan}0${re}. 返回"
+    echo ""; echo -e " ${purple}────────────────────────────────────────${re}"
+    read -p "  选择要删除的节点: " dc; [ "$dc" = "0" ] && return
+
+    local del_tag=""
+    [ "$dc" = "1" ] && [ "$has_ss_argo" = 1 ] && del_tag="ss-ws"
+    [ "$dc" = "1" ] && [ "$has_ss_argo" = 0 ] && [ "$has_reality" = 1 ] && del_tag="reality"
+    [ "$dc" = "1" ] && [ "$has_ss_argo" = 0 ] && [ "$has_reality" = 0 ] && [ "$has_ss_direct" = 1 ] && del_tag="ss-direct"
+    [ "$dc" = "2" ] && [ "$has_reality" = 1 ] && del_tag="reality"
+    [ "$dc" = "2" ] && [ "$has_reality" = 0 ] && [ "$has_ss_direct" = 1 ] && del_tag="ss-direct"
+    [ "$dc" = "3" ] && del_tag="ss-direct"
+    [ -z "$del_tag" ] && { red_msg "无效选择。"; return; }
+
+    echo ""
+    echo -ne "  ${red}⚠ 确认删除? 不可恢复 (y/n): ${re}"; read cf
+    [ "$cf" != "y" ] && [ "$cf" != "Y" ] && { yellow_msg "已取消。"; return; }
+
+    # 删除 inbound
+    jq 'del(.inbounds[] | select(.tag=="'"${del_tag}"'"))' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+    # 如果是 ss-argo，同时从 fallback 中移除
+    if [ "$del_tag" = "ss-ws" ]; then
+        jq '(.inbounds[] | select(.tag=="argo-in") | .settings.fallbacks) |= map(select(.path != "/ss-argo"))' \
+           "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+        ENABLE_SS_ARGO=0
+    fi
+    [ "$del_tag" = "reality" ] && ENABLE_REALITY=0
+    [ "$del_tag" = "ss-direct" ] && ENABLE_SS_DIRECT=0
+    save_conf
+
+    systemctl restart xray 2>/dev/null; sleep 1
+    green_msg "已删除。"
+    echo ""; read -p "  按回车键返回..." -r
 }
 
 #==============================================================================
@@ -1012,7 +1285,7 @@ main_menu() {
         echo -e "  ${green}1${re}. 查看节点链接 (全部协议)"
         echo -e "  ${green}2${re}. 更换优选域名 / 线路"
         echo -e "  ${green}3${re}. 修改配置 (名称/UUID/隧道/加密/协议)"
-        echo -e "  ${cyan}a${re}. 添加节点 (增量安装新协议)"
+        echo -e "  ${cyan}a${re}. 管理节点 (添加 / 编辑 / 删除)"
         echo ""
         echo -e " ${purple}───────────────── 服务控制 ─────────────────${re}"
         echo -e "  ${green}4${re}. 启动 服务"
@@ -1032,7 +1305,7 @@ main_menu() {
             1) show_node; read -p "  按回车键返回..." -r ;;
             2) edit_cdn; read -p "  按回车键返回..." -r ;;
             3) change_config ;;
-            a|A) add_protocol ;;
+            a|A) manage_protocols ;;
             4) start_services; sleep 1 ;;
             5) stop_services; sleep 1 ;;
             6) restart_services; sleep 1 ;;
