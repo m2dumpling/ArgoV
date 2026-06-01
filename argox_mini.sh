@@ -18,7 +18,7 @@ cyan_msg()   { echo -e "${cyan}$1${re}"; }
 CONFIG_FILE="/etc/xray/config.json"
 TUNNEL_LOG="/etc/xray/argo.log"
 WORK_DIR="/etc/xray"
-SCRIPT_PATH="/usr/bin/argo-v2"
+SCRIPT_PATH="/usr/bin/argov"
 ARGO_PORT="8080"        # Argo 隧道入口端口
 VLESS_WS_PORT="8081"    # VLESS + WS 内部端口
 VMESS_WS_PORT="8082"    # VMess + WS 内部端口
@@ -405,7 +405,7 @@ SERVICETUN
     yellow_msg "[6/6] 等待 Cloudflare 握手..."
     sleep 5
 
-    # 写 argo-v2 wrapper（不能 cp $0，因为管道执行时 $0 是 bash）
+    # 写 argov wrapper（不能 cp $0，因为管道执行时 $0 是 bash）
     cat > "$SCRIPT_PATH" << 'ARGOWRAP'
 #!/usr/bin/env bash
 bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoX-Mini/main/argox_mini.sh)
@@ -422,7 +422,7 @@ ARGOWRAP
     echo -e " ${purple}║${re}       ${white}🎉 安装成功 · 双协议节点链接${re}               ${purple}║${re}"
     echo -e " ${purple}╚══════════════════════════════════════════════════╝${re}"
     echo ""
-    echo -e "  ${cyan}快捷管理${re}: ${green}argo-v2${re}"
+    echo -e "  ${cyan}快捷管理${re}: ${green}argov${re}"
     echo -e "  ${cyan}优选地址${re}: ${green}${CDN_DEFAULT}${re}"
     echo -e "  ${cyan}端口${re}    : 443"
     echo -e "  ${cyan}用户 ID${re} : ${purple}${UUID}${re}"
@@ -445,7 +445,7 @@ ARGOWRAP
     fi
 
     echo ""
-    echo -e "  ${yellow}📋 管理:${re} ${green}argo-v2${re}"
+    echo -e "  ${yellow}📋 管理:${re} ${green}argov${re}"
     echo -e "  ${yellow}💡 导入:${re} 复制 VLESS 或 VMess 链接 → 客户端 → 导入剪贴板"
     echo -e "  ${yellow}💡 任何支持 VLESS/VMess + WS + TLS 的客户端均可使用${re}"
 }
