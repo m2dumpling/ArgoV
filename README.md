@@ -1,7 +1,7 @@
 # ArgoX-Mini
 
 <p align="center">
-  <a href="./README_ZH.md"><b>🇨🇳 简体中文说明书</b></a> |
+  <a href="./README_CN.md"><b>🇨🇳 中文版</b></a> |
   <a href="#-features">Features</a> |
   <a href="#-one-click-installation">Installation</a> |
   <a href="#-client-configuration">Configuration</a>

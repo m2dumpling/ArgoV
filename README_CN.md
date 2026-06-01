@@ -1,7 +1,7 @@
 # ArgoX-Mini 纯净版隧道管理面板
 
 <p align="center">
-  <a href="./README.md"><b>🌐 English Documentation</b></a>
+  <a href="./README.md"><b>🌐 English</b></a>
 </p>
 
 ---
