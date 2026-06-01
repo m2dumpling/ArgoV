@@ -12,7 +12,7 @@
 
 An ultra-lightweight, rock-solid one-click management script for Cloudflare Argo Tunnel — **VLESS + VMess dual protocol** over WebSocket + TLS.
 
-Unlike bloated multi-protocol scripts (xray-2go bundles 4 protocols + Caddy; ArgoX bundles 11 protocols + Nginx), **ArgoX-Mini** installs only what Argo needs: Xray-core + cloudflared. No Nginx, no Caddy, no Reality, no Hysteria2, no XHTTP. All Xray inbounds bind strictly to `127.0.0.1` — your VPS exposes zero proxy ports to the public internet.
+**ArgoX-Mini** installs only what Argo needs: Xray-core + cloudflared. No Nginx, no Caddy, no Reality, no Hysteria2, no XHTTP. All Xray inbounds bind strictly to `127.0.0.1` — your VPS exposes zero proxy ports to the public internet.
 
 ## ✨ Features
 
@@ -24,7 +24,7 @@ Unlike bloated multi-protocol scripts (xray-2go bundles 4 protocols + Caddy; Arg
 - **Fixed Argo Tunnel Support** — Switch between temporary `.trycloudflare.com` domains and permanent CF Zero Trust Token tunnels.
 - **Config Modification** — Change node name, UUID, CDN endpoint, ports, or toggle tunnel type anytime from the menu.
 - **No Caddy / No Nginx** — Cloudflare handles TLS at the edge. Your VPS needs zero certificates.
-- **Built-in Carrier-Optimized CDN Pool** — 13 pre-configured domains from ArgoX + xray-2go, covering China Mobile / Unicom / Telecom.
+- **Built-in Carrier-Optimized CDN Pool** — 13 pre-configured domains covering China Mobile / Unicom / Telecom routing.
 - **Auto Port Conflict Detection** — If default internal ports are in use, the installer finds free ones automatically.
 - **Env Var Overrides** — `NODE_NAME=Tokyo ARGO_PORT=9090 CDN_PORT=8443 bash <(curl ...)` for non-interactive deployment.
 

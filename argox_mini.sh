@@ -31,7 +31,7 @@ CDN_PORT="${CDN_PORT:-443}"
 # --- 节点名称（支持环境变量）---
 NODE_NAME="${NODE_NAME:-ArgoX-Mini}"
 
-# --- 优选域名池（ArgoX + xray-2go 合并）---
+# --- 优选域名池 ---
 declare -A CDN_DOMAINS
 CDN_DOMAINS[1]="cdn.31514926.xyz (三网通用)"
 CDN_DOMAINS[2]="skk.moe (三网通用·泛用测速)"
