@@ -174,7 +174,7 @@ get_status() {
 }
 get_proto_summary() {
     local s="VL-Argo VM-Argo"
-    jq -e '.inbounds[]|select(.tag=="ss")'       "$CONFIG_FILE" &>/dev/null && s="$s SS"
+    jq -e '.inbounds[]|select(.protocol=="shadowsocks")'       "$CONFIG_FILE" &>/dev/null && s="$s SS"
     jq -e '.inbounds[]|select(.tag=="reality")'  "$CONFIG_FILE" &>/dev/null && s="$s Reality"
     echo "$s"
 }
@@ -219,11 +219,11 @@ show_node() {
         echo -e "  ${cyan}SNI${re}: ${rsni}  Flow: xtls-rprx-vision\n"
     fi
 
-    if jq -e '.inbounds[]|select(.tag=="ss")' "$CONFIG_FILE" &>/dev/null && [ -n "$ip" ]; then
+    if jq -e '.inbounds[]|select(.protocol=="shadowsocks")' "$CONFIG_FILE" &>/dev/null && [ -n "$ip" ]; then
         local sport sm sp
-        sport=$(jq -r '.inbounds[]|select(.tag=="ss")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
-        sm=$(jq -r '.inbounds[]|select(.tag=="ss")|.settings.method//empty' "$CONFIG_FILE" 2>/dev/null)
-        sp=$(jq -r '.inbounds[]|select(.tag=="ss")|.settings.password//empty' "$CONFIG_FILE" 2>/dev/null)
+        sport=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
+        sm=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.settings.method//empty' "$CONFIG_FILE" 2>/dev/null)
+        sp=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.settings.password//empty' "$CONFIG_FILE" 2>/dev/null)
         echo -e "  ${white}── Shadowsocks (端口 ${sport}) ──${re}"
         echo ""
         echo -e "  ${green}$(gen_ss_link "$sm" "$sp" "$ip" "$sport" "${NODE_NAME}-SS")${re}"
@@ -577,7 +577,7 @@ manage_protocols() {
 
     local has_reality=0 has_ss=0
     jq -e '.inbounds[]|select(.tag=="reality")' "$CONFIG_FILE" &>/dev/null && has_reality=1
-    jq -e '.inbounds[]|select(.tag=="ss")'       "$CONFIG_FILE" &>/dev/null && has_ss=1
+    jq -e '.inbounds[]|select(.protocol=="shadowsocks")'       "$CONFIG_FILE" &>/dev/null && has_ss=1
 
     while true; do
         clear
@@ -594,8 +594,8 @@ manage_protocols() {
             echo -e "  ${green}e${er}${re}. VLESS Reality    ${cyan}${rs}${re}  端口 ${cyan}${rp}${re}"
         fi
         if [ "$has_ss" = 1 ]; then es=1
-            local sp sm; sp=$(jq -r '.inbounds[]|select(.tag=="ss")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
-            sm=$(jq -r '.inbounds[]|select(.tag=="ss")|.settings.method//empty' "$CONFIG_FILE" 2>/dev/null)
+            local sp sm; sp=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
+            sm=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.settings.method//empty' "$CONFIG_FILE" 2>/dev/null)
             echo -e "  ${green}e${es}${re}. Shadowsocks       ${cyan}${sm}${re}  端口 ${cyan}${sp}${re}"
         fi
 
@@ -631,7 +631,7 @@ manage_protocols() {
         load_conf
         has_reality=0; has_ss=0
         jq -e '.inbounds[]|select(.tag=="reality")' "$CONFIG_FILE" &>/dev/null && has_reality=1
-        jq -e '.inbounds[]|select(.tag=="ss")'       "$CONFIG_FILE" &>/dev/null && has_ss=1
+        jq -e '.inbounds[]|select(.protocol=="shadowsocks")'       "$CONFIG_FILE" &>/dev/null && has_ss=1
     done
 }
 
@@ -645,9 +645,9 @@ edit_protocol() {
             cur_sni=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames[0]//empty' "$CONFIG_FILE" 2>/dev/null)
             REALITY_SNI="$cur_sni" ;;
         ss)
-            cur_port=$(jq -r '.inbounds[]|select(.tag=="ss")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
-            cur_method=$(jq -r '.inbounds[]|select(.tag=="ss")|.settings.method//empty' "$CONFIG_FILE" 2>/dev/null)
-            cur_pass=$(jq -r '.inbounds[]|select(.tag=="ss")|.settings.password//empty' "$CONFIG_FILE" 2>/dev/null)
+            cur_port=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
+            cur_method=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.settings.method//empty' "$CONFIG_FILE" 2>/dev/null)
+            cur_pass=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.settings.password//empty' "$CONFIG_FILE" 2>/dev/null)
             SS_METHOD="$cur_method" ;;
     esac
 
@@ -707,7 +707,7 @@ edit_protocol() {
     case "$tag" in
         ss)
             jq --arg m "$new_method" --arg p "$new_pass" --argjson pt "$new_port" \
-               '(.inbounds[]|select(.tag=="ss")|.settings.method)=$m|(.inbounds[]|select(.tag=="ss")|.settings.password)=$p|(.inbounds[]|select(.tag=="ss")|.port)=$pt' \
+               '(.inbounds[]|select(.protocol=="shadowsocks")|.settings.method)=$m|(.inbounds[]|select(.protocol=="shadowsocks")|.settings.password)=$p|(.inbounds[]|select(.protocol=="shadowsocks")|.port)=$pt|(.inbounds[]|select(.protocol=="shadowsocks")|.tag)="ss"' \
                "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
             SS_METHOD="$new_method"; SS_PORT="$new_port" ;;
         reality)
@@ -795,7 +795,7 @@ delete_protocol() {
     clear
     local has_reality=0 has_ss=0
     jq -e '.inbounds[]|select(.tag=="reality")' "$CONFIG_FILE" &>/dev/null && has_reality=1
-    jq -e '.inbounds[]|select(.tag=="ss")'       "$CONFIG_FILE" &>/dev/null && has_ss=1
+    jq -e '.inbounds[]|select(.protocol=="shadowsocks")'       "$CONFIG_FILE" &>/dev/null && has_ss=1
     [ $((has_reality+has_ss)) = 0 ] && { echo ""; green_msg "无可删除。"; echo ""; read -p "  按回车返回..." -r; return; }
 
     echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
