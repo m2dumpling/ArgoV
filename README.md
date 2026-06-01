@@ -4,64 +4,84 @@
   <a href="./README_CN.md"><b>🇨🇳 中文版</b></a> |
   <a href="#-features">Features</a> |
   <a href="#-one-click-installation">Installation</a> |
-  <a href="#-client-configuration">Configuration</a>
+  <a href="#-cli-management-menu">Menu</a>
 </p>
 
 ---
 
 A lightweight, rock-solid, and ultra-pure one-click management script for Cloudflare Argo Tunnel (VMess + WebSocket).
 
-Unlike other heavy injection scripts, **ArgoX-Mini** completely strips out unnecessary direct-connection protocols (like Reality, Hysteria2, XHTTP) and web server dependencies (such as Nginx or Caddy). It forces Xray to listen purely on localhost, ensuring your VPS leaves zero scanning footprint or exposed proxy ports to the public internet.
+Unlike bloated multi-protocol scripts (e.g. xray-2go), **ArgoX-Mini** strips out all unnecessary direct-connection protocols (Reality, Hysteria2, XHTTP) and web server dependencies (Nginx, Caddy). Xray binds strictly to `127.0.0.1` — your VPS exposes zero proxy ports to the public internet.
 
 ## ✨ Features
 
-- **100% Pure Argo**: Zero bloat. No Caddy/Nginx dependency, no complex TLS certificates setup on your VPS.
-- **Enhanced Stealth & Security**: Xray core binds strictly to `127.0.0.1`. No open ports exposed publicly, making it completely immune to active censorship scans.
-- **Built-in Cloudflare IP Optimization**: Integrated with real-time optimized CDN domains categorized for China Mobile, China Unicom, and China Telecom routing.
-- **Native CLI Management Control**: Automatically injects the `argo-v2` shortcut into your system environment for effortless dashboard wake-up.
+- **100% Pure Argo** — No Caddy/Nginx. No TLS certificates on your VPS. Xray + cloudflared only.
+- **vmess:// One-Click Import** — After installation, a `vmess://` link + QR code are printed directly in terminal. Copy-paste into v2rayN, done.
+- **Zero Public Exposure** — Xray listens on `127.0.0.1:8080`. Not a single proxy port faces the internet. Immune to active censorship scans.
+- **Built-in Carrier-Optimized CDN** — Pre-configured optimized domains for China Mobile, China Unicom, and China Telecom routing.
+- **Interactive Management Panel** — `argo-v2` shortcut injected into your system. Colorful, categorized menu with real-time status indicators.
+- **Config Modification** — Change UUID, refresh Argo domain, or swap CDN endpoints without reinstalling.
+- **One-Key Uninstall** — Clean removal of all traces from the system.
 
 ## 🚀 One-Click Installation
 
-Run the following command in your Linux VPS terminal (Supports root user on Ubuntu/Debian/CentOS):
+Run in your Linux VPS terminal (Ubuntu/Debian/CentOS, root):
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoX-Mini/main/argox_mini.sh)
 ```
 
-## 🛠️ CLI Management Menu
+After install completes, the `vmess://` link is displayed immediately — copy and import.
 
-Once installed, you can wake up the interactive colorful control panel at any time by simply typing:
+## 🛠️ CLI Management Menu
 
 ```bash
 argo-v2
 ```
 
-**Menu Options:**
+```
+╔══════════════════════════════════════════════════╗
+║     ArgoX-Mini  纯净版隧道管理面板              ║
+╚══════════════════════════════════════════════════╝
 
-- **Show Connection Parameters**: Displays your real-time VMess credentials and dynamic Cloudflare Argo host info.
-- **Start Services**: Bring Xray and Cloudflare Tunnel up.
-- **Stop Services**: Completely freeze backend services and tear down the tunnel.
-- **Restart Services**: Force restart and fetch a brand new random `.trycloudflare.com` domain.
-- **Switch Optimized CDN Domains**: Instantly view or swap optimization domain endpoints.
-- **Reinstall From Scratch**: Clean up residues and perform a fresh automated install.
+  Xray 内核 : ● 运行中     UUID : abcd1234-...  
+  Argo 隧道 : ● 运行中
+  当前域名  : xxx.trycloudflare.com
 
-## 💻 Client Configuration (e.g., v2rayN)
+───────────────── 节点管理 ─────────────────
+  1. 查看节点连接参数 & 一键导入链接
+  2. 更换/选择分流优选域名
+  3. 修改节点配置 (UUID / 刷新域名)
 
-After deployment, select option **1** in the `argo-v2` menu to get your parameters. Open your client and create a new VMess server with the following settings:
+───────────────── 服务控制 ─────────────────
+  4. 启动 服务
+  5. 停止 服务
+  6. 重启 服务 (获取新临时域名)
+
+───────────────── 系统维护 ─────────────────
+  7. 重新一键全自动安装
+  8. 完全卸载 ArgoX-Mini
+```
+
+## 💻 Client Configuration (v2rayN)
+
+**Option A — One-click import (recommended):** Copy the `vmess://` link from the terminal → v2rayN → Import from clipboard.
+
+**Option B — Manual setup:**
 
 | Parameter | Value | Note |
 |---|---|---|
-| **Address** | `cdn.31514926.xyz` | Or use the carrier-specific domains from Menu 5 |
-| **Port** | `443` | Must be 443 for Cloudflare TLS edge |
-| **User ID (UUID)** | `[Your Generated UUID]` | Copy from server terminal |
+| **Address** | `cdn.31514926.xyz` | Or carrier-specific domains (Menu 2) |
+| **Port** | `443` | Cloudflare TLS edge |
+| **User ID (UUID)** | `[Generated UUID]` | Copy from terminal output |
 | **AlterId** | `0` | Default |
-| **Security** | `none` | Inner encryption handled by outer TLS |
-| **Network** | `ws` | WebSocket transport |
-| **Host** | `xxxx.trycloudflare.com` | ⚠️ Crucial: Must match your terminal output |
+| **Security** | `none` | Outer TLS handles encryption |
+| **Network** | `ws` | WebSocket |
+| **Host** | `xxxx.trycloudflare.com` | ⚠️ Must match terminal output |
 | **Path** | `/vmess-argo` | Fixed routing path |
-| **TLS** | `tls` | Enable transport security |
-| **SNI** | `xxxx.trycloudflare.com` | Same as your Host domain |
+| **TLS** | `tls` | Enable |
+| **SNI** | `xxxx.trycloudflare.com` | Same as Host |
 
 ## 📄 License
 
-This project is licensed under the MIT License. Feel free to fork, modify, and share!
+MIT License. Fork, modify, and share freely.
