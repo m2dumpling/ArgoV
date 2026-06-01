@@ -172,10 +172,12 @@ get_status() {
     if systemctl is-active --quiet tunnel 2>/dev/null; then TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"
     else TUNNEL_ST="${red}○ 已停止${re}"; TUNNEL_RAW="stopped"; fi
 }
+# 检查协议是否已安装（同时用 jq 和 grep 兜底）
+has_proto() { grep -q "\"$1\"" "$CONFIG_FILE" 2>/dev/null; }
 get_proto_summary() {
     local s="VL-Argo VM-Argo"
-    jq -e '.inbounds[]|select(.protocol=="shadowsocks")'       "$CONFIG_FILE" &>/dev/null && s="$s SS"
-    jq -e '.inbounds[]|select(.tag=="reality")'  "$CONFIG_FILE" &>/dev/null && s="$s Reality"
+    has_proto '"protocol": "shadowsocks"' && s="$s SS"
+    has_proto '"tag": "reality"' && s="$s Reality"
     echo "$s"
 }
 
@@ -208,7 +210,7 @@ show_node() {
         show_qr "$(gen_vless_link "$uuid" "$hd" "$cd" "$cp")"
     fi
 
-    if jq -e '.inbounds[]|select(.tag=="reality")' "$CONFIG_FILE" &>/dev/null && [ -n "$ip" ]; then
+    if has_proto '"tag": "reality"' && [ -n "$ip" ]; then
         local rport rsni rp
         rport=$(jq -r '.inbounds[]|select(.tag=="reality")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
         rsni=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames[0]//empty' "$CONFIG_FILE" 2>/dev/null)
@@ -219,7 +221,7 @@ show_node() {
         echo -e "  ${cyan}SNI${re}: ${rsni}  Flow: xtls-rprx-vision\n"
     fi
 
-    if jq -e '.inbounds[]|select(.protocol=="shadowsocks")' "$CONFIG_FILE" &>/dev/null && [ -n "$ip" ]; then
+    if has_proto '"protocol": "shadowsocks"' && [ -n "$ip" ]; then
         local sport sm sp
         sport=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
         sm=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.settings.method//empty' "$CONFIG_FILE" 2>/dev/null)
@@ -576,8 +578,8 @@ manage_protocols() {
     [ ! -f "$CONFIG_FILE" ] && { red_msg "请先安装！"; return; }
 
     local has_reality=0 has_ss=0
-    jq -e '.inbounds[]|select(.tag=="reality")' "$CONFIG_FILE" &>/dev/null && has_reality=1
-    jq -e '.inbounds[]|select(.protocol=="shadowsocks")'       "$CONFIG_FILE" &>/dev/null && has_ss=1
+    has_proto '"tag": "reality"' && has_reality=1
+    has_proto '"protocol": "shadowsocks"' && has_ss=1
 
     while true; do
         clear
@@ -630,8 +632,8 @@ manage_protocols() {
 
         load_conf
         has_reality=0; has_ss=0
-        jq -e '.inbounds[]|select(.tag=="reality")' "$CONFIG_FILE" &>/dev/null && has_reality=1
-        jq -e '.inbounds[]|select(.protocol=="shadowsocks")'       "$CONFIG_FILE" &>/dev/null && has_ss=1
+        has_proto '"tag": "reality"' && has_reality=1
+        has_proto '"protocol": "shadowsocks"' && has_ss=1
     done
 }
 
@@ -794,8 +796,8 @@ add_single_protocol() {
 delete_protocol() {
     clear
     local has_reality=0 has_ss=0
-    jq -e '.inbounds[]|select(.tag=="reality")' "$CONFIG_FILE" &>/dev/null && has_reality=1
-    jq -e '.inbounds[]|select(.protocol=="shadowsocks")'       "$CONFIG_FILE" &>/dev/null && has_ss=1
+    has_proto '"tag": "reality"' && has_reality=1
+    has_proto '"protocol": "shadowsocks"' && has_ss=1
     [ $((has_reality+has_ss)) = 0 ] && { echo ""; green_msg "无可删除。"; echo ""; read -p "  按回车返回..." -r; return; }
 
     echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
