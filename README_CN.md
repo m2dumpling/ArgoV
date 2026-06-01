@@ -8,7 +8,7 @@
 
 一个极度精简、坚如磐石的 Cloudflare Argo 穿透隧道一键管理脚本 —— **VLESS + VMess 双协议**，WebSocket + TLS 传输。
 
-与市面上全家桶脚本对比：xray-2go 打包 4 协议配 Caddy；ArgoX 打包 11 协议配 Nginx。**ArgoX-Mini** 只装 Argo 必需的组件：Xray-core + cloudflared。不装 Nginx、不装 Caddy、不要 Reality、不要 Hysteria2、不要 XHTTP。所有 Xray 入站严格绑定 `127.0.0.1`，VPS 公网上零代理端口暴露。
+**ArgoX-Mini** 只装 Argo 必需的组件：Xray-core + cloudflared。不装 Nginx、不装 Caddy、不要 Reality、不要 Hysteria2、不要 XHTTP。所有 Xray 入站严格绑定 `127.0.0.1`，VPS 公网上零代理端口暴露。
 
 ## ✨ 项目特点
 
@@ -20,7 +20,7 @@
 - **固定 Argo 隧道** — 支持从临时 `.trycloudflare.com` 域名切换到 CF Zero Trust Token 固定域名，菜单随时切换。
 - **配置灵活修改** — 菜单 3 可改名称、UUID、CDN、端口、隧道类型，无需重装。
 - **无 Caddy / 无 Nginx** — TLS 由 Cloudflare 边缘节点处理。VPS 无需证书，无需 web 服务器。
-- **内置 13 个优选域名** — 合并 ArgoX + xray-2go 域名池，三网通用 / 移动 / 联通 / 电信分类。
+- **内置 13 个优选域名** — 三网通用 / 移动 / 联通 / 电信分类覆盖。
 - **端口冲突自动避让** — 安装时检测默认端口是否被占用，自动向后寻找空闲端口。
 - **环境变量覆盖** — 支持 `NODE_NAME=东京 ARGO_PORT=9090 CDN_PORT=8443 bash <(curl ...)` 非交互部署。
 
