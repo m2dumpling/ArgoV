@@ -24,13 +24,25 @@ VLESS_WS_PORT="8081"    # VLESS + WS 内部端口
 VMESS_WS_PORT="8082"    # VMess + WS 内部端口
 CDN_DEFAULT="cdn.31514926.xyz"
 
-# --- 优选域名 ---
+# --- 优选域名池（合并自 ArgoX + xray-2go 参考项目） ---
+# 格式: 序号=域名 (分类|说明)
 declare -A CDN_DOMAINS
+# ---- 三网通用 ----
 CDN_DOMAINS[1]="cdn.31514926.xyz (三网通用)"
-CDN_DOMAINS[2]="yidong.19931101.xyz (移动专线)"
-CDN_DOMAINS[3]="liantong.19931101.xyz (联通专线)"
-CDN_DOMAINS[4]="dianxin.19931101.xyz (电信专线)"
-CDN_DOMAINS[5]="skk.moe (泛用测速)"
+CDN_DOMAINS[2]="skk.moe (三网通用·泛用测速)"
+CDN_DOMAINS[3]="ip.sb (三网通用·IP检测站)"
+CDN_DOMAINS[4]="time.is (三网通用·时间站)"
+CDN_DOMAINS[5]="bestcf.top (三网通用·优选站)"
+CDN_DOMAINS[6]="cfip.xxxxxxxx.tk (三网通用)"
+CDN_DOMAINS[7]="cf.090227.xyz (三网通用)"
+# ---- 运营商专线 ----
+CDN_DOMAINS[8]="yidong.19931101.xyz (移动专线)"
+CDN_DOMAINS[9]="liantong.19931101.xyz (联通专线)"
+CDN_DOMAINS[10]="dianxin.19931101.xyz (电信专线)"
+# ---- 其他优选 ----
+CDN_DOMAINS[11]="cdn.2020111.xyz (综合优选)"
+CDN_DOMAINS[12]="xn--b6gac.eu.org (综合优选·中东)"
+CDN_DOMAINS[13]="cdns.doon.eu.org (综合优选·Doorn)"
 
 #==============================================================================
 # 工具函数
@@ -203,33 +215,58 @@ restart_services() {
 # 5. 优选域名
 #==============================================================================
 edit_cdn() {
-    clear
-    echo ""
-    echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
-    echo -e " ${purple}║${re}       ${white}快捷更换优选域名 / 线路${re}             ${purple}║${re}"
-    echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
-    echo ""
-    for key in 1 2 3 4 5; do echo -e "  ${green}${key}${re}. ${CDN_DOMAINS[$key]}"; done
-    echo -e "  ${cyan}c${re}. 输入自定义优选域名或 IP"
-    echo ""
-    echo -e " ${purple}────────────────────────────────────────${re}"
-    read -p "  请选择线路 (1-5 / c): " cdn_choice
-    case "$cdn_choice" in
-        1) SELECTED_CDN="cdn.31514926.xyz" ;;
-        2) SELECTED_CDN="yidong.19931101.xyz" ;;
-        3) SELECTED_CDN="liantong.19931101.xyz" ;;
-        4) SELECTED_CDN="dianxin.19931101.xyz" ;;
-        5) SELECTED_CDN="skk.moe" ;;
-        c|C) read -p "  请输入自定义 Cloudflare 优选域名或 IP: " SELECTED_CDN ;;
-        *) red_msg "无效输入。"; return ;;
-    esac
-    if [ -n "$SELECTED_CDN" ]; then
-        jq --arg cdn "$SELECTED_CDN" '.current_cdn = $cdn' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+    while true; do
+        clear
+        local current_cdn; current_cdn=$(get_cdn)
         echo ""
-        green_msg "线路切换成功！"
-        echo -e "  新接入地址: ${purple}${SELECTED_CDN}${re}"
-        yellow_msg "  💡 无需重启服务端，在客户端修改 Address 即可生效"
-    fi
+        echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
+        echo -e " ${purple}║${re}       ${white}快捷更换优选域名 / 线路${re}             ${purple}║${re}"
+        echo -e " ${purple}║${re}       ${yellow}当前: ${green}${current_cdn}${re}"
+        echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
+        echo ""
+        echo -e "  ${white}── 三网通用 ──${re}"
+        for key in 1 2 3 4 5 6 7; do echo -e "  ${green}${key}${re}. ${CDN_DOMAINS[$key]}"; done
+        echo ""
+        echo -e "  ${white}── 运营商专线 ──${re}"
+        for key in 8 9 10; do echo -e "  ${green}${key}${re}. ${CDN_DOMAINS[$key]}"; done
+        echo ""
+        echo -e "  ${white}── 其他优选 ──${re}"
+        for key in 11 12 13; do echo -e "  ${green}${key}${re}. ${CDN_DOMAINS[$key]}"; done
+        echo ""
+        echo -e "  ${cyan}c${re}. 输入自定义优选域名或 IP"
+        echo -e "  ${red}0${re}. 返回主菜单"
+        echo ""
+        echo -e " ${purple}────────────────────────────────────────${re}"
+        read -p "  请选择 (1-13 / c / 0): " cdn_choice
+
+        case "$cdn_choice" in
+            1) SELECTED_CDN="cdn.31514926.xyz" ;;
+            2) SELECTED_CDN="skk.moe" ;;
+            3) SELECTED_CDN="ip.sb" ;;
+            4) SELECTED_CDN="time.is" ;;
+            5) SELECTED_CDN="bestcf.top" ;;
+            6) SELECTED_CDN="cfip.xxxxxxxx.tk" ;;
+            7) SELECTED_CDN="cf.090227.xyz" ;;
+            8) SELECTED_CDN="yidong.19931101.xyz" ;;
+            9) SELECTED_CDN="liantong.19931101.xyz" ;;
+            10) SELECTED_CDN="dianxin.19931101.xyz" ;;
+            11) SELECTED_CDN="cdn.2020111.xyz" ;;
+            12) SELECTED_CDN="xn--b6gac.eu.org" ;;
+            13) SELECTED_CDN="cdns.doon.eu.org" ;;
+            c|C) read -p "  请输入自定义 Cloudflare 优选域名或 IP: " SELECTED_CDN ;;
+            0) return ;;
+            *) red_msg "无效输入。"; sleep 1; continue ;;
+        esac
+
+        if [ -n "$SELECTED_CDN" ]; then
+            jq --arg cdn "$SELECTED_CDN" '.current_cdn = $cdn' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+            echo ""
+            green_msg "线路切换成功！"
+            echo -e "  新接入地址: ${purple}${SELECTED_CDN}${re}"
+            yellow_msg "  💡 无需重启服务端，在客户端修改 Address 即可生效"
+            break
+        fi
+    done
 }
 
 #==============================================================================
