@@ -73,15 +73,16 @@ get_cdn() {
 # VMess 链接 (base64 JSON)
 gen_vmess_link() {
     local uuid="$1" host="$2" addr="${3:-$CDN_DEFAULT}" port="${4:-443}" remark="${5:-ArgoX-Mini-VMess}"
-    local json
+    local json b64
     json="{\"v\":\"2\",\"ps\":\"${remark}\",\"add\":\"${addr}\",\"port\":\"${port}\",\"id\":\"${uuid}\",\"aid\":\"0\",\"scy\":\"none\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${host}\",\"path\":\"/vmess-argo\",\"tls\":\"tls\",\"sni\":\"${host}\",\"alpn\":\"\",\"fp\":\"\"}"
-    echo -n "vmess://$(echo -n "$json" | base64 -w0 2>/dev/null || echo -n "$json" | base64 | tr -d '\n')"
+    b64=$(printf '%s' "$json" | base64 -w0 2>/dev/null || printf '%s' "$json" | base64 | tr -d '\n')
+    printf '%s' "vmess://${b64}"
 }
 
 # VLESS 链接
 gen_vless_link() {
     local uuid="$1" host="$2" addr="${3:-$CDN_DEFAULT}" port="${4:-443}" remark="${5:-ArgoX-Mini-VLESS}"
-    echo -n "vless://${uuid}@${addr}:${port}?encryption=none&security=tls&sni=${host}&type=ws&host=${host}&path=%2Fvless-argo%3Fed%3D2560#${remark// /%20}"
+    printf '%s' "vless://${uuid}@${addr}:${port}?encryption=none&security=tls&sni=${host}&type=ws&host=${host}&path=%2Fvless-argo%3Fed%3D2560#${remark// /%20}"
 }
 
 # QR 码
@@ -179,7 +180,7 @@ show_node() {
 
     echo ""
     echo -e "  ${yellow}💡 提示${re}: 复制 VLESS 或 VMess 链接 → v2rayN/Nekoray/小火箭 → 导入剪贴板"
-    echo -e "  ${yellow}💡 提示${re}: 菜单 5 可切换三网优选线路"
+    echo -e "  ${yellow}💡 提示${re}: 菜单 2 可切换三网优选线路"
 }
 
 #==============================================================================
@@ -334,12 +335,20 @@ install_core() {
     green_msg "  依赖安装完成"
 
     mkdir -p "$WORK_DIR" && chmod 777 "$WORK_DIR"
-    local ARCH_ARG; ARCH_ARG=$(detect_arch)
+    local ARCH_ARG CLOUDFLARED_ARCH
+    ARCH_ARG=$(detect_arch)
+    case "$(uname -m)" in
+        x86_64)       CLOUDFLARED_ARCH="amd64" ;;
+        aarch64|arm64) CLOUDFLARED_ARCH="arm64" ;;
+        armv7l)       CLOUDFLARED_ARCH="arm" ;;
+        i686|i386)    CLOUDFLARED_ARCH="386" ;;
+        *)            CLOUDFLARED_ARCH="amd64" ;;  # fallback
+    esac
     [ -z "$ARCH_ARG" ] && { red_msg "不支持 CPU: $(uname -m)"; exit 1; }
 
     yellow_msg "[3/6] 下载 Xray 核心 & Cloudflare Tunnel..."
     curl -sLo "${WORK_DIR}/xray.zip" "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${ARCH_ARG}.zip"
-    curl -sLo "${WORK_DIR}/argo" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+    curl -sLo "${WORK_DIR}/argo" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CLOUDFLARED_ARCH}"
     unzip -o "${WORK_DIR}/xray.zip" -d "$WORK_DIR" > /dev/null 2>&1
     chmod +x "${WORK_DIR}/xray" "${WORK_DIR}/argo"
     rm -f "${WORK_DIR}/xray.zip"
@@ -535,11 +544,13 @@ main_menu() {
             5) stop_services; sleep 1 ;;
             6) restart_services; sleep 1 ;;
             7)
-                read -p "  ${yellow}确认重新安装? (y/n): ${re}" confirm
+                echo -ne "  ${yellow}确认重新安装? (y/n): ${re}"
+                read confirm
                 [ "$confirm" = "y" ] || [ "$confirm" = "Y" ] && install_core
                 read -p "  按回车键返回..." -r ;;
             8)
-                read -p "  ${red}⚠ 确认完全卸载? (y/n): ${re}" confirm
+                echo -ne "  ${red}⚠ 确认完全卸载? (y/n): ${re}"
+                read confirm
                 if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
                     systemctl stop xray tunnel 2>/dev/null
                     systemctl disable xray tunnel 2>/dev/null
