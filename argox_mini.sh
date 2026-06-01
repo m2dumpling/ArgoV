@@ -106,7 +106,7 @@ get_argo_domain() {
     done; echo "$d"
 }
 
-get_uuid() { jq -r '.inbounds[0].settings.clients[0].id // .inbounds[0].settings.password // empty' "$CONFIG_FILE" 2>/dev/null; }
+get_uuid() { jq -r '.inbounds[0].settings.clients[0].id // empty' "$CONFIG_FILE" 2>/dev/null; }
 get_cdn() { [ -f "$CONFIG_FILE" ] && jq -r '.current_cdn // empty' "$CONFIG_FILE" 2>/dev/null || echo "$CDN_DOMAIN"; }
 get_cdn_port() { [ -f "$CONFIG_FILE" ] && jq -r '.current_cdn_port // empty' "$CONFIG_FILE" 2>/dev/null || echo "$CDN_PORT"; }
 
@@ -145,6 +145,7 @@ load_conf() {
     REALITY_SNI="${REALITY_SNI:-www.amazon.com}"; SS_METHOD="${SS_METHOD:-aes-256-gcm}"
     ENABLE_SS_ARGO="${ENABLE_SS_ARGO:-0}"; ENABLE_REALITY="${ENABLE_REALITY:-0}"
     ENABLE_SS_DIRECT="${ENABLE_SS_DIRECT:-0}"
+    REALITY_PRIV="${REALITY_PRIV:-}"; REALITY_PUB="${REALITY_PUB:-}"
 }
 save_conf() {
     cat > "$USER_CONF" << EOF
@@ -159,6 +160,7 @@ REALITY_PORT='${REALITY_PORT}'; SS_DIRECT_PORT='${SS_DIRECT_PORT}'
 REALITY_SNI='${REALITY_SNI}'; SS_METHOD='${SS_METHOD}'
 ENABLE_SS_ARGO='${ENABLE_SS_ARGO}'; ENABLE_REALITY='${ENABLE_REALITY}'
 ENABLE_SS_DIRECT='${ENABLE_SS_DIRECT}'
+REALITY_PRIV='${REALITY_PRIV}'; REALITY_PUB='${REALITY_PUB}'
 EOF
 }
 
@@ -214,10 +216,10 @@ get_status() {
 # 获取协议信息摘要（用于菜单显示）
 #==============================================================================
 get_proto_summary() {
-    local s="  VLESS-Argo  VMess-Argo"
-    [ "$ENABLE_SS_ARGO" = 1 ] && s="$s  SS-Argo"
-    [ "$ENABLE_REALITY" = 1 ] && s="$s  Reality"
-    [ "$ENABLE_SS_DIRECT" = 1 ] && s="$s  SS-Direct"
+    local s="VL-Argo VM-Argo"
+    [ "$ENABLE_SS_ARGO" = 1 ] && s="$s SS-Argo"
+    [ "$ENABLE_REALITY" = 1 ] && s="$s Reality"
+    [ "$ENABLE_SS_DIRECT" = 1 ] && s="$s SS-Dir"
     echo "$s"
 }
 
@@ -383,10 +385,9 @@ change_config() {
             1) read -p "  新名称 [${NODE_NAME}]: " n; [ -n "$n" ] && NODE_NAME="$n"; save_conf; green_msg "已更新: ${NODE_NAME}" ;;
             2) local nu; read -p "  新 UUID (回车自动生成): " nu
                [ -z "$nu" ] && nu=$(cat /proc/sys/kernel/random/uuid)
-               # 更新所有 inbound 的 UUID
+               # 仅更新 clients[].id，不动 SS 的 password
                jq --arg u "$nu" '
-                 (.inbounds[] | select(.settings.clients) | .settings.clients[].id) |= $u |
-                 (.inbounds[] | select(.settings.password) | .settings.password) |= $u
+                 (.inbounds[].settings.clients[]? | select(.id) | .id) |= $u
                ' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" 2>/dev/null && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
                UUID_CUSTOM="$nu"; save_conf; systemctl restart xray 2>/dev/null
                green_msg "UUID 已更新（全协议同步）！${nu}" ;;
@@ -440,9 +441,12 @@ rebuild_tunnel() {
 Description=Cloudflare Argo Tunnel (Fixed)
 After=network.target
 [Service]
-Type=simple; NoNewPrivileges=yes; TimeoutStartSec=0
+Type=simple
+NoNewPrivileges=yes
+TimeoutStartSec=0
 ExecStart=${WORK_DIR}/argo tunnel --edge-ip-version auto --no-autoupdate --protocol http2 run --token ${ARGO_AUTH}
-Restart=on-failure; RestartSec=5s
+Restart=on-failure
+RestartSec=5s
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -452,10 +456,13 @@ EOF
 Description=Cloudflare Argo Tunnel (Temp)
 After=network.target
 [Service]
-Type=simple; NoNewPrivileges=yes; TimeoutStartSec=0
+Type=simple
+NoNewPrivileges=yes
+TimeoutStartSec=0
 ExecStart=${WORK_DIR}/argo tunnel --url http://localhost:${ARGO_PORT} --no-autoupdate --edge-ip-version auto --protocol http2
 StandardOutput=append:${TUNNEL_LOG}
-Restart=on-failure; RestartSec=5s
+Restart=on-failure
+RestartSec=5s
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -467,41 +474,40 @@ EOF
 # 协议选择（步骤 ⑦）
 #==============================================================================
 select_protocols() {
-    clear
-    echo ""
-    echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
-    echo -e " ${purple}║${re}     ${white}选择额外协议（可选）${re}                    ${purple}║${re}"
-    echo -e " ${purple}║${re}     ${yellow}以下协议默认不安装，按需勾选${re}            ${purple}║${re}"
-    echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
-    echo ""
-    echo -e "  ${white}Argo 隧道协议（无需开放端口，安全推荐）：${re}"
-    echo ""
-    echo -e "  ${green}1${re}. Shadowsocks + Argo ${cyan}[$( [ "$ENABLE_SS_ARGO" = 1 ] && echo "● 已选" || echo "○ 未选" )]${re}"
-    echo -e "     SS AEAD/2022 加密 → WS → Argo 隧道，7 种加密可选"
-    echo ""
-
-    echo -e "  ${white}直连协议（需开放 VPS 端口，速度更快）：${re}"
-    echo ""
-    echo -e "  ${green}2${re}. VLESS Reality 直连 ${cyan}[$( [ "$ENABLE_REALITY" = 1 ] && echo "● 已选" || echo "○ 未选" )]${re}"
-    echo -e "     VLESS + XTLS Vision + Reality，抗封锁能力强"
-    echo ""
-    echo -e "  ${green}3${re}. Shadowsocks 直连 ${cyan}[$( [ "$ENABLE_SS_DIRECT" = 1 ] && echo "● 已选" || echo "○ 未选" )]${re}"
-    echo -e "     SS AEAD/2022 直连 TCP，轻量高效"
-    echo ""
-
-    echo -e "  ${white}默认始终安装：VLESS-Argo + VMess-Argo${re}"
-    echo ""
-    echo -e "  ${yellow}输入序号切换勾选，输入 0 确认返回${re}"
-    echo ""
-    echo -e " ${purple}────────────────────────────────────────${re}"
-    read -p "  请选择 (1-3 / 0=确认): " c
-    case "$c" in
-        1) ENABLE_SS_ARGO=$((1 - ENABLE_SS_ARGO)); select_protocols ;;
-        2) ENABLE_REALITY=$((1 - ENABLE_REALITY)); select_protocols ;;
-        3) ENABLE_SS_DIRECT=$((1 - ENABLE_SS_DIRECT)); select_protocols ;;
-        0) save_conf; return ;;
-        *) red_msg "无效"; sleep 1; select_protocols ;;
-    esac
+    while true; do
+        clear
+        echo ""
+        echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
+        echo -e " ${purple}║${re}     ${white}选择额外协议（可选）${re}                    ${purple}║${re}"
+        echo -e " ${purple}║${re}     ${yellow}以下协议默认不安装，按需勾选${re}            ${purple}║${re}"
+        echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
+        echo ""
+        echo -e "  ${white}Argo 隧道协议（无需开放端口）：${re}"
+        echo ""
+        echo -e "  ${green}1${re}. Shadowsocks + Argo ${cyan}[$( [ "$ENABLE_SS_ARGO" = 1 ] && echo "●" || echo "○" )]${re}"
+        echo -e "     SS AEAD/2022 → WS → Argo，7 种加密可选"
+        echo ""
+        echo -e "  ${white}直连协议（需开放 VPS 端口）：${re}"
+        echo ""
+        echo -e "  ${green}2${re}. VLESS Reality ${cyan}[$( [ "$ENABLE_REALITY" = 1 ] && echo "●" || echo "○" )]${re}"
+        echo -e "     XTLS Vision + Reality，抗封锁"
+        echo ""
+        echo -e "  ${green}3${re}. Shadowsocks 直连 ${cyan}[$( [ "$ENABLE_SS_DIRECT" = 1 ] && echo "●" || echo "○" )]${re}"
+        echo -e "     SS AEAD/2022 直连 TCP"
+        echo ""
+        echo -e "  ${white}始终安装：VLESS-Argo + VMess-Argo${re}"
+        echo ""
+        echo -e "  ${yellow}输序号切换勾选，0 确认${re}"
+        echo -e " ${purple}────────────────────────────────────────${re}"
+        read -p "  (1-3 / 0=确认): " c
+        case "$c" in
+            1) ENABLE_SS_ARGO=$((1 - ENABLE_SS_ARGO)); continue ;;
+            2) ENABLE_REALITY=$((1 - ENABLE_REALITY)); continue ;;
+            3) ENABLE_SS_DIRECT=$((1 - ENABLE_SS_DIRECT)); continue ;;
+            0) save_conf; return ;;
+            *) red_msg "无效"; sleep 1; continue ;;
+        esac
+    done
 }
 
 #==============================================================================
@@ -587,7 +593,8 @@ interactive_install() {
     echo -e "  协议     : ${cyan}VLESS-Argo VMess-Argo$( [ "$ENABLE_SS_ARGO" = 1 ] && echo " SS-Argo" )$( [ "$ENABLE_REALITY" = 1 ] && echo " Reality" )$( [ "$ENABLE_SS_DIRECT" = 1 ] && echo " SS-Direct" )${re}"
     echo -e " ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
     echo ""
-    read -p "  ${yellow}确认安装? (y/n) [y]: ${re}" cf
+    echo -ne "  ${yellow}确认安装? (y/n) [y]: ${re}"
+    read cf
     [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "已取消。"; return; }
     save_conf; do_install
 }
@@ -762,7 +769,7 @@ build_xray_config() {
 
     # --- 5. VLESS Reality (optional, public) ---
     if [ "$ENABLE_REALITY" = 1 ]; then
-        inbounds+=',{"port":'"${REALITY_PORT}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${REALITY_SNI}"':443","serverNames":["'"${REALITY_SNI}"'",""],"privateKey":"'"${REALITY_PRIV}"'","shortIds":[""]}},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":true}}'
+        inbounds+=',{"port":'"${REALITY_PORT}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${REALITY_SNI}"':443","serverNames":["'"${REALITY_SNI}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":[""]}},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":true}}'
     fi
 
     # --- 6. SS Direct (optional, public) ---
