@@ -19,9 +19,13 @@ CONFIG_FILE="/etc/xray/config.json"
 TUNNEL_LOG="/etc/xray/argo.log"
 WORK_DIR="/etc/xray"
 SCRIPT_PATH="/usr/bin/argov"
-ARGO_PORT="8080"        # Argo 隧道入口端口
-VLESS_WS_PORT="8081"    # VLESS + WS 内部端口
-VMESS_WS_PORT="8082"    # VMess + WS 内部端口
+# --- 端口配置（支持环境变量覆盖）---
+# 内部端口（VPS 本地，仅 127.0.0.1 监听，不对外暴露）
+ARGO_PORT="${ARGO_PORT:-8080}"        # Argo 隧道入口，Xray fallback 路由
+VLESS_WS_PORT="${VLESS_WS_PORT:-8081}" # VLESS + WS 入站
+VMESS_WS_PORT="${VMESS_WS_PORT:-8082}" # VMess + WS 入站
+# 客户端端口（Cloudflare 边缘端口，默认 443，CF 支持的端口见官方文档）
+CDN_PORT="${CDN_PORT:-443}"
 CDN_DEFAULT="cdn.31514926.xyz"
 
 # --- 优选域名池（合并自 ArgoX + xray-2go 参考项目） ---
@@ -69,10 +73,14 @@ get_uuid() {
 get_cdn() {
     [ -f "$CONFIG_FILE" ] && jq -r '.current_cdn // empty' "$CONFIG_FILE" 2>/dev/null || echo "$CDN_DEFAULT"
 }
+# 获取当前 CDN 端口
+get_cdn_port() {
+    [ -f "$CONFIG_FILE" ] && jq -r '.current_cdn_port // empty' "$CONFIG_FILE" 2>/dev/null || echo "$CDN_PORT"
+}
 
 # VMess 链接 (base64 JSON)
 gen_vmess_link() {
-    local uuid="$1" host="$2" addr="${3:-$CDN_DEFAULT}" port="${4:-443}" remark="${5:-ArgoX-Mini-VMess}"
+    local uuid="$1" host="$2" addr="${3:-$CDN_DEFAULT}" port="${4:-$CDN_PORT}" remark="${5:-ArgoX-Mini-VMess}"
     local json b64
     json="{\"v\":\"2\",\"ps\":\"${remark}\",\"add\":\"${addr}\",\"port\":\"${port}\",\"id\":\"${uuid}\",\"aid\":\"0\",\"scy\":\"none\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${host}\",\"path\":\"/vmess-argo\",\"tls\":\"tls\",\"sni\":\"${host}\",\"alpn\":\"\",\"fp\":\"\"}"
     b64=$(printf '%s' "$json" | base64 -w0 2>/dev/null || printf '%s' "$json" | base64 | tr -d '\n')
@@ -81,7 +89,7 @@ gen_vmess_link() {
 
 # VLESS 链接
 gen_vless_link() {
-    local uuid="$1" host="$2" addr="${3:-$CDN_DEFAULT}" port="${4:-443}" remark="${5:-ArgoX-Mini-VLESS}"
+    local uuid="$1" host="$2" addr="${3:-$CDN_DEFAULT}" port="${4:-$CDN_PORT}" remark="${5:-ArgoX-Mini-VLESS}"
     printf '%s' "vless://${uuid}@${addr}:${port}?encryption=none&security=tls&sni=${host}&type=ws&host=${host}&path=%2Fvless-argo%3Fed%3D2560#${remark// /%20}"
 }
 
@@ -100,6 +108,16 @@ install_qrencode() {
     case "$(uname -m)" in x86_64) arch="amd64" ;; aarch64|arm64) arch="arm64" ;; *) return 1 ;; esac
     curl -sLo "$qr" "https://github.com/eooce/test/releases/download/${arch}/qrencode-linux-${arch}" 2>/dev/null
     chmod +x "$qr" 2>/dev/null
+}
+
+# 端口是否被占用
+port_in_use() { lsof -iTCP:"$1" -sTCP:LISTEN &>/dev/null; }
+
+# 找空闲端口（从给定端口起递增）
+find_free_port() {
+    local port="$1"
+    while port_in_use "$port"; do port=$((port + 1)); done
+    echo "$port"
 }
 
 detect_arch() {
@@ -135,10 +153,11 @@ show_node() {
     clear
     [ ! -f "$CONFIG_FILE" ] && { red_msg "未检测到安装，请先执行一键安装！"; return; }
 
-    local uuid host_domain cdn_addr
+    local uuid host_domain cdn_addr cdn_port
     uuid=$(get_uuid)
     host_domain=$(get_argo_domain)
     cdn_addr=$(get_cdn)
+    cdn_port=$(get_cdn_port)
 
     echo ""
     echo -e "${purple}╔══════════════════════════════════════════════════╗${re}"
@@ -148,15 +167,15 @@ show_node() {
     [ -z "$host_domain" ] && { yellow_msg "  ⚠ 正在获取 Cloudflare 临时域名..."; sleep 2; host_domain=$(get_argo_domain); }
 
     echo -e "  ${cyan}优选地址${re}  : ${green}${cdn_addr}${re}"
-    echo -e "  ${cyan}端口${re}      : 443"
+    echo -e "  ${cyan}端口${re}      : ${green}${cdn_port}${re}  ${yellow}(Cloudflare 边缘端口)${re}"
     echo -e "  ${cyan}用户 ID${re}   : ${purple}${uuid}${re}"
     echo -e "  ${cyan}伪装域名${re}  : ${green}${host_domain}${re}"
     echo ""
 
     if [ -n "$host_domain" ]; then
         local vless_link vmess_link
-        vless_link=$(gen_vless_link "$uuid" "$host_domain" "$cdn_addr")
-        vmess_link=$(gen_vmess_link "$uuid" "$host_domain" "$cdn_addr")
+        vless_link=$(gen_vless_link "$uuid" "$host_domain" "$cdn_addr" "$cdn_port")
+        vmess_link=$(gen_vmess_link "$uuid" "$host_domain" "$cdn_addr" "$cdn_port")
 
         # VLESS
         echo -e "  ${yellow}━━━━━ ① VLESS + WS + Argo 链接 ━━━━━${re}"
@@ -218,11 +237,13 @@ restart_services() {
 edit_cdn() {
     while true; do
         clear
-        local current_cdn; current_cdn=$(get_cdn)
+        local current_cdn current_port
+        current_cdn=$(get_cdn)
+        current_port=$(get_cdn_port)
         echo ""
         echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
         echo -e " ${purple}║${re}       ${white}快捷更换优选域名 / 线路${re}             ${purple}║${re}"
-        echo -e " ${purple}║${re}       ${yellow}当前: ${green}${current_cdn}${re}"
+        echo -e " ${purple}║${re}       ${yellow}当前: ${green}${current_cdn}:${current_port}${re}"
         echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
         echo ""
         echo -e "  ${white}── 三网通用 ──${re}"
@@ -234,12 +255,14 @@ edit_cdn() {
         echo -e "  ${white}── 其他优选 ──${re}"
         for key in 11 12 13; do echo -e "  ${green}${key}${re}. ${CDN_DOMAINS[$key]}"; done
         echo ""
-        echo -e "  ${cyan}c${re}. 输入自定义优选域名或 IP"
+        echo -e "  ${cyan}c${re}. 输入自定义优选域名或 IP（支持 地址:端口 格式）"
+        echo -e "  ${cyan}p${re}. 仅修改端口（当前 ${green}${current_port}${re}）"
         echo -e "  ${red}0${re}. 返回主菜单"
         echo ""
         echo -e " ${purple}────────────────────────────────────────${re}"
-        read -p "  请选择 (1-13 / c / 0): " cdn_choice
+        read -p "  请选择 (1-13 / c / p / 0): " cdn_choice
 
+        local new_port="$current_port"
         case "$cdn_choice" in
             1) SELECTED_CDN="cdn.31514926.xyz" ;;
             2) SELECTED_CDN="skk.moe" ;;
@@ -254,17 +277,31 @@ edit_cdn() {
             11) SELECTED_CDN="cdn.2020111.xyz" ;;
             12) SELECTED_CDN="xn--b6gac.eu.org" ;;
             13) SELECTED_CDN="cdns.doon.eu.org" ;;
-            c|C) read -p "  请输入自定义 Cloudflare 优选域名或 IP: " SELECTED_CDN ;;
+            c|C)
+                read -p "  请输入自定义地址（支持 host:port）: " SELECTED_CDN
+                # 解析 地址:端口 格式
+                if [[ "$SELECTED_CDN" =~ ^(.+):([0-9]+)$ ]]; then
+                    SELECTED_CDN="${BASH_REMATCH[1]}"
+                    new_port="${BASH_REMATCH[2]}"
+                fi
+                ;;
+            p|P)
+                read -p "  输入新端口 (1-65535, Cloudflare 支持列表见官方): " new_port
+                [ -z "$new_port" ] && new_port="$current_port"
+                SELECTED_CDN="$current_cdn"
+                ;;
             0) return ;;
             *) red_msg "无效输入。"; sleep 1; continue ;;
         esac
 
         if [ -n "$SELECTED_CDN" ]; then
-            jq --arg cdn "$SELECTED_CDN" '.current_cdn = $cdn' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+            jq --arg cdn "$SELECTED_CDN" --argjson port "$new_port" \
+               '.current_cdn = $cdn | .current_cdn_port = $port' \
+               "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
             echo ""
             green_msg "线路切换成功！"
-            echo -e "  新接入地址: ${purple}${SELECTED_CDN}${re}"
-            yellow_msg "  💡 无需重启服务端，在客户端修改 Address 即可生效"
+            echo -e "  新接入地址: ${purple}${SELECTED_CDN}:${new_port}${re}"
+            yellow_msg "  💡 无需重启服务端，在客户端修改 Address 和 Port 即可生效"
             break
         fi
     done
@@ -355,13 +392,29 @@ install_core() {
     install_qrencode
     green_msg "  核心下载完成"
 
-    yellow_msg "[4/6] 生成双协议 Xray 配置 & 系统服务..."
+    yellow_msg "[4/6] 检测端口并生成 Xray 配置..."
     UUID=$(cat /proc/sys/kernel/random/uuid)
 
-    # Xray 配置：入口 8080 VLESS TCP + fallback 分流 → 8081 VLESS WS / 8082 VMess WS
+    # 端口冲突检测：如果默认端口被占用，自动向后寻找空闲端口
+    if port_in_use "$ARGO_PORT"; then
+        local old=$ARGO_PORT
+        ARGO_PORT=$(find_free_port "$ARGO_PORT")
+        yellow_msg "  端口 ${old} 被占用 → 自动切换为 ${ARGO_PORT}"
+    fi
+    if port_in_use "$VLESS_WS_PORT"; then
+        VLESS_WS_PORT=$(find_free_port "$VLESS_WS_PORT")
+        yellow_msg "  端口被占用 → VLESS WS 自动切换为 ${VLESS_WS_PORT}"
+    fi
+    if port_in_use "$VMESS_WS_PORT"; then
+        VMESS_WS_PORT=$(find_free_port "$VMESS_WS_PORT")
+        yellow_msg "  端口被占用 → VMess WS 自动切换为 ${VMESS_WS_PORT}"
+    fi
+
+    # Xray 配置：入口 VLESS TCP + fallback 分流
     cat > "$CONFIG_FILE" << XRAYCONF
 {
   "current_cdn": "${CDN_DEFAULT}",
+  "current_cdn_port": ${CDN_PORT},
   "log": { "access": "/dev/null", "error": "/dev/null", "loglevel": "none" },
   "inbounds": [
     {
@@ -470,7 +523,7 @@ ARGOWRAP
     echo ""
     echo -e "  ${cyan}快捷管理${re}: ${green}argov${re}"
     echo -e "  ${cyan}优选地址${re}: ${green}${CDN_DEFAULT}${re}"
-    echo -e "  ${cyan}端口${re}    : 443"
+    echo -e "  ${cyan}端口${re}    : ${green}${CDN_PORT}${re} ${yellow}(Cloudflare 边缘)${re}"
     echo -e "  ${cyan}用户 ID${re} : ${purple}${UUID}${re}"
     echo -e "  ${cyan}伪装域名${re}: ${green}${host_domain}${re}"
     echo ""
@@ -514,7 +567,7 @@ main_menu() {
         echo -e " ${purple}╚══════════════════════════════════════════════════╝${re}"
         echo ""
         echo -e "  Xray 内核 : ${XRAY_ST}     UUID : ${cyan}${uuid_short}${re}"
-        echo -e "  Argo 隧道 : ${TUNNEL_ST}"
+        echo -e "  Argo 隧道 : ${TUNNEL_ST}     客户端端口 : ${green}$(get_cdn_port)${re}"
         [ -n "$argo_domain" ] && echo -e "  当前域名  : ${green}${argo_domain}${re}"
         echo ""
         echo -e " ${purple}───────────────── 节点管理 ─────────────────${re}"
