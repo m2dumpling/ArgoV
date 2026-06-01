@@ -405,7 +405,12 @@ SERVICETUN
     yellow_msg "[6/6] 等待 Cloudflare 握手..."
     sleep 5
 
-    cp "$0" "$SCRIPT_PATH" 2>/dev/null; chmod +x "$SCRIPT_PATH"
+    # 写 argo-v2 wrapper（不能 cp $0，因为管道执行时 $0 是 bash）
+    cat > "$SCRIPT_PATH" << 'ARGOWRAP'
+#!/usr/bin/env bash
+bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoX-Mini/main/argox_mini.sh)
+ARGOWRAP
+    chmod +x "$SCRIPT_PATH"
     green_msg "一键安装完成！"
     echo ""
 
