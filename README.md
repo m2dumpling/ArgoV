@@ -21,7 +21,7 @@ Unlike bloated multi-protocol scripts (xray-2go bundles 4 protocols with Caddy; 
 - **Zero Public Exposure** — All Xray inbounds listen on `127.0.0.1` only. Not a single proxy port faces the internet. Immune to active censorship scans.
 - **No Caddy / No Nginx** — Cloudflare handles TLS termination at the edge. Your VPS needs no certificates, no web servers, no open ports.
 - **Built-in Carrier-Optimized CDN** — Pre-configured domains for China Mobile, China Unicom, China Telecom routing.
-- **Interactive Color Panel** — `argo-v2` command launches an organized, color-coded management menu with real-time status.
+- **Interactive Color Panel** — `argov` command launches an organized, color-coded management menu with real-time status.
 - **Config Modification** — Change UUID (syncs both protocols), refresh Argo domain, swap CDN endpoints — no reinstall.
 
 ## 🚀 One-Click Installation
@@ -37,7 +37,7 @@ Links appear immediately after install. Import and go.
 ## 🛠️ CLI Management Menu
 
 ```bash
-argo-v2
+argov
 ```
 
 ```

@@ -18,7 +18,7 @@
 - **零公网暴露** — 所有 Xray inbound 仅监听 `127.0.0.1`。公网无任何代理端口，完美免疫防火墙主动探测和端口扫描。
 - **无 Caddy / 无 Nginx** — TLS 由 Cloudflare 边缘节点处理。VPS 无需申请证书，无需装 web 服务器，无需开放端口。
 - **内置三网优选分流** — 预配置移动/联通/电信/通用优选域名。
-- **彩色交互面板** — 安装后注入 `argo-v2` 快捷指令。分类菜单，实时状态着色。
+- **彩色交互面板** — 安装后注入 `argov` 快捷指令。分类菜单，实时状态着色。
 - **配置灵活修改** — 更换 UUID（双协议同步）、刷新 Argo 临时域名、切换 CDN 优选线路，无需重装。
 
 ## 🚀 一键部署安装
@@ -34,7 +34,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoX-Mini/main/arg
 ## 🛠️ 日常管理
 
 ```bash
-argo-v2
+argov
 ```
 
 ```
