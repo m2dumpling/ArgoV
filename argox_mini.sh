@@ -174,8 +174,8 @@ get_status() {
 }
 get_proto_summary() {
     local s="VL-Argo VM-Argo"
-    [ "$ENABLE_SS" = 1 ]    && s="$s SS"
-    [ "$ENABLE_REALITY" = 1 ] && s="$s Reality"
+    jq -e '.inbounds[]|select(.tag=="ss")'       "$CONFIG_FILE" &>/dev/null && s="$s SS"
+    jq -e '.inbounds[]|select(.tag=="reality")'  "$CONFIG_FILE" &>/dev/null && s="$s Reality"
     echo "$s"
 }
 
@@ -208,20 +208,26 @@ show_node() {
         show_qr "$(gen_vless_link "$uuid" "$hd" "$cd" "$cp")"
     fi
 
-    if [ "$ENABLE_REALITY" = 1 ] && [ -n "$ip" ]; then
-        echo -e "  ${white}── VLESS Reality (端口 ${REALITY_PORT}) ──${re}"
+    if jq -e '.inbounds[]|select(.tag=="reality")' "$CONFIG_FILE" &>/dev/null && [ -n "$ip" ]; then
+        local rport rsni rp
+        rport=$(jq -r '.inbounds[]|select(.tag=="reality")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
+        rsni=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames[0]//empty' "$CONFIG_FILE" 2>/dev/null)
+        rp=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.publicKey//empty' "$CONFIG_FILE" 2>/dev/null)
+        echo -e "  ${white}── VLESS Reality (端口 ${rport}) ──${re}"
         echo ""
-        local rp; rp=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.publicKey//empty' "$CONFIG_FILE" 2>/dev/null)
-        echo -e "  ${green}$(gen_reality_link "$uuid" "$ip" "$REALITY_PORT" "$REALITY_SNI" "$rp")${re}"
-        echo -e "  ${cyan}SNI${re}: ${REALITY_SNI}  Flow: xtls-rprx-vision\n"
+        echo -e "  ${green}$(gen_reality_link "$uuid" "$ip" "$rport" "$rsni" "$rp")${re}"
+        echo -e "  ${cyan}SNI${re}: ${rsni}  Flow: xtls-rprx-vision\n"
     fi
 
-    if [ "$ENABLE_SS" = 1 ] && [ -n "$ip" ]; then
-        echo -e "  ${white}── Shadowsocks (端口 ${SS_PORT}) ──${re}"
+    if jq -e '.inbounds[]|select(.tag=="ss")' "$CONFIG_FILE" &>/dev/null && [ -n "$ip" ]; then
+        local sport sm sp
+        sport=$(jq -r '.inbounds[]|select(.tag=="ss")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
+        sm=$(jq -r '.inbounds[]|select(.tag=="ss")|.settings.method//empty' "$CONFIG_FILE" 2>/dev/null)
+        sp=$(jq -r '.inbounds[]|select(.tag=="ss")|.settings.password//empty' "$CONFIG_FILE" 2>/dev/null)
+        echo -e "  ${white}── Shadowsocks (端口 ${sport}) ──${re}"
         echo ""
-        local sp; sp=$(jq -r '.inbounds[]|select(.tag=="ss")|.settings.password//empty' "$CONFIG_FILE" 2>/dev/null)
-        echo -e "  ${green}$(gen_ss_link "$SS_METHOD" "$sp" "$ip" "$SS_PORT" "${NODE_NAME}-SS")${re}"
-        echo -e "  ${cyan}加密${re}: ${SS_METHOD}\n"
+        echo -e "  ${green}$(gen_ss_link "$sm" "$sp" "$ip" "$sport" "${NODE_NAME}-SS")${re}"
+        echo -e "  ${cyan}加密${re}: ${sm}\n"
     fi
 
     echo -e "  ${yellow}💡${re} 复制链接 → 客户端导入    菜单 2 换线路 | 菜单 3 改配置"
