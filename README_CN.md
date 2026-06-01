@@ -6,31 +6,32 @@
 
 ---
 
-一个极度精简、坚如磐石且绝无臃肿的 Cloudflare Argo 穿透隧道（VMess + WebSocket）一键安装与管理脚本。
+一个极度精简、坚如磐石的 Cloudflare Argo 穿透隧道一键管理脚本 —— **VLESS + VMess 双协议**，WebSocket + TLS 传输。
 
-与市面上全家桶脚本（如 xray-2go 四合一套装）不同，**ArgoX-Mini** 从底层彻底抹除了所有不需要的直连协议（Reality、Hysteria2、XHTTP）以及网页服务器依赖（Nginx、Caddy）。脚本强制 Xray 仅在 `127.0.0.1` 本地回环监听，VPS 公网上零特征、零代理端口暴露。
+与市面上全家桶脚本对比：xray-2go 打包 4 协议配 Caddy；ArgoX 打包 11 协议配 Nginx。**ArgoX-Mini** 只装 Argo 必需的组件：Xray-core + cloudflared。不装 Nginx、不装 Caddy、不要 Reality、不要 Hysteria2、不要 XHTTP。Xray 严格绑定 `127.0.0.1`，VPS 公网零代理端口暴露。
 
 ## ✨ 项目特点
 
-- **绝对纯净** — 零无用组件。只装 Xray + cloudflared，不装 Caddy/Nginx，不用在 VPS 上搞 TLS 证书。
-- **vmess:// 一键导入** — 安装完成后直接在终端输出 `vmess://` 加密链接 + QR 二维码。复制粘贴进 v2rayN 即完成配置，告别手填。
-- **极致安全** — Xray 核心严格绑定 `127.0.0.1:8080`。公网无任何开放的可疑代理端口，完美免疫防火墙的垃圾流量主动探测。
-- **内置三网优选分流** — 预配置优质 CDN 域名，细分为三网通用、移动专线、联通专线、电信专线。
-- **彩色交互面板** — 安装后注入 `argo-v2` 快捷指令。分类菜单，实时服务状态着色，一目了然。
-- **配置灵活修改** — 支持更换 UUID、刷新 Argo 临时域名、切换 CDN 优选线路，无需重装。
-- **一键卸载** — 彻底清除所有痕迹，干净利落。
+- **VLESS + VMess 双协议** — 两种协议均可走 WS+TLS+Argo。VLESS 适合新客户端（v2rayN、小火箭、Sing-box），VMess 保证最大兼容性。
+- **Xray Fallback 分流** — 单条 Argo 隧道入口（8080 端口）通过 Xray 内置 fallback 机制按路径 `/vless-argo` / `/vmess-argo` 自动分流，无需 Nginx/Caddy。
+- **`vmess://` + `vless://` 一键导入** — 安装完成直接打印双协议链接 + QR 二维码。复制粘贴进客户端即完成配置，告别手填。
+- **零公网暴露** — 所有 Xray inbound 仅监听 `127.0.0.1`。公网无任何代理端口，完美免疫防火墙主动探测和端口扫描。
+- **无 Caddy / 无 Nginx** — TLS 由 Cloudflare 边缘节点处理。VPS 无需申请证书，无需装 web 服务器，无需开放端口。
+- **内置三网优选分流** — 预配置移动/联通/电信/通用优选域名。
+- **彩色交互面板** — 安装后注入 `argo-v2` 快捷指令。分类菜单，实时状态着色。
+- **配置灵活修改** — 更换 UUID（双协议同步）、刷新 Argo 临时域名、切换 CDN 优选线路，无需重装。
 
 ## 🚀 一键部署安装
 
-在 Linux VPS 终端中（Ubuntu/Debian/CentOS，root 用户），直接运行：
+Ubuntu / Debian / CentOS，root 用户：
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoX-Mini/main/argox_mini.sh)
 ```
 
-安装完成后终端会直接打印 `vmess://` 导入链接和 QR 码，复制即用。
+安装完成后终端直接输出 VLESS 和 VMess 链接 + QR 码，复制即用。
 
-## 🛠️ 日常快捷管理
+## 🛠️ 日常管理
 
 ```bash
 argo-v2
@@ -39,14 +40,14 @@ argo-v2
 ```
 ╔══════════════════════════════════════════════════╗
 ║     ArgoX-Mini  纯净版隧道管理面板              ║
+║     VLESS + VMess 双协议  |  WS + TLS + Argo    ║
 ╚══════════════════════════════════════════════════╝
 
-  Xray 内核 : ● 运行中     UUID : abcd1234-...  
+  Xray 内核 : ● 运行中     UUID : abcd1234-...
   Argo 隧道 : ● 运行中
-  当前域名  : xxx.trycloudflare.com
 
 ───────────────── 节点管理 ─────────────────
-  1. 查看节点连接参数 & 一键导入链接
+  1. 查看节点链接 (VLESS + VMess 双协议)
   2. 更换/选择分流优选域名
   3. 修改节点配置 (UUID / 刷新域名)
 
@@ -60,24 +61,59 @@ argo-v2
   8. 完全卸载 ArgoX-Mini
 ```
 
-## 💻 客户端配置指南 (以 v2rayN 为例)
+## 🏗 架构图
 
-**方式 A — 一键导入（推荐）：** 复制终端输出的 `vmess://` 链接 → v2rayN → 导入剪贴板。
+```
+┌──────────┐     TLS:443      ┌─────────────┐     HTTP     ┌──────────────────┐
+│  客户端   │ ────────────────→ │  Cloudflare │ ───────────→ │  cloudflared     │
+│ v2rayN   │ ←──────────────── │  边缘节点   │ ←─────────── │  (Argo 隧道)     │
+│ 小火箭   │     WebSocket     └─────────────┘   localhost  └───────┬──────────┘
+└──────────┘                                                        │
+                                                            localhost:8080
+                                                                    │
+                                                            ┌───────▼──────────┐
+                                                            │  Xray Inbound    │
+                                                            │  VLESS TCP       │
+                                                            │  端口 8080       │
+                                                            │  ┌─ fallback ─┐  │
+                                                            │  │ /vless-argo │  │
+                                                            │  │ /vmess-argo │  │
+                                                            │  └─────────────┘  │
+                                                            └──┬───────────┬───┘
+                                                               │           │
+                                                      localhost:8081  localhost:8082
+                                                      VLESS + WS      VMess + WS
+```
 
-**方式 B — 手动填写：**
+## 💻 客户端配置指南
 
-| 配置项 | 填写内容 | 说明 |
-|---|---|---|
-| **地址 (Address)** | `cdn.31514926.xyz` | 优选接入点（也可用菜单 2 的分流域名） |
-| **端口 (Port)** | `443` | 必须为 443 |
-| **用户 ID (UUID)** | `[您的专属 UUID]` | 从终端输出完整复制 |
-| **额外 ID (alterId)** | `0` | 保持默认 |
-| **加密方式** | `none` | 推荐 none，外层 TLS 已加密 |
-| **传输协议 (network)** | `ws` | WebSocket |
-| **伪装域名 (Host)** | `xxxx.trycloudflare.com` | ⚠️ 核心步骤，必须与终端输出一致 |
-| **路径 (path)** | `/vmess-argo` | 固定转发路径 |
-| **传输层安全 (TLS)** | `tls` | 开启 |
-| **SNI** | `xxxx.trycloudflare.com` | 与伪装域名完全一致 |
+### VLESS（推荐新客户端使用）
+
+| 配置项 | 填写内容 |
+|---|---|
+| 地址 | `cdn.31514926.xyz`（或分流域名） |
+| 端口 | `443` |
+| UUID | 从终端复制 |
+| 传输协议 | `ws` (WebSocket) |
+| 路径 | `/vless-argo` |
+| TLS | `tls` 开启 |
+| SNI | `xxxx.trycloudflare.com` |
+
+### VMess
+
+| 配置项 | 填写内容 |
+|---|---|
+| 地址 | `cdn.31514926.xyz` |
+| 端口 | `443` |
+| UUID | 从终端复制 |
+| alterId | `0` |
+| 加密 | `none` |
+| 传输协议 | `ws` |
+| 路径 | `/vmess-argo` |
+| TLS | `tls` 开启 |
+| SNI | `xxxx.trycloudflare.com` |
+
+**支持客户端：** v2rayN、Nekoray、Nekobox、Shadowrocket (小火箭)、Sing-box、V2Box、Karing、Clash Meta，以及任何支持 VLESS/VMess + WS + TLS 的客户端。
 
 ## 📄 开源协议
 
