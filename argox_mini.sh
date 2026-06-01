@@ -791,6 +791,167 @@ XRAYCONF
 }
 
 #==============================================================================
+# 增量添加节点（不重装）
+#==============================================================================
+add_protocol() {
+    load_conf
+    clear
+    [ ! -f "$CONFIG_FILE" ] && { red_msg "请先完成首次安装！"; return; }
+
+    # 检查哪些协议已安装
+    local has_ss_argo=0 has_reality=0 has_ss_direct=0
+    jq -e '.inbounds[] | select(.tag=="ss-ws")' "$CONFIG_FILE" &>/dev/null && has_ss_argo=1
+    jq -e '.inbounds[] | select(.tag=="reality")' "$CONFIG_FILE" &>/dev/null && has_reality=1
+    jq -e '.inbounds[] | select(.tag=="ss-direct")' "$CONFIG_FILE" &>/dev/null && has_ss_direct=1
+
+    local available=0
+    [ "$has_ss_argo" = 0 ] && available=$((available+1))
+    [ "$has_reality" = 0 ] && available=$((available+1))
+    [ "$has_ss_direct" = 0 ] && available=$((available+1))
+
+    if [ "$available" = 0 ]; then
+        echo ""
+        green_msg "全部可选协议已安装！无需添加。"
+        echo ""
+        read -p "  按回车键返回..." -r
+        return
+    fi
+
+    echo ""
+    echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
+    echo -e " ${purple}║${re}       ${white}添加节点 · 增量安装${re}                  ${purple}║${re}"
+    echo -e " ${purple}║${re}       ${yellow}选择一个协议添加到当前配置${re}            ${purple}║${re}"
+    echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
+    echo ""
+
+    local opt=1
+    [ "$has_ss_argo" = 0 ]   && echo -e "  ${green}${opt}${re}. Shadowsocks + Argo ${cyan}(可用)${re}" && opt=$((opt+1))
+    [ "$has_reality" = 0 ]   && echo -e "  ${green}${opt}${re}. VLESS Reality 直连 ${cyan}(可用)${re}" && opt=$((opt+1))
+    [ "$has_ss_direct" = 0 ] && echo -e "  ${green}${opt}${re}. Shadowsocks 直连 ${cyan}(可用)${re}" && opt=$((opt+1))
+    [ "$has_ss_argo" = 1 ]   && echo -e "  ${red}—${re} Shadowsocks + Argo ${red}(已安装)${re}"
+    [ "$has_reality" = 1 ]   && echo -e "  ${red}—${re} VLESS Reality 直连 ${red}(已安装)${re}"
+    [ "$has_ss_direct" = 1 ] && echo -e "  ${red}—${re} Shadowsocks 直连 ${red}(已安装)${re}"
+    echo ""
+    echo -e "  ${red}0${re}. 返回"
+    echo ""
+    echo -e " ${purple}────────────────────────────────────────${re}"
+    read -p "  请选择: " ac
+    [ "$ac" = "0" ] && return
+
+    # 映射用户选择到协议
+    local proto="" tag="" port_var="" label=""
+    opt=1
+    if [ "$has_ss_argo" = 0 ]; then
+        [ "$ac" = "$opt" ] && { proto="ss-argo"; tag="ss-ws"; port_var="SS_WS_PORT"; label="Shadowsocks + Argo"; }
+        opt=$((opt+1))
+    fi
+    if [ "$has_reality" = 0 ]; then
+        [ "$ac" = "$opt" ] && { proto="reality"; tag="reality"; port_var="REALITY_PORT"; label="VLESS Reality 直连"; }
+        opt=$((opt+1))
+    fi
+    if [ "$has_ss_direct" = 0 ]; then
+        [ "$ac" = "$opt" ] && { proto="ss-direct"; tag="ss-direct"; port_var="SS_DIRECT_PORT"; label="Shadowsocks 直连"; }
+    fi
+
+    [ -z "$proto" ] && { red_msg "无效选择。"; sleep 1; return; }
+
+    # --- 协议特定配置 ---
+    local uuid; uuid=$(get_uuid)
+    local new_inbound=""
+
+    case "$proto" in
+        ss-argo)
+            echo ""; for i in "${!SS_METHODS[@]}"; do echo -e "  ${green}$((i+1))${re}. ${SS_METHODS[$i]}"; done; echo ""
+            read -p "  选择加密 [1-7，默认 aes-256-gcm(2)]: " sm
+            local sm_idx=$(( ${sm:-2} - 1 ))
+            [ "$sm_idx" -ge 0 ] 2>/dev/null && [ "$sm_idx" -lt "${#SS_METHODS[@]}" ] && SS_METHOD="${SS_METHODS[$sm_idx]}"
+            local ss_pass
+            if [[ "$SS_METHOD" =~ 2022 ]]; then ss_pass=$(gen_ss2022_pass "$SS_METHOD")
+            else ss_pass="$uuid"; fi
+            # 找端口
+            SS_WS_PORT=$(find_free_port "${SS_WS_PORT:-8083}")
+            new_inbound='{"port":'"${SS_WS_PORT}"',"listen":"127.0.0.1","protocol":"shadowsocks","tag":"ss-ws","settings":{"method":"'"${SS_METHOD}"'","password":"'"${ss_pass}"'","network":"tcp,udp"},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/ss-argo"}}}'
+            # 更新 fallback 路由
+            local fb_new='{"path":"/ss-argo","dest":'"${SS_WS_PORT}"'}'
+            jq --argjson fb "$fb_new" \
+               '(.inbounds[] | select(.tag=="argo-in") | .settings.fallbacks) += [$fb]' \
+               "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+            green_msg "已添加: ${label}  端口: ${SS_WS_PORT}  加密: ${SS_METHOD}"
+            ;;
+        reality)
+            echo ""; for i in "${!REALITY_SNIS[@]}"; do echo -e "  ${green}$((i+1))${re}. ${REALITY_SNIS[$i]}"; done; echo ""
+            read -p "  选择伪装域名 [1-8，默认 www.amazon.com(1)]: " rs
+            local rs_idx=$(( ${rs:-1} - 1 ))
+            [ "$rs_idx" -ge 0 ] 2>/dev/null && [ "$rs_idx" -lt "${#REALITY_SNIS[@]}" ] && REALITY_SNI="${REALITY_SNIS[$rs_idx]}"
+            REALITY_PORT=$(shuf -i 10000-60000 -n 1)
+            REALITY_PORT=$(find_free_port "$REALITY_PORT")
+            gen_reality_keys
+            new_inbound='{"port":'"${REALITY_PORT}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${REALITY_SNI}"':443","serverNames":["'"${REALITY_SNI}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":[""]}},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":true}}'
+            green_msg "已添加: ${label}  端口: ${REALITY_PORT}  SNI: ${REALITY_SNI}"
+            ;;
+        ss-direct)
+            echo ""; for i in "${!SS_METHODS[@]}"; do echo -e "  ${green}$((i+1))${re}. ${SS_METHODS[$i]}"; done; echo ""
+            read -p "  选择加密 [1-7，默认 aes-256-gcm(2)]: " sm
+            sm_idx=$(( ${sm:-2} - 1 ))
+            [ "$sm_idx" -ge 0 ] 2>/dev/null && [ "$sm_idx" -lt "${#SS_METHODS[@]}" ] && SS_METHOD="${SS_METHODS[$sm_idx]}"
+            ss_pass=""
+            if [[ "$SS_METHOD" =~ 2022 ]]; then ss_pass=$(gen_ss2022_pass "$SS_METHOD")
+            else ss_pass="$uuid"; fi
+            SS_DIRECT_PORT=$(shuf -i 10000-60000 -n 1)
+            SS_DIRECT_PORT=$(find_free_port "$SS_DIRECT_PORT")
+            new_inbound='{"port":'"${SS_DIRECT_PORT}"',"listen":"0.0.0.0","protocol":"shadowsocks","tag":"ss-direct","settings":{"method":"'"${SS_METHOD}"'","password":"'"${ss_pass}"'","network":"tcp,udp"}}'
+            green_msg "已添加: ${label}  端口: ${SS_DIRECT_PORT}  加密: ${SS_METHOD}"
+            ;;
+    esac
+
+    # --- 写入 config ---
+    jq --argjson inbound "$new_inbound" '.inbounds += [$inbound]' \
+       "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+
+    # --- 更新持久化配置 ---
+    case "$proto" in
+        ss-argo) ENABLE_SS_ARGO=1 ;;
+        reality) ENABLE_REALITY=1 ;;
+        ss-direct) ENABLE_SS_DIRECT=1 ;;
+    esac
+    save_conf
+
+    # --- 重启 Xray ---
+    yellow_msg "重启 Xray 使新协议生效..."
+    systemctl restart xray 2>/dev/null; sleep 2
+    get_status
+
+    # --- 输出新节点链接 ---
+    echo ""
+    echo -e " ${white}━━━ 新节点链接 ━━━${re}"
+    echo ""
+    local ip_addr; ip_addr=$(get_ip)
+    local host_domain cdn_addr cdn_port
+    host_domain=$(get_argo_domain); cdn_addr=$(get_cdn); cdn_port=$(get_cdn_port)
+    [ "$ARGO_MODE" = "fixed-token" ] && host_domain="$ARGO_FIXED_DOMAIN"
+
+    case "$proto" in
+        ss-argo)
+            [ -z "$host_domain" ] && { sleep 3; host_domain=$(get_argo_domain); }
+            if [ -n "$host_domain" ]; then
+                local sl; sl=$(gen_ss_link "$SS_METHOD" "$ss_pass" "$cdn_addr" "$cdn_port" "${NODE_NAME}-SS-Argo")
+                echo -e "  ${green}${sl}${re}"
+                echo -e "  ${cyan}加密${re}: ${SS_METHOD}  路径: /ss-argo  WS+TLS  伪装: ${host_domain}"
+            fi ;;
+        reality)
+            [ -n "$ip_addr" ] && {
+                local rl; rl=$(gen_reality_link "$uuid" "$ip_addr" "$REALITY_PORT" "$REALITY_SNI" "$REALITY_PUB")
+                echo -e "  ${green}${rl}${re}"; } ;;
+        ss-direct)
+            [ -n "$ip_addr" ] && {
+                local sdl; sdl=$(gen_ss_link "$SS_METHOD" "$ss_pass" "$ip_addr" "$SS_DIRECT_PORT" "${NODE_NAME}-SS-Direct")
+                echo -e "  ${green}${sdl}${re}"; } ;;
+    esac
+    echo ""
+    read -p "  按回车键返回..." -r
+}
+
+#==============================================================================
 # 主菜单
 #==============================================================================
 main_menu() {
@@ -817,6 +978,7 @@ main_menu() {
         echo -e "  ${green}1${re}. 查看节点链接 (全部协议)"
         echo -e "  ${green}2${re}. 更换优选域名 / 线路"
         echo -e "  ${green}3${re}. 修改配置 (名称/UUID/隧道/加密/协议)"
+        echo -e "  ${cyan}a${re}. 添加节点 (增量安装新协议)"
         echo ""
         echo -e " ${purple}───────────────── 服务控制 ─────────────────${re}"
         echo -e "  ${green}4${re}. 启动 服务"
@@ -831,12 +993,15 @@ main_menu() {
         echo -e "  ${cyan}0${re}. 退出"
         echo ""
         echo -e " ${purple}────────────────────────────────────────────${re}"
-        read -p "  请输入 (0-9): " c
+        read -p "  请输入 (0-9 / a): " c
         case "$c" in
             1) show_node; read -p "  按回车键返回..." -r ;;
             2) edit_cdn; read -p "  按回车键返回..." -r ;;
             3) change_config ;;
-            4) start_services; sleep 1 ;; 5) stop_services; sleep 1 ;; 6) restart_services; sleep 1 ;;
+            a|A) add_protocol ;;
+            4) start_services; sleep 1 ;;
+            5) stop_services; sleep 1 ;;
+            6) restart_services; sleep 1 ;;
             7) echo -ne "  ${yellow}重新安装? 保留配置 (y/n): ${re}"; read cf
                [ "$cf" = "y" ] || [ "$cf" = "Y" ] && { load_conf; do_install; }
                read -p "  按回车键返回..." -r ;;
@@ -848,7 +1013,7 @@ main_menu() {
                    systemctl daemon-reload; green_msg "卸载完成。"; exit 0
                fi ;;
             0) clear; exit 0 ;;
-            *) red_msg "无效 (0-9)"; sleep 1 ;;
+            *) red_msg "无效 (0-9 / a)"; sleep 1 ;;
         esac
     done
 }
