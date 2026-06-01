@@ -774,12 +774,13 @@ main_menu() {
         echo ""
         echo -e " ${purple}───────────────── 系统维护 ─────────────────${re}"
         echo -e "  ${yellow}7${re}. 重新安装 (保留配置)"
-        echo -e "  ${red}8${re}. 完全卸载"
+        echo -e "  ${cyan}8${re}. 更新 ArgoX-Mini"
+        echo -e "  ${red}9${re}. 完全卸载"
         echo ""
         echo -e "  ${cyan}0${re}. 退出"
         echo ""
         echo -e " ${purple}────────────────────────────────────────────${re}"
-        read -p "  请输入选项 (0-8): " menu_input
+        read -p "  请输入选项 (0-9): " menu_input
 
         case "$menu_input" in
             1) show_node; read -p "  按回车键返回..." -r ;;
@@ -794,6 +795,10 @@ main_menu() {
                 [ "$confirm" = "y" ] || [ "$confirm" = "Y" ] && { load_conf; do_install; }
                 read -p "  按回车键返回..." -r ;;
             8)
+                yellow_msg "正在拉取最新版本..."
+                bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoX-Mini/main/argox_mini.sh)
+                exit 0 ;;
+            9)
                 echo -ne "  ${red}⚠ 确定完全卸载? (y/n): ${re}"
                 read confirm
                 if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
@@ -806,7 +811,7 @@ main_menu() {
                     exit 0
                 fi ;;
             0) clear; exit 0 ;;
-            *) red_msg "无效选项 (0-8)"; sleep 1 ;;
+            *) red_msg "无效选项 (0-9)"; sleep 1 ;;
         esac
     done
 }
