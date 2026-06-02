@@ -176,7 +176,8 @@ gen_ss_link() {
 gen_reality_link() {
     local sid=""
     [ -n "$6" ] && sid="&sid=$6"
-    printf '%s' "vless://$1@$2:$3?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=$4&pbk=$5&fp=chrome${sid}#${7:-${NODE_NAME}-Reality}"
+    local fp="$8"; [ -z "$fp" ] && fp="chrome"
+    printf '%s' "vless://$1@$2:$3?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=$4&pbk=$5&fp=${fp}${sid}#${7:-${NODE_NAME}-Reality}"
 }
 
 show_qr() {
@@ -760,7 +761,7 @@ edit_protocol() {
     echo -e " ${purple}║${re}     ${white}编辑 ${label}${re}"
     echo -e " ${purple}╚══════════════════════════════════════════╝${re}"; echo ""
 
-    local new_port="$cur_port" new_method="$cur_method" new_pass="$cur_pass" new_sni="$cur_sni"
+    local new_port="$cur_port" new_method="$cur_method" new_pass="$cur_pass" new_sni="$cur_sni" new_fp=""
 
     case "$tag" in
         ss)
@@ -781,12 +782,23 @@ edit_protocol() {
             echo -e " ${white}━━━ ③ 端口 ━━━${re}"; echo -e "  ${yellow}当前: ${cyan}${cur_port}${re} 公网端口"; read -p "  新端口 [回车保持]: " np2
             [ -n "$np2" ] && ! port_in_use "$np2" && new_port="$np2"; [ -n "$np2" ] && port_in_use "$np2" && red_msg "端口占用，保持原端口"
             echo -e "  → ${green}${new_port}${re}\n"
+
+            echo -e " ${white}━━━ ④ 网络 ━━━${re}"
+            local cur_net; cur_net=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.settings.network//"tcp,udp"' "$CONFIG_FILE" 2>/dev/null)
+            echo -e "  ${green}1${re}. tcp,udp  ${green}2${re}. tcp  ${green}3${re}. udp"
+            echo -e "  ${yellow}当前: ${cyan}${cur_net}${re}"; read -p "  选择 [回车保持]: " nn
+            case "${nn:-0}" in 1) cur_net="tcp,udp" ;; 2) cur_net="tcp" ;; 3) cur_net="udp" ;; esac
+            local new_net="$cur_net"
+            echo -e "  → ${green}${new_net}${re}\n"
             ;;
         reality)
             echo -e " ${white}━━━ ① 伪装域名 ━━━${re}"
             for i in "${!REALITY_SNIS[@]}"; do local mk=" "; [ "${REALITY_SNIS[$i]}" = "$new_sni" ] && mk="★"; echo -e "  ${green}$((i+1))${re}.${mk} ${REALITY_SNIS[$i]}"; done
+            echo -e "  ${cyan}c${re}. 自定义"
             echo ""; echo -e "  ${yellow}当前: ${cyan}${new_sni}${re}"; read -p "  新 SNI [回车保持]: " rs
-            if [ -n "$rs" ]; then local ri=$((rs-1)); [ "$ri" -ge 0 ] 2>/dev/null && [ "$ri" -lt "${#REALITY_SNIS[@]}" ] && new_sni="${REALITY_SNIS[$ri]}"; fi
+            if [ "$rs" = "c" ] || [ "$rs" = "C" ]; then
+                read -p "  输入 SNI: " new_sni; [ -z "$new_sni" ] && new_sni="$cur_sni"
+            elif [ -n "$rs" ]; then local ri=$((rs-1)); [ "$ri" -ge 0 ] 2>/dev/null && [ "$ri" -lt "${#REALITY_SNIS[@]}" ] && new_sni="${REALITY_SNIS[$ri]}"; fi
             echo -e "  → ${green}${new_sni}${re}\n"
 
             echo -e " ${white}━━━ ② 端口 ━━━${re}"; echo -e "  ${yellow}当前: ${cyan}${cur_port}${re} 公网端口"; read -p "  新端口 [回车保持]: " np2
@@ -811,21 +823,29 @@ edit_protocol() {
                 REALITY_SHORTID="$nsid"
                 echo -e "  → ${green}${REALITY_SHORTID}${re}"
             fi; echo ""
+
+            echo -e " ${white}━━━ ⑤ 指纹 (Fingerprint) ━━━${re}"
+            local cur_fp; cur_fp=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.fingerprint//"chrome"' "$CONFIG_FILE" 2>/dev/null)
+            local fps=("chrome" "firefox" "safari" "edge" "random")
+            for i in "${!fps[@]}"; do local mk=" "; [ "${fps[$i]}" = "$cur_fp" ] && mk="★"; echo -e "  ${green}$((i+1))${re}.${mk} ${fps[$i]}"; done
+            echo ""; echo -e "  ${yellow}当前: ${cyan}${cur_fp}${re}"; read -p "  新指纹 [回车保持]: " fp
+            [ -n "$fp" ] && { local fi=$((fp-1)); [ "$fi" -ge 0 ] 2>/dev/null && [ "$fi" -lt "${#fps[@]}" ] && cur_fp="${fps[$fi]}"; }; new_fp="$cur_fp"
+            echo -e "  → ${green}${new_fp}${re}\n"
             ;;
     esac
 
     echo -e " ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"; echo -e " ${white}确认修改：${re}"
     case "$tag" in
-        ss) echo -e "  加密: ${cyan}${cur_method}${re} → ${green}${new_method}${re}"; echo -e "  端口: ${cyan}${cur_port}${re} → ${green}${new_port}${re}"; [ "$new_pass" != "$cur_pass" ] && echo -e "  密码: ${cyan}已更新${re}" ;;
-        reality) echo -e "  SNI: ${cyan}${cur_sni}${re} → ${green}${new_sni}${re}"; echo -e "  端口: ${cyan}${cur_port}${re} → ${green}${new_port}${re}"; [ "$nsid" = "new" ] || [ "$nsid" = "NEW" ] || [ -n "$nsid" ] && echo -e "  ShortId: ${cyan}已更新 → ${green}${REALITY_SHORTID}${re}" ;;
+        ss) echo -e "  加密: ${cyan}${cur_method}${re} → ${green}${new_method}${re}"; echo -e "  端口: ${cyan}${cur_port}${re} → ${green}${new_port}${re}"; [ "$new_pass" != "$cur_pass" ] && echo -e "  密码: ${cyan}已更新${re}"; echo -e "  网络: ${green}${new_net}${re}" ;;
+        reality) echo -e "  SNI: ${cyan}${cur_sni}${re} → ${green}${new_sni}${re}"; echo -e "  端口: ${cyan}${cur_port}${re} → ${green}${new_port}${re}"; [ "$nsid" = "new" ] || [ "$nsid" = "NEW" ] || [ -n "$nsid" ] && echo -e "  ShortId: ${cyan}已更新 → ${green}${REALITY_SHORTID}${re}"; echo -e "  指纹: ${green}${new_fp}${re}" ;;
     esac
     echo -e " ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"; echo ""
     echo -ne "  ${yellow}确认? (y/n) [y]: ${re}"; read cf; [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "已取消。"; return; }
 
     case "$tag" in
         ss)
-            jq --arg m "$new_method" --arg p "$new_pass" --argjson pt "$new_port" \
-               '(.inbounds[]|select(.protocol=="shadowsocks")|.settings.method)=$m|(.inbounds[]|select(.protocol=="shadowsocks")|.settings.password)=$p|(.inbounds[]|select(.protocol=="shadowsocks")|.port)=$pt|(.inbounds[]|select(.protocol=="shadowsocks")|.tag)="ss"' \
+            jq --arg m "$new_method" --arg p "$new_pass" --argjson pt "$new_port" --arg n "$new_net" \
+               '(.inbounds[]|select(.protocol=="shadowsocks")|.settings.method)=$m|(.inbounds[]|select(.protocol=="shadowsocks")|.settings.password)=$p|(.inbounds[]|select(.protocol=="shadowsocks")|.port)=$pt|(.inbounds[]|select(.protocol=="shadowsocks")|.settings.network)=$n|(.inbounds[]|select(.protocol=="shadowsocks")|.tag)="ss"' \
                "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
             SS_METHOD="$new_method"; SS_PORT="$new_port" ;;
         reality)
@@ -843,6 +863,11 @@ edit_protocol() {
                 jq --argjson s "[${sid_val}]" \
                    '(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.shortIds)=$s' \
                    "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+            fi
+            if [ -n "$new_fp" ]; then
+                jq --arg fp "$new_fp" \
+                   '(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.fingerprint)=$fp' \
+                   "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
             fi ;;
     esac
     save_conf; yellow_msg "重启 Xray..."; svc restart xray 2>/dev/null; sleep 2; get_status; green_msg "完成"
@@ -859,56 +884,143 @@ edit_protocol() {
 
 add_single_protocol() {
     local proto="$1" uuid; uuid=$(get_uuid)
-    local sm="$SS_METHOD" sp="" s_port="" r_sni="$REALITY_SNI" r_port=""
+    local sm="$SS_METHOD" sp="" s_port="" s_net="tcp,udp"
+    local r_sni="$REALITY_SNI" r_port="" r_sid="" r_fp="chrome"
+
+    [[ "$proto" != "ss" && "$proto" != "reality" ]] && { red_msg "未知协议"; return; }
+
+    while true; do
     clear
     case "$proto" in
         ss)
             echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
             echo -e " ${purple}║${re}     ${white}添加 Shadowsocks${re}"
             echo -e " ${purple}╚══════════════════════════════════════════╝${re}"; echo ""
-            echo -e " ${white}━━━ ① 加密 ━━━${re}"
+
+            echo -e " ${white}━━━ ① 加密方式 ━━━${re}"
             for i in "${!SS_METHODS[@]}"; do local mk=" "; [ "${SS_METHODS[$i]}" = "$sm" ] && mk="★"; echo -e "  ${green}$((i+1))${re}.${mk} ${SS_METHODS[$i]}"; done
-            echo ""; read -p "  选择 [默认 ${sm}]: " s; local si=$(( ${s:-0} -1 ))
+            echo ""; echo -e "  ${yellow}当前: ${cyan}${sm}${re}"; read -p "  选择 [回车保持]: " s
+            local si=$(( ${s:-0} -1 ))
             [ "$si" -ge 0 ] 2>/dev/null && [ "$si" -lt "${#SS_METHODS[@]}" ] && sm="${SS_METHODS[$si]}"
             echo -e "  → ${green}${sm}${re}\n"
-            echo -e " ${white}━━━ ② 密码 ━━━${re}"; local dp; [[ "$sm" =~ 2022 ]] && dp=$(gen_ss2022_pass "$sm") || dp="$uuid"
-            read -p "  密码 [自动]: " sp; [ -z "$sp" ] && sp="$dp"; echo -e "  → ${green}$(echo "$sp"|cut -c1-20)...${re}\n"
-            echo -e " ${white}━━━ ③ 端口 ━━━${re}"; local dpt; dpt=$(find_free_port "${SS_PORT:-0}"); [ "$dpt" = "0" ] && dpt=$(find_free_port "$(shuf -i 10000-60000 -n 1)")
-            read -p "  端口 [${dpt}]: " s_port; s_port="${s_port:-$dpt}"; echo -e "  → ${green}${s_port}${re}\n"
+
+            echo -e " ${white}━━━ ② 密码 ━━━${re}"
+            local dp; [[ "$sm" =~ 2022 ]] && dp=$(gen_ss2022_pass "$sm") || dp="$uuid"
+            [ -z "$sp" ] && sp="$dp"
+            echo -e "  ${yellow}当前: ${cyan}$(echo "$sp"|cut -c1-20)...${re}"
+            echo -e "  ${yellow}回车保持。输入 new 自动生成。${re}"
+            read -p "  密码 [回车保持]: " s
+            if [ "$s" = "new" ] || [ "$s" = "NEW" ]; then
+                [[ "$sm" =~ 2022 ]] && sp=$(gen_ss2022_pass "$sm") || sp=$(cat /proc/sys/kernel/random/uuid)
+            elif [ -n "$s" ]; then sp="$s"; fi
+            echo -e "  → ${green}$(echo "$sp"|cut -c1-24)...${re}\n"
+
+            echo -e " ${white}━━━ ③ 端口 ━━━${re}"
+            [ -z "$s_port" ] && { local dpt; dpt=$(find_free_port "${SS_PORT:-0}"); [ "$dpt" = "0" ] && dpt=$(find_free_port "$(shuf -i 10000-60000 -n 1)"); s_port="$dpt"; }
+            echo -e "  ${yellow}当前: ${cyan}${s_port}${re}"; read -p "  端口 [回车保持]: " s
+            [ -n "$s" ] && ! port_in_use "$s" && s_port="$s"; [ -n "$s" ] && port_in_use "$s" && red_msg "端口占用，保持原端口"
+            echo -e "  → ${green}${s_port}${re}\n"
+
+            echo -e " ${white}━━━ ④ 网络 ━━━${re}"
+            echo -e "  ${green}1${re}. tcp,udp  ${green}2${re}. tcp  ${green}3${re}. udp"
+            echo -e "  ${yellow}当前: ${cyan}${s_net}${re}"; read -p "  选择 [回车保持]: " s
+            case "${s:-0}" in 1) s_net="tcp,udp" ;; 2) s_net="tcp" ;; 3) s_net="udp" ;; esac
+            echo -e "  → ${green}${s_net}${re}\n"
             ;;
+
         reality)
             echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
             echo -e " ${purple}║${re}     ${white}添加 VLESS Reality${re}"
             echo -e " ${purple}╚══════════════════════════════════════════╝${re}"; echo ""
-            echo -e " ${white}━━━ ① SNI ━━━${re}"
+
+            echo -e " ${white}━━━ ① 伪装域名 (SNI) ━━━${re}"
             for i in "${!REALITY_SNIS[@]}"; do local mk=" "; [ "${REALITY_SNIS[$i]}" = "$r_sni" ] && mk="★"; echo -e "  ${green}$((i+1))${re}.${mk} ${REALITY_SNIS[$i]}"; done
-            echo ""; read -p "  选择 [默认 ${r_sni}]: " rs; local ri=$(( ${rs:-0} -1 ))
-            [ "$ri" -ge 0 ] 2>/dev/null && [ "$ri" -lt "${#REALITY_SNIS[@]}" ] && r_sni="${REALITY_SNIS[$ri]}"
+            echo -e "  ${cyan}c${re}. 自定义"; echo ""
+            echo -e "  ${yellow}当前: ${cyan}${r_sni}${re}"; read -p "  选择 [回车保持]: " rs
+            local ri=$(( ${rs:-0} -1 ))
+            if [ "$rs" = "c" ] || [ "$rs" = "C" ]; then
+                read -p "  输入 SNI: " r_sni; [ -z "$r_sni" ] && r_sni="www.amazon.com"
+            elif [ "$ri" -ge 0 ] 2>/dev/null && [ "$ri" -lt "${#REALITY_SNIS[@]}" ]; then
+                r_sni="${REALITY_SNIS[$ri]}"
+            fi
             echo -e "  → ${green}${r_sni}${re}\n"
-            echo -e " ${white}━━━ ② 端口 ━━━${re}"; local rd; rd=$(find_free_port "$(shuf -i 10000-60000 -n 1)")
-            read -p "  端口 [${rd}]: " r_port; r_port="${r_port:-$rd}"; echo -e "  → ${green}${r_port}${re}\n"
+
+            echo -e " ${white}━━━ ② 端口 ━━━${re}"
+            [ -z "$r_port" ] && { r_port=$(find_free_port "$(shuf -i 10000-60000 -n 1)"); }
+            echo -e "  ${yellow}当前: ${cyan}${r_port}${re}"; read -p "  端口 [回车保持]: " s
+            [ -n "$s" ] && ! port_in_use "$s" && r_port="$s"; [ -n "$s" ] && port_in_use "$s" && red_msg "端口占用，保持原端口"
+            echo -e "  → ${green}${r_port}${re}\n"
 
             echo -e " ${white}━━━ ③ ShortId ━━━${re}"
-            echo -e "  ${yellow}8位十六进制，回车随机生成。客户端需匹配。${re}"
-            read -p "  ShortId [随机]: " rsid
-            if [ -n "$rsid" ]; then REALITY_SHORTID="$rsid"
-            else gen_reality_shortid; fi
-            echo -e "  → ${green}${REALITY_SHORTID}${re}\n"
+            [ -z "$r_sid" ] && { r_sid=$(openssl rand -hex 4 2>/dev/null || printf '%08x' $((RANDOM*RANDOM))); }
+            echo -e "  ${yellow}8位十六进制，客户端需匹配。${re}"
+            echo -e "  ${yellow}当前: ${cyan}${r_sid}${re}"; read -p "  ShortId [回车保持]: " s
+            if [ "$s" = "new" ] || [ "$s" = "NEW" ]; then
+                r_sid=$(openssl rand -hex 4 2>/dev/null || printf '%08x' $((RANDOM*RANDOM)))
+            elif [ -n "$s" ]; then r_sid="$s"; fi
+            echo -e "  → ${green}${r_sid}${re}\n"
+
+            echo -e " ${white}━━━ ④ x25519 密钥对 ━━━${re}"
+            if [ -z "$REALITY_PRIV" ] || [ "$REALITY_PRIV" = "REPLACE_ME" ]; then
+                gen_reality_keys
+            fi
+            echo -e "  ${yellow}私钥: ${cyan}$(echo "${REALITY_PRIV}"|cut -c1-24)...${re}"
+            echo -e "  ${yellow}公钥: ${cyan}$(echo "${REALITY_PUB}"|cut -c1-24)...${re}"
+            echo -e "  ${yellow}回车保持。输入 new 重新生成。${re}"
+            read -p "  [回车保持]: " s
+            [ "$s" = "new" ] || [ "$s" = "NEW" ] && { gen_reality_keys; echo -e "  → ${green}新密钥已生成${re}"; }
+            echo -e "  → ${green}$(echo "${REALITY_PUB}"|cut -c1-24)...${re}\n"
+
+            echo -e " ${white}━━━ ⑤ 指纹 (Fingerprint) ━━━${re}"
+            local fps=("chrome" "firefox" "safari" "edge" "random")
+            for i in "${!fps[@]}"; do local mk=" "; [ "${fps[$i]}" = "$r_fp" ] && mk="★"; echo -e "  ${green}$((i+1))${re}.${mk} ${fps[$i]}"; done
+            echo ""; echo -e "  ${yellow}当前: ${cyan}${r_fp}${re}"; read -p "  选择 [回车保持]: " s
+            local fi=$(( ${s:-0} -1 ))
+            [ "$fi" -ge 0 ] 2>/dev/null && [ "$fi" -lt "${#fps[@]}" ] && r_fp="${fps[$fi]}"
+            echo -e "  → ${green}${r_fp}${re}\n"
+
+            echo -e " ${white}━━━ ⑥ 流控 (Flow) ━━━${re}"
+            echo -e "  ${green}1${re}. xtls-rprx-vision"
+            echo ""; echo -e "  ${yellow}当前: ${cyan}xtls-rprx-vision${re}"; read -p "  [回车保持]: " s
+            echo -e "  → ${green}xtls-rprx-vision${re}\n"
             ;;
     esac
 
+    # === 确认 ===
     echo -e " ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
-    echo -ne "  ${yellow}确认添加? (y/n) [y]: ${re}"; read cf; [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "已取消。"; return; }
+    echo -e " ${white}确认配置：${re}"
+    case "$proto" in
+        ss)
+            echo -e "  加密: ${green}${sm}${re}  端口: ${green}${s_port}${re}"
+            echo -e "  网络: ${green}${s_net}${re}"
+            ;;
+        reality)
+            echo -e "  SNI: ${green}${r_sni}${re}  端口: ${green}${r_port}${re}"
+            echo -e "  ShortId: ${green}${r_sid}${re}"
+            echo -e "  公钥: ${purple}$(echo "${REALITY_PUB}"|cut -c1-32)...${re}"
+            echo -e "  指纹: ${green}${r_fp}${re}  Flow: ${green}xtls-rprx-vision${re}"
+            ;;
+    esac
+    echo -e " ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
+    echo ""; echo -ne "  ${yellow}确认添加? (y=确认 n=重新配置 q=取消) [y]: ${re}"; read cf
+    case "${cf:-y}" in
+        y|Y) break ;;
+        n|N) continue ;;  # 重新配置
+        *) yellow_msg "已取消。"; return ;;
+    esac
+    done
 
+    # === 写入 JSON ===
     local new_inbound=""
     case "$proto" in
         ss)
-            new_inbound='{"port":'"${s_port}"',"listen":"0.0.0.0","protocol":"shadowsocks","tag":"ss","settings":{"method":"'"${sm}"'","password":"'"${sp}"'","network":"tcp,udp"}}'
+            new_inbound='{"port":'"${s_port}"',"listen":"0.0.0.0","protocol":"shadowsocks","tag":"ss","settings":{"method":"'"${sm}"'","password":"'"${sp}"'","network":"'"${s_net}"'"}}'
             SS_PORT="$s_port"; SS_METHOD="$sm"; ENABLE_SS=1 ;;
         reality)
-            gen_reality_keys
-            local sid; [ -n "$REALITY_SHORTID" ] && sid="\"$REALITY_SHORTID\"" || sid="\"\""
-            new_inbound='{"port":'"${r_port}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${r_sni}"':443","serverNames":["'"${r_sni}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":['"${sid}"']}},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":true}}'
+            [ -z "$REALITY_PRIV" ] || [ "$REALITY_PRIV" = "REPLACE_ME" ] && gen_reality_keys
+            REALITY_SHORTID="$r_sid"
+            local sid_val="\"$REALITY_SHORTID\""
+            new_inbound='{"port":'"${r_port}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${r_sni}"':443","serverNames":["'"${r_sni}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":['"${sid_val}"'],"fingerprint":"'"${r_fp}"'"}},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":true}}'
             REALITY_PORT="$r_port"; REALITY_SNI="$r_sni"; ENABLE_REALITY=1 ;;
     esac
     jq --argjson i "$new_inbound" '.inbounds+=[$i]' "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
@@ -918,7 +1030,7 @@ add_single_protocol() {
     local ip; ip=$(get_ip)
     case "$proto" in
         ss) [ -n "$ip" ] && echo -e "  ${green}$(gen_ss_link "$sm" "$sp" "$ip" "$s_port" "${NODE_NAME}-SS")${re}" ;;
-        reality) [ -n "$ip" ] && echo -e "  ${green}$(gen_reality_link "$uuid" "$ip" "$r_port" "$r_sni" "$REALITY_PUB" "$REALITY_SHORTID")${re}" ;; 
+        reality) [ -n "$ip" ] && echo -e "  ${green}$(gen_reality_link "$uuid" "$ip" "$r_port" "$r_sni" "$REALITY_PUB" "$REALITY_SHORTID")${re}" ;;
     esac
     echo ""; read -p "  按回车返回..." -r
 }
