@@ -115,9 +115,9 @@ get_ip() {
     [ -z "$ip" ] && ip=$(curl -s --max-time 2 ifconfig.me 2>/dev/null); echo "$ip"
 }
 gen_reality_keys() {
-    local out; out=$("${WORK_DIR}/xray" x25519 2>/dev/null)
-    REALITY_PRIV=$(echo "$out" | grep "Private" | awk '{print $3}')
-    REALITY_PUB=$(echo "$out" | grep "Public"  | awk '{print $3}')
+    local keys; keys=($("${WORK_DIR}/xray" x25519 2>/dev/null | sed 's/.*://'))
+    REALITY_PRIV="${keys[0]}"
+    REALITY_PUB="${keys[1]}"
     [ -z "$REALITY_PRIV" ] && { REALITY_PRIV="REPLACE_ME"; REALITY_PUB="REPLACE_ME"; }
 }
 gen_ss2022_pass() {
@@ -335,7 +335,7 @@ change_config() {
             5) echo ""; for i in "${!REALITY_SNIS[@]}"; do echo -e "  ${green}$((i+1))${re}. ${REALITY_SNIS[$i]}"; done; echo ""
                read -p "  选择 [默认 www.amazon.com]: " rs; [ -n "$rs" ] && REALITY_SNI="${REALITY_SNIS[$((rs-1))]:-$REALITY_SNI}"
                save_conf; green_msg "Reality SNI: ${REALITY_SNI}" ;;
-            6) select_protocols; do_install; break ;;
+            6) do_install; break ;;
             7) show_node ;; 8) restart_services ;; 0) return ;; *) red_msg "无效" ;;
         esac; read -p "  按回车继续..." -r
     done
@@ -478,17 +478,6 @@ interactive_install() {
 
     echo -e " ${white}━━━ ⑥ 内部端口 ━━━${re}"; echo -e "  ${cyan}Argo:${ARGO_PORT}  VLESS:${VLESS_WS_PORT}  VMess:${VMESS_WS_PORT}${re}"
     read -p "  起始端口 [回车跳过]: " bp; [ -n "$bp" ] && { ARGO_PORT="$bp"; VLESS_WS_PORT=$((bp+1)); VMESS_WS_PORT=$((bp+2)); }; echo ""
-
-    echo -e " ${white}━━━ ⑦ 额外协议 ━━━${re}"; select_protocols
-
-    echo ""; echo -e " ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
-    echo -e " ${white}确认：${re}  名称: ${green}${NODE_NAME}${re}  CDN: ${green}${CDN_DOMAIN}:${CDN_PORT}${re}"
-    echo -e "  UUID: ${cyan}$([ -n "$UUID_CUSTOM" ] && echo "$UUID_CUSTOM" || echo "自动")${re}"
-    echo -e "  隧道: ${cyan}$([ "$ARGO_MODE" = "fixed-token" ] && echo "固定 ${ARGO_FIXED_DOMAIN}" || echo "临时")${re}"
-    echo -e "  协议: ${cyan}VLESS-Argo VMess-Argo$( [ "$ENABLE_REALITY" = 1 ] && echo " Reality" )$( [ "$ENABLE_SS" = 1 ] && echo " SS" )${re}"
-    echo -e " ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
-    echo ""; echo -ne "  ${yellow}确认安装? (y/n) [y]: ${re}"; read cf
-    [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "已取消。"; return; }
     save_conf; do_install
 }
 
