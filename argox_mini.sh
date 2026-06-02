@@ -926,7 +926,7 @@ delete_protocol() {
 }
 
 #==============================================================================
-# WARP 域名分流模块（基于 fscarmen/warp + Python3 JSON 安全改写）
+# WARP SOCKS/IPv6 域名分流模块（基于 fscarmen/warp + Python3 JSON 安全改写）
 #==============================================================================
 WARP_DOMAIN_FILE="/etc/xray/warp_domains.txt"
 WARP_DEFAULT_DOMAINS="google.com googleapis.com googleusercontent.com gstatic.com youtube.com ytimg.com googlevideo.com ggpht.com google-analytics.com googleadservices.com"
@@ -1246,21 +1246,24 @@ warp_google_ipv6_mixed() {
     echo ""
 
     local need_w=0 need_6=0
-    ss -ntlp 2>/dev/null | grep -q ':40000 ' || need_w=1
-    ip -6 addr show 2>/dev/null | grep -q 'wgcf\|Warp' || need_6=1
-    [ "$need_w" = 0 ] && [ "$need_6" = 0 ] && green_msg "WARP 双模式均已就绪" || {
-        yellow_msg "正在安装缺失的 WARP 组件..."
+    ss -ntlp 2>/dev/null | grep -q ':40000 ' && echo -e "  ${green}WARP Socks5 已就绪 (127.0.0.1:40000)${re}" || { need_w=1; echo -e "  ${yellow}WARP Socks5 未安装${re}"; }
+    ip -6 addr show 2>/dev/null | grep -q 'wgcf\|Warp' && echo -e "  ${green}WARP IPv6 已就绪${re}" || { need_6=1; echo -e "  ${yellow}WARP IPv6 未安装${re}"; }
+    echo ""
+    if [ "$need_w" = 0 ] && [ "$need_6" = 0 ]; then
+        green_msg "WARP 双模式均已就绪，跳过安装。"
+    else
+        green_msg "正在安装缺失的 WARP 组件..."
         wget -N -q --no-check-certificate https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh -O /tmp/warp_menu.sh 2>/dev/null
         if [ -f /tmp/warp_menu.sh ]; then
             chmod +x /tmp/warp_menu.sh
-            [ "$need_w" = 1 ] && { echo -e "  ${cyan}安装 WARP Socks5 模式 (40000 端口)...${re}"; bash /tmp/warp_menu.sh w; }
+            [ "$need_w" = 1 ] && { echo -e "  ${cyan}安装 WARP Socks5 模式...${re}"; bash /tmp/warp_menu.sh w; }
             [ "$need_6" = 1 ] && { echo -e "  ${cyan}安装 WARP IPv6 WireGuard 模式...${re}"; bash /tmp/warp_menu.sh 6; }
             rm -f /tmp/warp_menu.sh
-            green_msg "WARP 双模式安装完成"
+            green_msg "安装完成"
         else
             red_msg "下载 fscarmen/warp 脚本失败。"; echo ""; read -p "  按回车返回..." -r; return
         fi
-    }
+    fi
 
     # --- 2. Python3 安全检查 ---
     if ! command -v python3 &>/dev/null; then
@@ -1372,7 +1375,7 @@ main_menu() {
         echo -e " ${purple}───────────────── 系统维护 ─────────────────${re}"
         echo -e "  ${yellow}7${re}. 重新安装 (保留配置)    ${cyan}8${re}. 更新    ${red}9${re}. 卸载"
         echo ""
-        echo -e "  ${cyan}0${re}. 退出   ${purple}w${re}. WARP 域名分流"
+        echo -e "  ${cyan}0${re}. 退出   ${purple}w${re}. WARP SOCKS域名分流"
         echo -e " ${purple}────────────────────────────────────────────${re}"
         read -p "  请输入 (0-9 / a / w): " c
         case "$c" in
