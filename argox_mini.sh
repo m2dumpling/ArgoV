@@ -586,47 +586,55 @@ manage_protocols() {
         echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
         echo ""
 
-        [ "$has_reality" = 1 ] || [ "$has_ss" = 1 ] && echo -e "  ${white}── 已安装 · 可编辑 ──${re}" && echo ""
-        local er=0 es=0
-        if [ "$has_reality" = 1 ]; then er=1
+        # Argo 隧道节点（始终存在）
+        local vl_port vm_port ar_port
+        vl_port=$(jq -r '.inbounds[]|select(.tag=="vless-ws")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
+        vm_port=$(jq -r '.inbounds[]|select(.tag=="vmess-ws")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
+        ar_port=$(jq -r '.inbounds[]|select(.tag=="argo-in")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
+        echo -e "  ${white}── Argo 隧道 ──${re}"
+        echo ""
+        echo -e "  ${green}e1${re}. VLESS + Argo    端口 ${cyan}${vl_port}${re}  路径 ${cyan}/vless-argo${re}"
+        echo -e "  ${green}e2${re}. VMess + Argo    端口 ${cyan}${vm_port}${re}  路径 ${cyan}/vmess-argo${re}"
+        echo ""
+
+        # 可选协议
+        [ "$has_reality" = 1 ] || [ "$has_ss" = 1 ] && echo -e "  ${white}── 可选协议 · 可编辑 ──${re}" && echo ""
+        local er=1 es=1  # e1/e2 are taken by Argo, start at e3
+        if [ "$has_reality" = 1 ]; then
             local rp rs; rp=$(jq -r '.inbounds[]|select(.tag=="reality")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
             rs=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames[0]//empty' "$CONFIG_FILE" 2>/dev/null)
-            echo -e "  ${green}e${er}${re}. VLESS Reality    ${cyan}${rs}${re}  端口 ${cyan}${rp}${re}"
+            echo -e "  ${green}e3${re}. VLESS Reality    ${cyan}${rs}${re}  端口 ${cyan}${rp}${re}"
         fi
-        if [ "$has_ss" = 1 ]; then es=1
+        if [ "$has_ss" = 1 ]; then
             local sp sm; sp=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
             sm=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.settings.method//empty' "$CONFIG_FILE" 2>/dev/null)
-            echo -e "  ${green}e${es}${re}. Shadowsocks       ${cyan}${sm}${re}  端口 ${cyan}${sp}${re}"
+            local en; [ "$has_reality" = 1 ] && en="e4" || en="e3"
+            echo -e "  ${green}${en}${re}. Shadowsocks       ${cyan}${sm}${re}  端口 ${cyan}${sp}${re}"
         fi
 
+        # 可添加
         [ "$has_reality" = 0 ] || [ "$has_ss" = 0 ] && echo "" && echo -e "  ${white}── 可添加 ──${re}" && echo ""
         local aa=0
         if [ "$has_reality" = 0 ]; then aa=$((aa+1)); echo -e "  ${cyan}a${aa}${re}. VLESS Reality"; fi
         if [ "$has_ss" = 0 ]; then aa=$((aa+1)); echo -e "  ${cyan}a${aa}${re}. Shadowsocks"; fi
 
-        [ "$has_reality" = 1 ] || [ "$has_ss" = 1 ] && echo "" && echo -e "  ${red}d${re}. 删除节点"
+        [ "$has_reality" = 1 ] || [ "$has_ss" = 1 ] && echo "" && echo -e "  ${red}d${re}. 删除可选节点"
         echo ""; echo -e "  ${red}0${re}. 返回"
         echo -e " ${purple}────────────────────────────────────────${re}"
         read -p "  请输入: " ac; [ "$ac" = "0" ] && return
 
-        # 编辑
-        if [ "$ac" = "e1" ]; then
-            [ "$has_reality" = 1 ] && { edit_protocol "reality" "VLESS Reality"; }
-            [ "$has_reality" = 0 ] && [ "$has_ss" = 1 ] && { edit_protocol "ss" "Shadowsocks"; }
-        fi
-
-        # 添加
-        local add_proto=""
-        if [ "$ac" = "a1" ]; then
-            [ "$has_reality" = 0 ] && add_proto="reality"
-            [ "$has_reality" = 1 ] && [ "$has_ss" = 0 ] && add_proto="ss"
-        elif [ "$ac" = "a2" ]; then
-            add_proto="ss"
-        fi
-        [ -n "$add_proto" ] && { add_single_protocol "$add_proto"; }
-
-        # 删除
-        [ "$ac" = "d" ] || [ "$ac" = "D" ] && delete_protocol
+        case "$ac" in
+            e1) edit_protocol "vless-ws" "VLESS + Argo" ;;
+            e2) edit_protocol "vmess-ws" "VMess + Argo" ;;
+            e3) if [ "$has_reality" = 1 ]; then edit_protocol "reality" "VLESS Reality"
+                elif [ "$has_ss" = 1 ]; then edit_protocol "ss" "Shadowsocks"; fi ;;
+            e4) [ "$has_ss" = 1 ] && [ "$has_reality" = 1 ] && edit_protocol "ss" "Shadowsocks" ;;
+            a1) if [ "$has_reality" = 0 ]; then add_single_protocol "reality"
+                elif [ "$has_ss" = 0 ]; then add_single_protocol "ss"; fi ;;
+            a2) [ "$has_ss" = 0 ] && [ "$has_reality" = 1 ] && add_single_protocol "ss" ;;
+            d|D) delete_protocol ;;
+            *) red_msg "无效"; sleep 1; continue ;;
+        esac
 
         load_conf
         has_reality=0; has_ss=0
@@ -637,9 +645,48 @@ manage_protocols() {
 
 edit_protocol() {
     local tag="$1" label="$2" uuid; uuid=$(get_uuid)
-    local cur_port cur_method cur_pass cur_sni rk=""
+    local cur_port cur_method cur_pass cur_sni cur_path rk=""
 
     case "$tag" in
+        vless-ws|vmess-ws)
+            cur_port=$(jq -r '.inbounds[]|select(.tag=="'"${tag}"'")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
+            cur_path=$(jq -r '.inbounds[]|select(.tag=="'"${tag}"'")|.streamSettings.wsSettings.path//empty' "$CONFIG_FILE" 2>/dev/null)
+            clear
+            echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
+            echo -e " ${purple}║${re}     ${white}编辑 ${label}${re}"
+            echo -e " ${purple}╚══════════════════════════════════════════╝${re}"; echo ""
+
+            echo -e " ${white}━━━ ① 内部端口 ━━━${re}"
+            echo -e "  ${yellow}仅 127.0.0.1，通过 Argo 隧道。当前: ${cyan}${cur_port}${re}"
+            read -p "  新端口 [回车保持]: " np; local new_port="${np:-$cur_port}"
+            echo -e "  → ${green}${new_port}${re}\n"
+
+            echo -e " ${white}━━━ ② WS 路径 ━━━${re}"
+            echo -e "  ${yellow}当前: ${cyan}${cur_path}${re}"
+            read -p "  新路径 [回车保持]: " npt; local new_path="${npt:-$cur_path}"
+            echo -e "  → ${green}${new_path}${re}\n"
+
+            echo -e " ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
+            echo -e " ${white}确认：${re}  端口: ${cyan}${cur_port}${re} → ${green}${new_port}${re}"
+            echo -e "  路径: ${cyan}${cur_path}${re} → ${green}${new_path}${re}"
+            echo -e " ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"; echo ""
+            echo -ne "  ${yellow}确认? (y/n) [y]: ${re}"; read cf
+            [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "已取消。"; return; }
+
+            jq --argjson pt "$new_port" --arg p "$new_path" \
+               '(.inbounds[]|select(.tag=="'"${tag}"'")|.port)=$pt|(.inbounds[]|select(.tag=="'"${tag}"'")|.streamSettings.wsSettings.path)=$p' \
+               "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+            # 同步更新 fallback 路由中的 dest 和 path
+            local fb_path_old fb_path_new fb_tag
+            [ "$tag" = "vless-ws" ] && fb_tag="vless-argo" || fb_tag="vmess-argo"
+            fb_path_old="/${fb_tag}"; fb_path_new="$new_path"
+            jq --arg oldp "$fb_path_old" --arg newp "$fb_path_new" --argjson d "$new_port" \
+               '(.inbounds[]|select(.tag=="argo-in")|.settings.fallbacks)|=map(if .path==$oldp then {path:$newp,dest:$d} else . end)' \
+               "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+            [ "$tag" = "vless-ws" ] && VLESS_WS_PORT="$new_port" || VMESS_WS_PORT="$new_port"
+            save_conf; yellow_msg "重启 Xray..."; systemctl restart xray 2>/dev/null; sleep 2; get_status; green_msg "完成"
+            echo ""; read -p "  按回车继续..." -r
+            return ;;
         reality)
             cur_port=$(jq -r '.inbounds[]|select(.tag=="reality")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
             cur_sni=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames[0]//empty' "$CONFIG_FILE" 2>/dev/null)
