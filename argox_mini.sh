@@ -1241,34 +1241,12 @@ warp_switch_mode() {
     echo ""
 
     echo -e "  ${green}1${re}. SOCKS5 模式 — 全部域名走 WARP Socks5 (127.0.0.1:40000)"
-    echo -e "  ${green}2${re}. IPv6 模式 — 全部域名走 IPv6 直连 (免验证码)"
+    echo -e "  ${green}2${re}. IPv6 模式 — 全部域名走 IPv6 直连"
+    echo -e "  ${purple}3${re}. 智能分流 — Google 走 IPv6 + YouTube 走 SOCKS5 (推荐)"
     echo -e "  ${red}0${re}. 返回"
     echo ""
     echo -e " ${purple}────────────────────────────────────────${re}"
     read -p "  请选择: " mc; [ "$mc" = "0" ] && return
-
-    local mode outbound_tag outbound_json mode_label
-    case "${mc:-1}" in
-        1) mode="socks5"; outbound_tag="warp-out"
-           outbound_json='{"tag":"warp-out","protocol":"socks","settings":{"servers":[{"address":"127.0.0.1","port":40000}]}}'
-           mode_label="SOCKS5 (127.0.0.1:40000)"
-           # 安装 Socks5 模式
-           if ! ss -ntlp 2>/dev/null | grep -q ':40000 '; then
-               yellow_msg "安装 WARP Socks5 模式..."
-               wget -N -q --no-check-certificate https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh -O /tmp/warp_menu.sh 2>/dev/null
-               [ -f /tmp/warp_menu.sh ] && { chmod +x /tmp/warp_menu.sh; bash /tmp/warp_menu.sh w; rm -f /tmp/warp_menu.sh; }
-           else green_msg "WARP Socks5 已就绪"; fi ;;
-        2) mode="ipv6"; outbound_tag="v6-direct"
-           outbound_json='{"tag":"v6-direct","protocol":"freedom","settings":{"domainStrategy":"UseIPv6"}}'
-           mode_label="IPv6 直连"
-           # 安装 IPv6 模式
-           if ! ip -6 addr show 2>/dev/null | grep -q 'wgcf\|Warp'; then
-               yellow_msg "安装 WARP IPv6 WireGuard 模式..."
-               wget -N -q --no-check-certificate https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh -O /tmp/warp_menu.sh 2>/dev/null
-               [ -f /tmp/warp_menu.sh ] && { chmod +x /tmp/warp_menu.sh; bash /tmp/warp_menu.sh 6; rm -f /tmp/warp_menu.sh; }
-           else green_msg "WARP IPv6 已就绪"; fi ;;
-        *) red_msg "无效"; return ;;
-    esac
 
     # 检查 Python3
     if ! command -v python3 &>/dev/null; then
@@ -1276,14 +1254,58 @@ warp_switch_mode() {
         echo ""; read -p "  按回车返回..." -r; return
     fi
 
-    # 读取域名列表
+    # 确保有域名列表
     [ ! -f "$WARP_DOMAIN_FILE" ] || [ ! -s "$WARP_DOMAIN_FILE" ] && { warp_add_defaults; }
-    local domains_list; domains_list=$(sed 's/^/"/;s/$/"/' "$WARP_DOMAIN_FILE" | tr '\n' ',' | sed 's/,$//')
-    [ -z "$domains_list" ] && { yellow_msg "域名列表为空。"; return; }
 
-    # 备份 & Python3 改写
+    # 备份
     cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
-    yellow_msg "切换为 ${mode_label} 模式..."
+
+    case "${mc:-1}" in
+        1|2|3)
+            # 安装所需 WARP 组件
+            if [ "$mc" = "1" ] || [ "$mc" = "3" ]; then
+                if ! ss -ntlp 2>/dev/null | grep -q ':40000 '; then
+                    yellow_msg "安装 WARP SOCKS5 模式..."
+                    wget -N -q --no-check-certificate https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh -O /tmp/warp_menu.sh 2>/dev/null
+                    [ -f /tmp/warp_menu.sh ] && { chmod +x /tmp/warp_menu.sh; bash /tmp/warp_menu.sh w; rm -f /tmp/warp_menu.sh; }
+                else green_msg "WARP SOCKS5 已就绪"; fi
+            fi
+            if [ "$mc" = "2" ] || [ "$mc" = "3" ]; then
+                if ! ip -6 addr show 2>/dev/null | grep -q 'wgcf\|Warp'; then
+                    yellow_msg "安装 WARP IPv6 模式..."
+                    wget -N -q --no-check-certificate https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh -O /tmp/warp_menu.sh 2>/dev/null
+                    [ -f /tmp/warp_menu.sh ] && { chmod +x /tmp/warp_menu.sh; bash /tmp/warp_menu.sh 6; rm -f /tmp/warp_menu.sh; }
+                else green_msg "WARP IPv6 已就绪"; fi
+            fi
+            ;;&
+        1) warp_py_apply "socks5" ;;
+        2) warp_py_apply "ipv6" ;;
+        3) warp_py_apply "smart" ;;
+        *) red_msg "无效"; return ;;
+    esac
+
+    echo ""; read -p "  按回车返回..." -r
+}
+
+# === Python3 分流写入（统一入口）===
+warp_py_apply() {
+    local mode="$1"
+
+    # 构建域名列表
+    local all_domains; all_domains=$(sed 's/^/"/;s/$/"/' "$WARP_DOMAIN_FILE" | tr '\n' ',' | sed 's/,$//')
+    # 智能分流：分离 Google 和 YouTube
+    local google_list yt_domains yt_list
+    google_list='"google.com","googleapis.com","googleusercontent.com","gstatic.com","ggpht.com","google-analytics.com","googletagmanager.com","googleadservices.com","googlesyndication.com","google.com.hk","google.cn"'
+    yt_domains="youtube.com ytimg.com googlevideo.com"
+    yt_list=$(for d in $yt_domains; do echo "\"$d\""; done | tr '\n' ',' | sed 's/,$//')
+
+    local label
+    case "$mode" in
+        socks5) label="SOCKS5 (全部域名 → warp-out)" ;;
+        ipv6)   label="IPv6 (全部域名 → v6-direct)" ;;
+        smart)  label="智能分流 (Google→IPv6, YouTube→SOCKS5)" ;;
+    esac
+    yellow_msg "应用: ${label}..."
 
     python3 << PYEOF
 import json
@@ -1291,37 +1313,51 @@ import json
 with open('${CONFIG_FILE}', 'r') as f:
     config = json.load(f)
 
-# 清理旧 WARP/IPv6 出站
+# 清理旧出站和规则
 config['outbounds'] = [o for o in config['outbounds'] if o.get('tag') not in ('warp-out', 'v6-direct')]
 config.setdefault('routing', {}).setdefault('rules', [])
 config['routing']['rules'] = [r for r in config['routing']['rules']
                               if r.get('outboundTag') not in ('warp-out', 'v6-direct')]
 
-# 注入选中的出站
-config['outbounds'].append(${outbound_json})
+mode = '${mode}'
 
-# 所有分流域名 → 选中的出站（最高优先级）
-config['routing']['rules'].insert(0, {
-    "type": "field",
-    "outboundTag": "${outbound_tag}",
-    "domain": [${domains_list}]
-})
+if mode == 'socks5':
+    # SOCKS5 — 全部走 warp-out
+    config['outbounds'].append({"tag":"warp-out","protocol":"socks","settings":{"servers":[{"address":"127.0.0.1","port":40000}]}})
+    config['routing']['rules'].insert(0, {"type":"field","outboundTag":"warp-out","domain":[${all_domains}]})
+
+elif mode == 'ipv6':
+    # IPv6 — 全部走 v6-direct
+    config['outbounds'].append({"tag":"v6-direct","protocol":"freedom","settings":{"domainStrategy":"UseIPv6"}})
+    config['routing']['rules'].insert(0, {"type":"field","outboundTag":"v6-direct","domain":[${all_domains}]})
+
+elif mode == 'smart':
+    # 智能分流：Google → IPv6, YouTube → SOCKS5
+    config['outbounds'].append({"tag":"v6-direct","protocol":"freedom","settings":{"domainStrategy":"UseIPv6"}})
+    config['outbounds'].append({"tag":"warp-out","protocol":"socks","settings":{"servers":[{"address":"127.0.0.1","port":40000}]}})
+    # Google → v6-direct (最高优先级)
+    config['routing']['rules'].insert(0, {"type":"field","outboundTag":"v6-direct","domain":[${google_list}]})
+    # YouTube → warp-out
+    config['routing']['rules'].insert(1, {"type":"field","outboundTag":"warp-out","domain":[${yt_list}]})
 
 with open('${CONFIG_FILE}', 'w') as f:
     json.dump(config, f, indent=2, ensure_ascii=False)
-print('SWITCH_OK')
+print('APPLY_OK')
 PYEOF
 
     if [ $? -eq 0 ]; then
-        green_msg "已切换至 ${mode_label} 模式！重启 Xray..."
+        green_msg "应用成功！重启 Xray..."
         svc restart xray; sleep 2; get_status
         echo ""
-        echo -e "  ${white}所有分流域名${re} → ${green}${mode_label}${re}"
-        echo -e "  ${yellow}💡 选项 1/2 随时可切换，无需重装${re}"
+        case "$mode" in
+            socks5) echo -e "  ${cyan}全部域名${re} → ${green}WARP SOCKS5${re}" ;;
+            ipv6)   echo -e "  ${cyan}全部域名${re} → ${green}WARP IPv6 直连${re}" ;;
+            smart)  echo -e "  ${cyan}Google${re}  → ${green}IPv6 直连${re} (免验证码)"
+                    echo -e "  ${cyan}YouTube${re} → ${purple}WARP SOCKS5${re} (防弹窗)" ;;
+        esac
     else
-        red_msg "切换失败！已保留备份 ${CONFIG_FILE}.bak"
+        red_msg "应用失败！已保留备份 ${CONFIG_FILE}.bak"
     fi
-    echo ""; read -p "  按回车返回..." -r
 }
 
 #==============================================================================
