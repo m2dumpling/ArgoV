@@ -926,6 +926,305 @@ delete_protocol() {
 }
 
 #==============================================================================
+# WARP 域名分流模块（基于 fscarmen/warp + Python3 JSON 安全改写）
+#==============================================================================
+WARP_DOMAIN_FILE="/etc/xray/warp_domains.txt"
+WARP_DEFAULT_DOMAINS="google.com googleapis.com googleusercontent.com gstatic.com youtube.com ytimg.com googlevideo.com ggpht.com google-analytics.com googleadservices.com"
+
+# === WARP 主入口 ===
+warp_menu() {
+    load_conf
+    while true; do
+        clear
+        echo ""
+        echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
+        echo -e " ${purple}║${re}     ${white}WARP 域名分流配置${re}                       ${purple}║${re}"
+        echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
+        echo ""
+
+        # 检测 WARP 是否在运行
+        local warp_ok=0
+        ss -ntlp 2>/dev/null | grep -q ':40000 ' && warp_ok=1
+
+        if [ "$warp_ok" = 0 ]; then
+            echo -e "  ${red}本地未检测到 WARP Socks5 服务 (端口 40000)${re}"
+            echo ""
+            echo -e "  ${yellow}fscarmen/warp 安装后将占用本地 40000 端口作为 Socks5 代理，${re}"
+            echo -e "  ${yellow}Xray 通过此端口将指定域名的流量分流至 Cloudflare WARP 网络。${re}"
+            echo ""
+            echo -ne "  ${yellow}是否一键安装 fscarmen WARP？[Y/n]: ${re}"
+            read cf
+            [ "$cf" = "n" ] || [ "$cf" = "N" ] && return
+            warp_install
+            continue
+        fi
+
+        # WARP 就绪，显示分流子菜单
+        echo -e "  ${green}WARP Socks5 已就绪${re} (127.0.0.1:40000)"
+        echo ""
+        if [ -f "$WARP_DOMAIN_FILE" ] && [ -s "$WARP_DOMAIN_FILE" ]; then
+            local count; count=$(wc -l < "$WARP_DOMAIN_FILE")
+            echo -e "  ${cyan}当前分流域名: ${count} 个${re}"
+            echo -e "  ${cyan}$(tr '\n' ' ' < "$WARP_DOMAIN_FILE" | head -c 60)...${re}"
+        else
+            echo -e "  ${yellow}当前无分流域名${re}"
+        fi
+        echo ""
+        echo -e "  ${green}1${re}. 一键注入 Google/YouTube 默认域名组"
+        echo -e "  ${green}2${re}. 手动添加自定义域名 (逗号分隔)"
+        echo -e "  ${green}3${re}. 删除指定域名"
+        echo -e "  ${green}4${re}. 查看/清空分流域名列表"
+        echo -e "  ${green}5${re}. 应用配置并重启 Xray (使规则生效)"
+        echo -e "  ${red}0${re}. 返回主菜单"
+        echo ""
+        echo -e " ${purple}────────────────────────────────────────${re}"
+        read -p "  请选择: " wc
+
+        case "$wc" in
+            1) warp_add_defaults ;;
+            2) warp_add_custom ;;
+            3) warp_remove_domain ;;
+            4) warp_view_clear ;;
+            5) warp_apply_routing ;;
+            0) return ;;
+            *) red_msg "无效"; sleep 1 ;;
+        esac
+    done
+}
+
+# === 安装 fscarmen WARP ===
+warp_install() {
+    clear
+    echo ""
+    echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
+    echo -e " ${purple}║${re}     ${white}安装 fscarmen WARP (Socks5 模式)${re}       ${purple}║${re}"
+    echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
+    echo ""
+    yellow_msg "正在拉取并运行 fscarmen/warp 官方安装脚本..."
+    echo ""
+    # 下载并运行 warp 菜单脚本，选择模式 w (WireProxy/Socks5)
+    wget -N -q --no-check-certificate https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh -O /tmp/warp_menu.sh 2>/dev/null
+    if [ -f /tmp/warp_menu.sh ]; then
+        chmod +x /tmp/warp_menu.sh
+        # 模式 w = WireProxy/Socks5 模式，默认端口 40000
+        bash /tmp/warp_menu.sh w
+        rm -f /tmp/warp_menu.sh
+    else
+        red_msg "下载失败，请检查网络连接。"
+        echo ""; read -p "  按回车返回..." -r; return
+    fi
+
+    # 验证安装
+    sleep 3
+    if ss -ntlp 2>/dev/null | grep -q ':40000 '; then
+        green_msg "WARP Socks5 安装成功！(127.0.0.1:40000)"
+    else
+        yellow_msg "安装完成，但未检测到 40000 端口。请手动检查 warp 服务状态。"
+    fi
+    echo ""; read -p "  按回车继续..." -r
+}
+
+# === 注入默认 Google/YouTube 域名组 ===
+warp_add_defaults() {
+    touch "$WARP_DOMAIN_FILE"
+    local added=0
+    for d in $WARP_DEFAULT_DOMAINS; do
+        if ! grep -qxF "$d" "$WARP_DOMAIN_FILE"; then
+            echo "$d" >> "$WARP_DOMAIN_FILE"
+            added=$((added+1))
+        fi
+    done
+    green_msg "已注入 ${added} 个默认域名 (Google/YouTube 系列)"
+    echo ""; read -p "  按回车继续..." -r
+}
+
+# === 手动添加自定义域名 ===
+warp_add_custom() {
+    echo ""
+    echo -e "  ${yellow}请输入要分流的域名，多个用逗号或空格分隔:${re}"
+    echo -e "  ${cyan}示例: twitter.com, instagram.com, openai.com${re}"
+    echo ""
+    read -p "  > " input
+    [ -z "$input" ] && { yellow_msg "已取消。"; sleep 1; return; }
+
+    # 分割逗号或空格
+    local added=0
+    touch "$WARP_DOMAIN_FILE"
+    IFS=', ' read -ra DOMAINS <<< "$input"
+    for d in "${DOMAINS[@]}"; do
+        d=$(echo "$d" | xargs)  # 去前后空格
+        [ -z "$d" ] && continue
+        if ! grep -qxF "$d" "$WARP_DOMAIN_FILE"; then
+            echo "$d" >> "$WARP_DOMAIN_FILE"
+            echo -e "  ${green}  + ${d}${re}"
+            added=$((added+1))
+        else
+            echo -e "  ${yellow}  = ${d} (已存在)${re}"
+        fi
+    done
+    green_msg "共添加 ${added} 个域名"
+    echo ""; read -p "  按回车继续..." -r
+}
+
+# === 删除指定域名 ===
+warp_remove_domain() {
+    [ ! -f "$WARP_DOMAIN_FILE" ] || [ ! -s "$WARP_DOMAIN_FILE" ] && { yellow_msg "分流域名列表为空。"; echo ""; read -p "  按回车返回..." -r; return; }
+
+    echo ""
+    echo -e "  ${white}当前分流域名:${re}"
+    nl -w2 -s'. ' "$WARP_DOMAIN_FILE"
+    echo ""
+    echo -e "  ${yellow}输入要删除的序号 (多个用逗号分隔)，或输入域名本身:${re}"
+    read -p "  > " input
+    [ -z "$input" ] && { yellow_msg "已取消。"; sleep 1; return; }
+
+    # 读取域名到数组
+    mapfile -t lines < "$WARP_DOMAIN_FILE" 2>/dev/null || { IFS=$'\n' read -d '' -ra lines < "$WARP_DOMAIN_FILE"; }
+    local to_remove=()
+
+    # 解析输入：数字序号或域名文本
+    IFS=',' read -ra parts <<< "$input"
+    for part in "${parts[@]}"; do
+        part=$(echo "$part" | xargs)
+        if [[ "$part" =~ ^[0-9]+$ ]]; then
+            # 数字序号
+            local idx=$((part-1))
+            [ "$idx" -ge 0 ] 2>/dev/null && [ "$idx" -lt "${#lines[@]}" ] && to_remove+=("${lines[$idx]}")
+        else
+            # 域名文本
+            to_remove+=("$part")
+        fi
+    done
+
+    # 重建文件
+    local removed=0
+    > "$WARP_DOMAIN_FILE"
+    for line in "${lines[@]}"; do
+        local keep=1
+        for rm_d in "${to_remove[@]}"; do
+            [ "$line" = "$rm_d" ] && { keep=0; echo -e "  ${red}  - ${line}${re}"; removed=$((removed+1)); break; }
+        done
+        [ "$keep" = 1 ] && echo "$line" >> "$WARP_DOMAIN_FILE"
+    done
+    green_msg "已删除 ${removed} 个域名"
+    echo ""; read -p "  按回车继续..." -r
+}
+
+# === 查看/清空列表 ===
+warp_view_clear() {
+    while true; do
+        clear
+        echo ""
+        echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
+        echo -e " ${purple}║${re}       ${white}WARP 分流域名列表${re}                     ${purple}║${re}"
+        echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
+        echo ""
+        if [ -f "$WARP_DOMAIN_FILE" ] && [ -s "$WARP_DOMAIN_FILE" ]; then
+            nl -w2 -s'. ' "$WARP_DOMAIN_FILE"
+            echo ""
+            echo -e "  ${green}共 $(wc -l < "$WARP_DOMAIN_FILE") 个域名${re}"
+        else
+            echo -e "  ${yellow}列表为空${re}"
+        fi
+        echo ""
+        echo -e "  ${red}c${re}. 清空全部    ${cyan}0${re}. 返回"
+        echo -e " ${purple}────────────────────────────────────────${re}"
+        read -p "  请选择: " vc
+        case "$vc" in
+            c|C) echo ""; echo -ne "  ${red}确认清空? (y/n): ${re}"; read cf
+                 [ "$cf" = "y" ] || [ "$cf" = "Y" ] && { > "$WARP_DOMAIN_FILE"; green_msg "已清空。"; } ;;
+            0) return ;;
+            *) red_msg "无效"; sleep 1; continue ;;
+        esac
+        read -p "  按回车返回..." -r
+    done
+}
+
+# === 核心：使用 Python3 安全改写 config.json，应用 WARP 分流 ===
+warp_apply_routing() {
+    [ ! -f "$WARP_DOMAIN_FILE" ] || [ ! -s "$WARP_DOMAIN_FILE" ] && { yellow_msg "分流域名列表为空，请先添加域名。"; echo ""; read -p "  按回车返回..." -r; return; }
+
+    clear
+    echo ""
+    echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
+    echo -e " ${purple}║${re}     ${white}应用 WARP 分流规则${re}                     ${purple}║${re}"
+    echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
+    echo ""
+
+    # 检查 Python3 可用性
+    if ! command -v python3 &>/dev/null; then
+        red_msg "未检测到 Python3，请先安装: apt install python3"
+        echo ""; read -p "  按回车返回..." -r; return
+    fi
+
+    # 读取域名列表
+    local domains_list; domains_list=$(sed 's/^/"/;s/$/"/' "$WARP_DOMAIN_FILE" | tr '\n' ',' | sed 's/,$//')
+    [ -z "$domains_list" ] && { yellow_msg "域名列表解析失败。"; return; }
+
+    # 备份 config.json
+    cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
+    green_msg "已备份: ${CONFIG_FILE}.bak"
+
+    # 使用 Python3 安全改写 JSON
+    yellow_msg "正在注入 WARP 出站与路由规则..."
+    python3 << PYEOF
+import json, sys
+
+CONFIG = '${CONFIG_FILE}'
+DOMAINS = [${domains_list}]
+
+# 读取配置
+with open(CONFIG, 'r') as f:
+    config = json.load(f)
+
+# 1. 清理已有 warp-out 出站，重新注入
+config['outbounds'] = [o for o in config['outbounds'] if o.get('tag') != 'warp-out']
+warp_out = {
+    "tag": "warp-out",
+    "protocol": "socks",
+    "settings": {"servers": [{"address": "127.0.0.1", "port": 40000}]}
+}
+config['outbounds'].append(warp_out)
+
+# 2. 确保 routing 存在
+if 'routing' not in config:
+    config['routing'] = {'rules': []}
+if 'rules' not in config['routing']:
+    config['routing']['rules'] = []
+
+# 3. 移除已有 WARP 分流规则
+config['routing']['rules'] = [r for r in config['routing']['rules'] if r.get('outboundTag') != 'warp-out']
+
+# 4. 构造新分流规则并插入最顶部（最高优先级）
+warp_rule = {
+    "type": "field",
+    "outboundTag": "warp-out",
+    "domain": DOMAINS
+}
+config['routing']['rules'].insert(0, warp_rule)
+
+# 5. 格式化写回
+with open(CONFIG, 'w') as f:
+    json.dump(config, f, indent=2, ensure_ascii=False)
+
+print('CONFIG_OK')
+PYEOF
+
+    if [ $? -eq 0 ]; then
+        green_msg "规则注入成功！正在重启 Xray..."
+        svc restart xray; sleep 2
+        get_status
+        echo ""
+        echo -e "  ${green}WARP 分流已生效${re}"
+        echo -e "  ${cyan}以下域名将走 Cloudflare WARP 网络:${re}"
+        echo -e "  ${white}$(tr '\n' ' ' < "$WARP_DOMAIN_FILE")${re}"
+    else
+        red_msg "规则注入失败！已自动保留备份 ${CONFIG_FILE}.bak"
+    fi
+    echo ""; read -p "  按回车返回..." -r
+}
+
+#==============================================================================
 # 主菜单
 #==============================================================================
 main_menu() {
@@ -958,9 +1257,9 @@ main_menu() {
         echo -e " ${purple}───────────────── 系统维护 ─────────────────${re}"
         echo -e "  ${yellow}7${re}. 重新安装 (保留配置)    ${cyan}8${re}. 更新    ${red}9${re}. 卸载"
         echo ""
-        echo -e "  ${cyan}0${re}. 退出"
+        echo -e "  ${cyan}0${re}. 退出   ${purple}w${re}. WARP 域名分流"
         echo -e " ${purple}────────────────────────────────────────────${re}"
-        read -p "  请输入 (0-9 / a): " c
+        read -p "  请输入 (0-9 / a / w): " c
         case "$c" in
             1) show_node; read -p "  按回车返回..." -r ;;
             2) edit_cdn; read -p "  按回车返回..." -r ;;
@@ -975,8 +1274,9 @@ main_menu() {
                    svc stop xray argox-tunnel 2>/dev/null; svc disable xray argox-tunnel 2>/dev/null
                    rm -rf "$WORK_DIR"; rm -f /etc/systemd/system/xray.service /etc/systemd/system/argox-tunnel.service /etc/init.d/xray /etc/init.d/argox-tunnel "$SCRIPT_PATH"
                    svc daemon-reload; green_msg "卸载完成。"; exit 0; fi ;;
+            w|W) warp_menu ;;
             0) clear; exit 0 ;;
-            *) red_msg "无效 (0-9 / a)"; sleep 1 ;;
+            *) red_msg "无效 (0-9 / a / w)"; sleep 1 ;;
         esac
     done
 }
