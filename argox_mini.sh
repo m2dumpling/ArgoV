@@ -68,7 +68,7 @@ CDN_DOMAINS[13]="cdns.doon.eu.org (综合优选·Doorn)"
 #==============================================================================
 # 工具
 #==============================================================================
-port_in_use() { ss -tlnp 2>/dev/null | grep -q ":$1 " || lsof -iTCP:"$1" -sTCP:LISTEN &>/dev/null; }
+port_in_use() { netstat -tlnp 2>/dev/null | grep -q ":$1 " || ss -tlnp 2>/dev/null | grep -q ":$1 " || lsof -iTCP:"$1" -sTCP:LISTEN &>/dev/null; }
 find_free_port() { local p="$1"; while port_in_use "$p" && [ "$p" -lt 65535 ]; do p=$((p+1)); done; echo "$p"; }
 detect_arch() {
     case "$(uname -m)" in
@@ -79,6 +79,27 @@ cf_arch() {
     case "$(uname -m)" in
         x86_64) echo "amd64" ;; aarch64|arm64) echo "arm64" ;;
         armv7l) echo "arm" ;; i686|i386) echo "386" ;; *) echo "amd64" ;; esac
+}
+
+# Alpine / systemd 兼容层
+[ -f /etc/alpine-release ] && IS_ALPINE=1 || IS_ALPINE=0
+svc() {
+    local cmd="$1"; shift
+    if [ "$IS_ALPINE" = 1 ]; then
+        case "$cmd" in
+            start|stop|restart) for s in "$@"; do rc-service "$s" "$cmd" 2>/dev/null; done ;;
+            enable)  for s in "$@"; do rc-update add "$s" default 2>/dev/null; done ;;
+            disable) for s in "$@"; do rc-update del "$s" default 2>/dev/null; done ;;
+            is-active) rc-service "$1" status 2>/dev/null | grep -q "started" ;;
+            daemon-reload) true ;;  # Alpine 不需要
+        esac
+    else
+        case "$cmd" in
+            is-active) systemctl is-active --quiet "$1" 2>/dev/null ;;
+            daemon-reload) svc daemon-reload 2>/dev/null ;;
+            *) systemctl "$cmd" "$@" 2>/dev/null ;;
+        esac
+    fi
 }
 get_argo_domain() {
     local d; [ -f "$TUNNEL_LOG" ] && for i in {1..5}; do
@@ -167,9 +188,9 @@ install_qrencode() {
 # 状态 & 摘要
 #==============================================================================
 get_status() {
-    if systemctl is-active --quiet xray 2>/dev/null; then XRAY_ST="${green}● 运行中${re}"; XRAY_RAW="running"
+    if svc is-active xray 2>/dev/null; then XRAY_ST="${green}● 运行中${re}"; XRAY_RAW="running"
     else XRAY_ST="${red}○ 已停止${re}"; XRAY_RAW="stopped"; fi
-    if systemctl is-active --quiet argox-tunnel 2>/dev/null; then TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"
+    if svc is-active argox-tunnel 2>/dev/null; then TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"
     else TUNNEL_ST="${red}○ 已停止${re}"; TUNNEL_RAW="stopped"; fi
 }
 get_proto_summary() {
@@ -236,9 +257,9 @@ show_node() {
 #==============================================================================
 # 服务控制
 #==============================================================================
-start_services() { yellow_msg "启动..."; systemctl start xray argox-tunnel 2>/dev/null; sleep 2; get_status; echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; green_msg "完成"; }
-stop_services()  { yellow_msg "停止..."; systemctl stop xray argox-tunnel 2>/dev/null; sleep 1; get_status; echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; red_msg "已停止"; }
-restart_services() { yellow_msg "重启..."; rm -f "$TUNNEL_LOG"; systemctl restart xray argox-tunnel 2>/dev/null; sleep 3; get_status; local d; d=$(get_argo_domain); echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; green_msg "完成"; [ -n "$d" ] && echo -e "  域名: ${purple}${d}${re}"; }
+start_services() { yellow_msg "启动..."; svc start xray argox-tunnel 2>/dev/null; sleep 2; get_status; echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; green_msg "完成"; }
+stop_services()  { yellow_msg "停止..."; svc stop xray argox-tunnel 2>/dev/null; sleep 1; get_status; echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; red_msg "已停止"; }
+restart_services() { yellow_msg "重启..."; rm -f "$TUNNEL_LOG"; svc restart xray argox-tunnel 2>/dev/null; sleep 3; get_status; local d; d=$(get_argo_domain); echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; green_msg "完成"; [ -n "$d" ] && echo -e "  域名: ${purple}${d}${re}"; }
 
 #==============================================================================
 # 优选域名
@@ -306,7 +327,7 @@ change_config() {
             1) read -p "  新名称 [${NODE_NAME}]: " n; [ -n "$n" ] && NODE_NAME="$n"; save_conf; green_msg "已更新: ${NODE_NAME}" ;;
             2) local nu; read -p "  新 UUID (回车生成): " nu; [ -z "$nu" ] && nu=$(cat /proc/sys/kernel/random/uuid)
                jq --arg u "$nu" '(.inbounds[].settings.clients[]?|select(.id)|.id)|=$u' "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-               UUID_CUSTOM="$nu"; save_conf; systemctl restart xray 2>/dev/null; green_msg "UUID 已更新！${nu}" ;;
+               UUID_CUSTOM="$nu"; save_conf; svc restart xray 2>/dev/null; green_msg "UUID 已更新！${nu}" ;;
             3) switch_argo_tunnel ;;
             4) echo ""; for i in "${!SS_METHODS[@]}"; do echo -e "  ${green}$((i+1))${re}. ${SS_METHODS[$i]}"; done; echo ""
                read -p "  选择 [默认 aes-256-gcm]: " sm; [ -n "$sm" ] && SS_METHOD="${SS_METHODS[$((sm-1))]:-$SS_METHOD}"
@@ -340,6 +361,29 @@ switch_argo_tunnel() {
     esac
 }
 rebuild_tunnel() {
+    if [ "$IS_ALPINE" = 1 ]; then
+        if [ "$1" = "fixed-token" ]; then
+            cat > /etc/init.d/argox-tunnel << EOF
+#!/sbin/openrc-run
+name=argox-tunnel
+command=${WORK_DIR}/argo
+command_args="tunnel --edge-ip-version auto --no-autoupdate --protocol http2 run --token ${ARGO_AUTH}"
+command_background=true
+pidfile=/var/run/argox-tunnel.pid
+EOF
+        else
+            cat > /etc/init.d/argox-tunnel << EOF
+#!/sbin/openrc-run
+name=argox-tunnel
+command=/bin/sh
+command_args="-c '${WORK_DIR}/argo tunnel --url http://localhost:${ARGO_PORT} --no-autoupdate --edge-ip-version auto --protocol http2 >> ${TUNNEL_LOG} 2>&1'"
+command_background=true
+pidfile=/var/run/argox-tunnel.pid
+EOF
+        fi
+        chmod +x /etc/init.d/argox-tunnel
+        return
+    fi
     if [ "$1" = "fixed-token" ]; then
         cat > /etc/systemd/system/argox-tunnel.service << EOF
 [Unit]
@@ -371,7 +415,7 @@ RestartSec=5s
 [Install]
 WantedBy=multi-user.target
 EOF
-    fi; systemctl daemon-reload
+    fi; svc daemon-reload
 }
 
 #==============================================================================
@@ -458,12 +502,13 @@ do_install() {
     echo -e " ${purple}╚══════════════════════════════════════════╝${re}"; echo ""
 
     yellow_msg "[1/6] 清理..."
-    systemctl stop xray argox-tunnel 2>/dev/null; pkill -9 nginx 2>/dev/null; systemctl stop nginx 2>/dev/null; systemctl disable nginx 2>/dev/null; green_msg "  完成"
+    svc stop xray argox-tunnel 2>/dev/null; pkill -9 nginx 2>/dev/null; systemctl stop nginx 2>/dev/null; systemctl disable nginx 2>/dev/null; green_msg "  完成"
 
     yellow_msg "[2/6] 依赖..."
     if command -v apt &>/dev/null; then DEBIAN_FRONTEND=noninteractive apt-get update -y -qq && apt-get install -y -qq jq unzip curl lsof openssl
     elif command -v yum &>/dev/null; then yum install -y -q jq unzip curl lsof openssl
-    elif command -v dnf &>/dev/null; then dnf install -y -q jq unzip curl lsof openssl; fi; green_msg "  完成"
+    elif command -v dnf &>/dev/null; then dnf install -y -q jq unzip curl lsof openssl
+    elif command -v apk &>/dev/null; then apk update -q && apk add -q jq unzip curl lsof openssl; fi; green_msg "  完成"
 
     mkdir -p "$WORK_DIR" && chmod 777 "$WORK_DIR"
     local ARCH_ARG CF_ARCH; ARCH_ARG=$(detect_arch); CF_ARCH=$(cf_arch)
@@ -492,7 +537,18 @@ do_install() {
     build_xray_config "$UUID" "$SS_PASS"; green_msg "  完成"
 
     yellow_msg "[6/6] 启动..."
-    cat > /etc/systemd/system/xray.service << EOF
+    if [ "$IS_ALPINE" = 1 ]; then
+        cat > /etc/init.d/xray << EOF
+#!/sbin/openrc-run
+name=xray
+command=${WORK_DIR}/xray
+command_args="-c ${CONFIG_FILE}"
+command_background=true
+pidfile=/var/run/xray.pid
+EOF
+        chmod +x /etc/init.d/xray
+    else
+        cat > /etc/systemd/system/xray.service << EOF
 [Unit]
 Description=Xray Service
 After=network.target
@@ -503,8 +559,9 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 EOF
-    rebuild_tunnel "$ARGO_MODE"; rm -f "$TUNNEL_LOG"; systemctl daemon-reload
-    systemctl enable xray argox-tunnel 2>/dev/null; systemctl restart xray argox-tunnel; sleep 5; green_msg "  完成"
+    fi
+    rebuild_tunnel "$ARGO_MODE"; rm -f "$TUNNEL_LOG"; svc daemon-reload
+    svc enable xray argox-tunnel 2>/dev/null; svc restart xray argox-tunnel; sleep 5; green_msg "  完成"
 
     cat > "$SCRIPT_PATH" << 'ARGOWRAP'
 #!/usr/bin/env bash
@@ -684,7 +741,7 @@ edit_protocol() {
                '(.inbounds[]|select(.tag=="argo-in")|.settings.fallbacks)|=map(if .path==$oldp then {path:$newp,dest:$d} else . end)' \
                "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
             [ "$tag" = "vless-ws" ] && VLESS_WS_PORT="$new_port" || VMESS_WS_PORT="$new_port"
-            save_conf; yellow_msg "重启 Xray..."; systemctl restart xray 2>/dev/null; sleep 2; get_status; green_msg "完成"
+            save_conf; yellow_msg "重启 Xray..."; svc restart xray 2>/dev/null; sleep 2; get_status; green_msg "完成"
             echo ""; read -p "  按回车继续..." -r
             return ;;
         reality)
@@ -768,7 +825,7 @@ edit_protocol() {
                    "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
             fi ;;
     esac
-    save_conf; yellow_msg "重启 Xray..."; systemctl restart xray 2>/dev/null; sleep 2; get_status; green_msg "完成"
+    save_conf; yellow_msg "重启 Xray..."; svc restart xray 2>/dev/null; sleep 2; get_status; green_msg "完成"
 
     echo ""; echo -e " ${white}━━━ 更新后链接 ━━━${re}"; echo ""
     local ip hd cd cp; ip=$(get_ip); hd=$(get_argo_domain); cd=$(get_cdn); cp=$(get_cdn_port)
@@ -827,7 +884,7 @@ add_single_protocol() {
             REALITY_PORT="$r_port"; REALITY_SNI="$r_sni"; ENABLE_REALITY=1 ;;
     esac
     jq --argjson i "$new_inbound" '.inbounds+=[$i]' "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-    save_conf; yellow_msg "重启 Xray..."; systemctl restart xray 2>/dev/null; sleep 2; get_status; green_msg "完成"
+    save_conf; yellow_msg "重启 Xray..."; svc restart xray 2>/dev/null; sleep 2; get_status; green_msg "完成"
 
     echo ""; echo -e " ${white}━━━ 链接 ━━━${re}"; echo ""
     local ip; ip=$(get_ip)
@@ -864,7 +921,7 @@ delete_protocol() {
     jq 'del(.inbounds[]|select(.tag=="'"${del_tag}"'"))' "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
     [ "$del_tag" = "reality" ] && ENABLE_REALITY=0
     [ "$del_tag" = "ss" ] && ENABLE_SS=0
-    save_conf; systemctl restart xray 2>/dev/null; sleep 1; green_msg "已删除。"
+    save_conf; svc restart xray 2>/dev/null; sleep 1; green_msg "已删除。"
     echo ""; read -p "  按回车返回..." -r
 }
 
@@ -915,9 +972,9 @@ main_menu() {
             8) yellow_msg "拉取最新版..."; bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoX-Mini/main/argox_mini.sh); exit 0 ;;
             9) echo -ne "  ${red}⚠ 确定卸载? (y/n): ${re}"; read cf
                if [ "$cf" = "y" ] || [ "$cf" = "Y" ]; then
-                   systemctl stop xray argox-tunnel 2>/dev/null; systemctl disable xray argox-tunnel 2>/dev/null
-                   rm -rf "$WORK_DIR"; rm -f /etc/systemd/system/xray.service /etc/systemd/system/argox-tunnel.service "$SCRIPT_PATH"
-                   systemctl daemon-reload; green_msg "卸载完成。"; exit 0; fi ;;
+                   svc stop xray argox-tunnel 2>/dev/null; svc disable xray argox-tunnel 2>/dev/null
+                   rm -rf "$WORK_DIR"; rm -f /etc/systemd/system/xray.service /etc/systemd/system/argox-tunnel.service /etc/init.d/xray /etc/init.d/argox-tunnel "$SCRIPT_PATH"
+                   svc daemon-reload; green_msg "卸载完成。"; exit 0; fi ;;
             0) clear; exit 0 ;;
             *) red_msg "无效 (0-9 / a)"; sleep 1 ;;
         esac
