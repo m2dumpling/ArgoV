@@ -120,6 +120,9 @@ gen_reality_keys() {
     REALITY_PUB="${keys[1]}"
     [ -z "$REALITY_PRIV" ] && { REALITY_PRIV="REPLACE_ME"; REALITY_PUB="REPLACE_ME"; }
 }
+gen_reality_shortid() {
+    REALITY_SHORTID=$(openssl rand -hex 4 2>/dev/null || printf '%08x' $((RANDOM*RANDOM)))
+}
 gen_ss2022_pass() {
     local method="$1"
     [[ "$method" =~ 128 ]] && openssl rand -base64 16 || openssl rand -base64 32
@@ -138,6 +141,7 @@ load_conf() {
     REALITY_SNI="${REALITY_SNI:-www.amazon.com}"; SS_METHOD="${SS_METHOD:-aes-256-gcm}"
     ENABLE_REALITY="${ENABLE_REALITY:-0}"; ENABLE_SS="${ENABLE_SS:-0}"
     REALITY_PRIV="${REALITY_PRIV:-}"; REALITY_PUB="${REALITY_PUB:-}"
+    REALITY_SHORTID="${REALITY_SHORTID:-}"
 }
 save_conf() {
     cat > "$USER_CONF" << EOF
@@ -151,6 +155,7 @@ REALITY_PORT='${REALITY_PORT}'; SS_PORT='${SS_PORT}'
 REALITY_SNI='${REALITY_SNI}'; SS_METHOD='${SS_METHOD}'
 ENABLE_REALITY='${ENABLE_REALITY}'; ENABLE_SS='${ENABLE_SS}'
 REALITY_PRIV='${REALITY_PRIV}'; REALITY_PUB='${REALITY_PUB}'
+REALITY_SHORTID='${REALITY_SHORTID}'
 EOF
 }
 
@@ -169,7 +174,9 @@ gen_ss_link() {
     printf '%s' "ss://${b64}@$3:$4#${5:-${NODE_NAME}-SS}"
 }
 gen_reality_link() {
-    printf '%s' "vless://$1@$2:$3?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=$4&pbk=$5&fp=chrome#${6:-${NODE_NAME}-Reality}"
+    local sid=""
+    [ -n "$6" ] && sid="&sid=$6"
+    printf '%s' "vless://$1@$2:$3?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=$4&pbk=$5&fp=chrome${sid}#${7:-${NODE_NAME}-Reality}"
 }
 
 show_qr() {
@@ -236,8 +243,10 @@ show_node() {
         rp=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.publicKey//empty' "$CONFIG_FILE" 2>/dev/null)
         echo -e "  ${white}── VLESS Reality (端口 ${rport}) ──${re}"
         echo ""
-        echo -e "  ${green}$(gen_reality_link "$uuid" "$ip" "$rport" "$rsni" "$rp")${re}"
-        echo -e "  ${cyan}SNI${re}: ${rsni}  Flow: xtls-rprx-vision\n"
+        echo -e "  ${green}$(gen_reality_link "$uuid" "$ip" "$rport" "$rsni" "$rp" "$REALITY_SHORTID")${re}"
+        echo -e "  ${cyan}SNI${re}: ${rsni}  Flow: xtls-rprx-vision"
+        [ -n "$REALITY_SHORTID" ] && echo -e "  ${cyan}ShortId${re}: ${REALITY_SHORTID}"
+        echo ""
     fi
 
     if grep -q '"shadowsocks"' "$CONFIG_FILE" 2>/dev/null && [ -n "$ip" ]; then
@@ -576,7 +585,7 @@ ARGOWRAP
     fi
     if [ "$ENABLE_REALITY" = 1 ] && [ -n "$ip" ]; then
         echo -e "  ${white}── Reality (端口 ${REALITY_PORT}) ──${re}\n"
-        echo -e "  ${green}$(gen_reality_link "$UUID" "$ip" "$REALITY_PORT" "$REALITY_SNI" "$REALITY_PUB")${re}\n"
+        echo -e "  ${green}$(gen_reality_link "$UUID" "$ip" "$REALITY_PORT" "$REALITY_SNI" "$REALITY_PUB" "$REALITY_SHORTID")${re}\n"
     fi
     if [ "$ENABLE_SS" = 1 ] && [ -n "$ip" ]; then
         echo -e "  ${white}── Shadowsocks (端口 ${SS_PORT}) ──${re}\n"
@@ -788,13 +797,27 @@ edit_protocol() {
             echo -e "  ${yellow}当前: ${cyan}$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.privateKey//empty' "$CONFIG_FILE" 2>/dev/null | cut -c1-24)...${re}"
             echo -e "  ${yellow}输入 new 重新生成。${re}"; read -p "  [回车保持]: " rk
             [ "$rk" = "new" ] || [ "$rk" = "NEW" ] && { gen_reality_keys; echo -e "  → ${green}新密钥已生成${re}"; }; echo ""
+
+            echo -e " ${white}━━━ ④ ShortId ━━━${re}"
+            local cur_sid; cur_sid=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.shortIds[0]//empty' "$CONFIG_FILE" 2>/dev/null)
+            [ -z "$cur_sid" ] && cur_sid="(空)"
+            echo -e "  ${yellow}当前: ${cyan}${cur_sid}${re}"
+            echo -e "  ${yellow}回车保持。输入 new 随机生成。${re}"
+            read -p "  新 ShortId [回车保持]: " nsid
+            if [ "$nsid" = "new" ] || [ "$nsid" = "NEW" ]; then
+                gen_reality_shortid
+                echo -e "  → ${green}${REALITY_SHORTID}${re}"
+            elif [ -n "$nsid" ]; then
+                REALITY_SHORTID="$nsid"
+                echo -e "  → ${green}${REALITY_SHORTID}${re}"
+            fi; echo ""
             ;;
     esac
 
     echo -e " ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"; echo -e " ${white}确认修改：${re}"
     case "$tag" in
         ss) echo -e "  加密: ${cyan}${cur_method}${re} → ${green}${new_method}${re}"; echo -e "  端口: ${cyan}${cur_port}${re} → ${green}${new_port}${re}"; [ "$new_pass" != "$cur_pass" ] && echo -e "  密码: ${cyan}已更新${re}" ;;
-        reality) echo -e "  SNI: ${cyan}${cur_sni}${re} → ${green}${new_sni}${re}"; echo -e "  端口: ${cyan}${cur_port}${re} → ${green}${new_port}${re}" ;;
+        reality) echo -e "  SNI: ${cyan}${cur_sni}${re} → ${green}${new_sni}${re}"; echo -e "  端口: ${cyan}${cur_port}${re} → ${green}${new_port}${re}"; [ "$nsid" = "new" ] || [ "$nsid" = "NEW" ] || [ -n "$nsid" ] && echo -e "  ShortId: ${cyan}已更新 → ${green}${REALITY_SHORTID}${re}" ;;
     esac
     echo -e " ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"; echo ""
     echo -ne "  ${yellow}确认? (y/n) [y]: ${re}"; read cf; [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "已取消。"; return; }
@@ -814,6 +837,12 @@ edit_protocol() {
                 jq --arg priv "$REALITY_PRIV" --arg pub "$REALITY_PUB" \
                    '(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.privateKey)=$priv|(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.publicKey)=$pub' \
                    "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+            fi
+            if [ "$nsid" = "new" ] || [ "$nsid" = "NEW" ] || [ -n "$nsid" ]; then
+                local sid_val; [ -n "$REALITY_SHORTID" ] && sid_val="\"$REALITY_SHORTID\"" || sid_val="\"\""
+                jq --argjson s "[${sid_val}]" \
+                   '(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.shortIds)=$s' \
+                   "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
             fi ;;
     esac
     save_conf; yellow_msg "重启 Xray..."; svc restart xray 2>/dev/null; sleep 2; get_status; green_msg "完成"
@@ -823,7 +852,7 @@ edit_protocol() {
     [ "$ARGO_MODE" = "fixed-token" ] && hd="$ARGO_FIXED_DOMAIN"
     case "$tag" in
         ss) [ -n "$ip" ] && echo -e "  ${green}$(gen_ss_link "$new_method" "$new_pass" "$ip" "$new_port" "${NODE_NAME}-SS")${re}" ;;
-        reality) [ -n "$ip" ] && echo -e "  ${green}$(gen_reality_link "$uuid" "$ip" "$new_port" "$new_sni" "$REALITY_PUB")${re}" ;;
+        reality) [ -n "$ip" ] && echo -e "  ${green}$(gen_reality_link "$uuid" "$ip" "$new_port" "$new_sni" "$REALITY_PUB" "$REALITY_SHORTID")${re}" ;; 
     esac
     echo ""; read -p "  按回车继续..." -r
 }
@@ -858,6 +887,13 @@ add_single_protocol() {
             echo -e "  → ${green}${r_sni}${re}\n"
             echo -e " ${white}━━━ ② 端口 ━━━${re}"; local rd; rd=$(find_free_port "$(shuf -i 10000-60000 -n 1)")
             read -p "  端口 [${rd}]: " r_port; r_port="${r_port:-$rd}"; echo -e "  → ${green}${r_port}${re}\n"
+
+            echo -e " ${white}━━━ ③ ShortId ━━━${re}"
+            echo -e "  ${yellow}8位十六进制，回车随机生成。客户端需匹配。${re}"
+            read -p "  ShortId [随机]: " rsid
+            if [ -n "$rsid" ]; then REALITY_SHORTID="$rsid"
+            else gen_reality_shortid; fi
+            echo -e "  → ${green}${REALITY_SHORTID}${re}\n"
             ;;
     esac
 
@@ -871,7 +907,8 @@ add_single_protocol() {
             SS_PORT="$s_port"; SS_METHOD="$sm"; ENABLE_SS=1 ;;
         reality)
             gen_reality_keys
-            new_inbound='{"port":'"${r_port}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${r_sni}"':443","serverNames":["'"${r_sni}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":[""]}},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":true}}'
+            local sid; [ -n "$REALITY_SHORTID" ] && sid="\"$REALITY_SHORTID\"" || sid="\"\""
+            new_inbound='{"port":'"${r_port}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${r_sni}"':443","serverNames":["'"${r_sni}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":['"${sid}"']}},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":true}}'
             REALITY_PORT="$r_port"; REALITY_SNI="$r_sni"; ENABLE_REALITY=1 ;;
     esac
     jq --argjson i "$new_inbound" '.inbounds+=[$i]' "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
@@ -881,7 +918,7 @@ add_single_protocol() {
     local ip; ip=$(get_ip)
     case "$proto" in
         ss) [ -n "$ip" ] && echo -e "  ${green}$(gen_ss_link "$sm" "$sp" "$ip" "$s_port" "${NODE_NAME}-SS")${re}" ;;
-        reality) [ -n "$ip" ] && echo -e "  ${green}$(gen_reality_link "$uuid" "$ip" "$r_port" "$r_sni" "$REALITY_PUB")${re}" ;;
+        reality) [ -n "$ip" ] && echo -e "  ${green}$(gen_reality_link "$uuid" "$ip" "$r_port" "$r_sni" "$REALITY_PUB" "$REALITY_SHORTID")${re}" ;; 
     esac
     echo ""; read -p "  按回车返回..." -r
 }
