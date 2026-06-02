@@ -1238,9 +1238,13 @@ warp_switch_mode() {
     echo ""
 
     # 检测当前模式
+    local has_w=0 has_v6=0
+    jq -e '.outbounds[] | select(.tag=="warp-out")'  "$CONFIG_FILE" &>/dev/null && has_w=1
+    jq -e '.outbounds[] | select(.tag=="v6-direct")' "$CONFIG_FILE" &>/dev/null && has_v6=1
     local cur_mode="无"
-    jq -e '.outbounds[] | select(.tag=="warp-out")' "$CONFIG_FILE" &>/dev/null && cur_mode="SOCKS5 (40000端口)"
-    jq -e '.outbounds[] | select(.tag=="v6-direct")' "$CONFIG_FILE" &>/dev/null && cur_mode="IPv6 直连"
+    [ "$has_w" = 1 ] && [ "$has_v6" = 1 ] && cur_mode="智能分流 (Google→IPv6 + YouTube→SOCKS5)"
+    [ "$has_w" = 1 ] && [ "$has_v6" = 0 ] && cur_mode="SOCKS5 (40000端口)"
+    [ "$has_w" = 0 ] && [ "$has_v6" = 1 ] && cur_mode="IPv6 直连"
     echo -e "  ${yellow}当前模式: ${cyan}${cur_mode}${re}"
     echo ""
 
