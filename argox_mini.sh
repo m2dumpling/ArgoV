@@ -68,8 +68,8 @@ CDN_DOMAINS[13]="cdns.doon.eu.org (综合优选·Doorn)"
 #==============================================================================
 # 工具
 #==============================================================================
-port_in_use() { lsof -iTCP:"$1" -sTCP:LISTEN &>/dev/null; }
-find_free_port() { local p="$1"; while port_in_use "$p"; do p=$((p+1)); done; echo "$p"; }
+port_in_use() { ss -tlnp 2>/dev/null | grep -q ":$1 " || lsof -iTCP:"$1" -sTCP:LISTEN &>/dev/null; }
+find_free_port() { local p="$1"; while port_in_use "$p" && [ "$p" -lt 65535 ]; do p=$((p+1)); done; echo "$p"; }
 detect_arch() {
     case "$(uname -m)" in
         x86_64) echo "64" ;; i686|i386) echo "32" ;;
