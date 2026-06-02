@@ -942,25 +942,19 @@ warp_menu() {
         echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
         echo ""
 
-        # 检测 WARP 是否在运行
-        local warp_ok=0
-        ss -ntlp 2>/dev/null | grep -q ':40000 ' && warp_ok=1
+        # 检测 WARP 状态
+        local warp_socks_ok=0 warp_v6_ok=0
+        ss -ntlp 2>/dev/null | grep -q ':40000 ' && warp_socks_ok=1
+        ip -6 addr show 2>/dev/null | grep -q 'wgcf\|Warp' && warp_v6_ok=1
 
-        if [ "$warp_ok" = 0 ]; then
-            echo -e "  ${red}本地未检测到 WARP Socks5 服务 (端口 40000)${re}"
-            echo ""
-            echo -e "  ${yellow}fscarmen/warp 安装后将占用本地 40000 端口作为 Socks5 代理，${re}"
-            echo -e "  ${yellow}Xray 通过此端口将指定域名的流量分流至 Cloudflare WARP 网络。${re}"
-            echo ""
-            echo -ne "  ${yellow}是否一键安装 fscarmen WARP？[Y/n]: ${re}"
-            read cf
-            [ "$cf" = "n" ] || [ "$cf" = "N" ] && return
-            warp_install
-            continue
+        # 状态栏
+        if [ "$warp_socks_ok" = 0 ] && [ "$warp_v6_ok" = 0 ]; then
+            echo -e "  ${red}WARP 未安装 (SOCKS5 / IPv6 均不可用)${re}"
+        else
+            [ "$warp_socks_ok" = 1 ] && echo -e "  ${green}WARP SOCKS5 就绪 (127.0.0.1:40000)${re}"
+            [ "$warp_v6_ok" = 1 ]    && echo -e "  ${green}WARP IPv6 就绪${re}"
         fi
-
-        # WARP 就绪，显示分流子菜单
-        echo -e "  ${green}WARP Socks5 已就绪${re} (127.0.0.1:40000)"
+        echo -e "  ${yellow}选项 6 可切换分流模式，按需安装对应 WARP 组件${re}"
         echo ""
         if [ -f "$WARP_DOMAIN_FILE" ] && [ -s "$WARP_DOMAIN_FILE" ]; then
             local count; count=$(wc -l < "$WARP_DOMAIN_FILE")
@@ -1145,6 +1139,10 @@ warp_view_clear() {
 # === 核心：使用 Python3 安全改写 config.json，应用 WARP 分流 ===
 warp_apply_routing() {
     [ ! -f "$WARP_DOMAIN_FILE" ] || [ ! -s "$WARP_DOMAIN_FILE" ] && { yellow_msg "分流域名列表为空，请先添加域名。"; echo ""; read -p "  按回车返回..." -r; return; }
+    # 提示安装 WARP
+    if ! ss -ntlp 2>/dev/null | grep -q ':40000 ' && ! ip -6 addr show 2>/dev/null | grep -q 'wgcf\|Warp'; then
+        yellow_msg "WARP 未安装，请先通过选项 6 选择并安装。"; echo ""; read -p "  按回车返回..." -r; return
+    fi
 
     clear
     echo ""
