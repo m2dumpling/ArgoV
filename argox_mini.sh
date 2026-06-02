@@ -975,7 +975,7 @@ warp_menu() {
         echo -e "  ${green}3${re}. 删除指定域名"
         echo -e "  ${green}4${re}. 查看/清空分流域名列表"
         echo -e "  ${green}5${re}. 应用配置并重启 Xray"
-        echo -e "  ${purple}6${re}. Google IPv6 + YouTube WARP 混合分流 (一键解锁)"
+        echo -e "  ${purple}6${re}. 切换分流模式 (SOCKS5 ↔ IPv6 直连)"
         echo -e "  ${red}0${re}. 返回主菜单"
         echo ""
         echo -e " ${purple}────────────────────────────────────────${re}"
@@ -987,7 +987,7 @@ warp_menu() {
             3) warp_remove_domain ;;
             4) warp_view_clear ;;
             5) warp_apply_routing ;;
-            6) warp_google_ipv6_mixed ;;
+            6) warp_switch_mode ;;
             0) return ;;
             *) red_msg "无效"; sleep 1 ;;
         esac
@@ -1226,118 +1226,102 @@ PYEOF
     echo ""; read -p "  按回车返回..." -r
 }
 
-# === Google IPv6 (v6-direct) + YouTube WARP (warp-out) 混合分流 ===
-warp_google_ipv6_mixed() {
+# === 切换分流模式：SOCKS5 ↔ IPv6 直连（二选一）===
+warp_switch_mode() {
     clear
     echo ""
     echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
-    echo -e " ${purple}║${re}   ${white}Google IPv6 + YouTube WARP 混合分流${re}       ${purple}║${re}"
-    echo -e " ${purple}║${re}   ${yellow}Google 走 IPv6 免验证码，YouTube 走 WARP${re}  ${purple}║${re}"
+    echo -e " ${purple}║${re}     ${white}切换 WARP 分流模式${re}                     ${purple}║${re}"
     echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
     echo ""
 
-    # Google 系列 IPv6 域名
-    local GOOGLE_V6="google.com googleapis.com googleusercontent.com gstatic.com ggpht.com google-analytics.com googletagmanager.com googleadservices.com googlesyndication.com google.com.hk google.cn"
-    # YouTube 系列 WARP 域名
-    local YOUTUBE_WARP="youtube.com ytimg.com googlevideo.com"
-
-    # --- 1. 安装 WARP 环境 ---
-    echo -e " ${white}━━━ ① 检查 WARP 双模式环境 ━━━${re}"
+    # 检测当前模式
+    local cur_mode="无"
+    jq -e '.outbounds[] | select(.tag=="warp-out")' "$CONFIG_FILE" &>/dev/null && cur_mode="SOCKS5 (40000端口)"
+    jq -e '.outbounds[] | select(.tag=="v6-direct")' "$CONFIG_FILE" &>/dev/null && cur_mode="IPv6 直连"
+    echo -e "  ${yellow}当前模式: ${cyan}${cur_mode}${re}"
     echo ""
 
-    local need_w=0 need_6=0
-    ss -ntlp 2>/dev/null | grep -q ':40000 ' && echo -e "  ${green}WARP Socks5 已就绪 (127.0.0.1:40000)${re}" || { need_w=1; echo -e "  ${yellow}WARP Socks5 未安装${re}"; }
-    ip -6 addr show 2>/dev/null | grep -q 'wgcf\|Warp' && echo -e "  ${green}WARP IPv6 已就绪${re}" || { need_6=1; echo -e "  ${yellow}WARP IPv6 未安装${re}"; }
+    echo -e "  ${green}1${re}. SOCKS5 模式 — 全部域名走 WARP Socks5 (127.0.0.1:40000)"
+    echo -e "  ${green}2${re}. IPv6 模式 — 全部域名走 IPv6 直连 (免验证码)"
+    echo -e "  ${red}0${re}. 返回"
     echo ""
-    if [ "$need_w" = 0 ] && [ "$need_6" = 0 ]; then
-        green_msg "WARP 双模式均已就绪，跳过安装。"
-    else
-        green_msg "正在安装缺失的 WARP 组件..."
-        wget -N -q --no-check-certificate https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh -O /tmp/warp_menu.sh 2>/dev/null
-        if [ -f /tmp/warp_menu.sh ]; then
-            chmod +x /tmp/warp_menu.sh
-            [ "$need_w" = 1 ] && { echo -e "  ${cyan}安装 WARP Socks5 模式...${re}"; bash /tmp/warp_menu.sh w; }
-            [ "$need_6" = 1 ] && { echo -e "  ${cyan}安装 WARP IPv6 WireGuard 模式...${re}"; bash /tmp/warp_menu.sh 6; }
-            rm -f /tmp/warp_menu.sh
-            green_msg "安装完成"
-        else
-            red_msg "下载 fscarmen/warp 脚本失败。"; echo ""; read -p "  按回车返回..." -r; return
-        fi
-    fi
+    echo -e " ${purple}────────────────────────────────────────${re}"
+    read -p "  请选择: " mc; [ "$mc" = "0" ] && return
 
-    # --- 2. Python3 安全检查 ---
+    local mode outbound_tag outbound_json mode_label
+    case "${mc:-1}" in
+        1) mode="socks5"; outbound_tag="warp-out"
+           outbound_json='{"tag":"warp-out","protocol":"socks","settings":{"servers":[{"address":"127.0.0.1","port":40000}]}}'
+           mode_label="SOCKS5 (127.0.0.1:40000)"
+           # 安装 Socks5 模式
+           if ! ss -ntlp 2>/dev/null | grep -q ':40000 '; then
+               yellow_msg "安装 WARP Socks5 模式..."
+               wget -N -q --no-check-certificate https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh -O /tmp/warp_menu.sh 2>/dev/null
+               [ -f /tmp/warp_menu.sh ] && { chmod +x /tmp/warp_menu.sh; bash /tmp/warp_menu.sh w; rm -f /tmp/warp_menu.sh; }
+           else green_msg "WARP Socks5 已就绪"; fi ;;
+        2) mode="ipv6"; outbound_tag="v6-direct"
+           outbound_json='{"tag":"v6-direct","protocol":"freedom","settings":{"domainStrategy":"UseIPv6"}}'
+           mode_label="IPv6 直连"
+           # 安装 IPv6 模式
+           if ! ip -6 addr show 2>/dev/null | grep -q 'wgcf\|Warp'; then
+               yellow_msg "安装 WARP IPv6 WireGuard 模式..."
+               wget -N -q --no-check-certificate https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh -O /tmp/warp_menu.sh 2>/dev/null
+               [ -f /tmp/warp_menu.sh ] && { chmod +x /tmp/warp_menu.sh; bash /tmp/warp_menu.sh 6; rm -f /tmp/warp_menu.sh; }
+           else green_msg "WARP IPv6 已就绪"; fi ;;
+        *) red_msg "无效"; return ;;
+    esac
+
+    # 检查 Python3
     if ! command -v python3 &>/dev/null; then
         red_msg "未检测到 Python3，请先安装: apt install python3"
         echo ""; read -p "  按回车返回..." -r; return
     fi
 
-    # --- 3. 构建域名列表 ---
-    local g_domains; g_domains=$(for d in $GOOGLE_V6; do echo "\"$d\""; done | tr '\n' ',' | sed 's/,$//')
-    local y_domains; y_domains=$(for d in $YOUTUBE_WARP; do echo "\"$d\""; done | tr '\n' ',' | sed 's/,$//')
+    # 读取域名列表
+    [ ! -f "$WARP_DOMAIN_FILE" ] || [ ! -s "$WARP_DOMAIN_FILE" ] && { warp_add_defaults; }
+    local domains_list; domains_list=$(sed 's/^/"/;s/$/"/' "$WARP_DOMAIN_FILE" | tr '\n' ',' | sed 's/,$//')
+    [ -z "$domains_list" ] && { yellow_msg "域名列表为空。"; return; }
 
-    # 备份
+    # 备份 & Python3 改写
     cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
-    green_msg "已备份: ${CONFIG_FILE}.bak"
+    yellow_msg "切换为 ${mode_label} 模式..."
 
-    # --- 4. Python3 改写 ---
-    yellow_msg "注入 IPv6 直连 + WARP 混合分流规则..."
     python3 << PYEOF
 import json
 
 with open('${CONFIG_FILE}', 'r') as f:
     config = json.load(f)
 
-# 清理已有相关出站和规则
+# 清理旧 WARP/IPv6 出站
 config['outbounds'] = [o for o in config['outbounds'] if o.get('tag') not in ('warp-out', 'v6-direct')]
 config.setdefault('routing', {}).setdefault('rules', [])
 config['routing']['rules'] = [r for r in config['routing']['rules']
                               if r.get('outboundTag') not in ('warp-out', 'v6-direct')]
 
-# 注入 v6-direct 出站（Google IPv6 直连）
-config['outbounds'].append({
-    "tag": "v6-direct",
-    "protocol": "freedom",
-    "settings": {"domainStrategy": "UseIPv6"}
-})
+# 注入选中的出站
+config['outbounds'].append(${outbound_json})
 
-# 注入 warp-out 出站（YouTube WARP Socks5）
-config['outbounds'].append({
-    "tag": "warp-out",
-    "protocol": "socks",
-    "settings": {"servers": [{"address": "127.0.0.1", "port": 40000}]}
-})
-
-# Google 域名 → v6-direct（最高优先级）
+# 所有分流域名 → 选中的出站（最高优先级）
 config['routing']['rules'].insert(0, {
     "type": "field",
-    "outboundTag": "v6-direct",
-    "domain": [${g_domains}]
-})
-
-# YouTube 域名 → warp-out（次优先级）
-config['routing']['rules'].insert(1, {
-    "type": "field",
-    "outboundTag": "warp-out",
-    "domain": [${y_domains}]
+    "outboundTag": "${outbound_tag}",
+    "domain": [${domains_list}]
 })
 
 with open('${CONFIG_FILE}', 'w') as f:
     json.dump(config, f, indent=2, ensure_ascii=False)
-print('MIXED_OK')
+print('SWITCH_OK')
 PYEOF
 
     if [ $? -eq 0 ]; then
-        green_msg "混合分流规则注入成功！重启 Xray..."
+        green_msg "已切换至 ${mode_label} 模式！重启 Xray..."
         svc restart xray; sleep 2; get_status
         echo ""
-        echo -e "  ${white}分流策略：${re}"
-        echo -e "  ${cyan}Google 系列${re}  → ${green}IPv6 直连 (v6-direct)${re} — 免验证码"
-        echo -e "  ${cyan}YouTube 系列${re} → ${purple}WARP Socks5 (warp-out)${re} — 稳定解锁"
-        echo -e "  ${cyan}其余流量${re}    → ${white}默认直连${re}"
-        echo ""
-        echo -e "  ${yellow}💡 验证: curl -6 google.com${re}"
+        echo -e "  ${white}所有分流域名${re} → ${green}${mode_label}${re}"
+        echo -e "  ${yellow}💡 选项 1/2 随时可切换，无需重装${re}"
     else
-        red_msg "注入失败！已保留备份 ${CONFIG_FILE}.bak"
+        red_msg "切换失败！已保留备份 ${CONFIG_FILE}.bak"
     fi
     echo ""; read -p "  按回车返回..." -r
 }
