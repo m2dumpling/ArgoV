@@ -169,7 +169,7 @@ install_qrencode() {
 get_status() {
     if systemctl is-active --quiet xray 2>/dev/null; then XRAY_ST="${green}● 运行中${re}"; XRAY_RAW="running"
     else XRAY_ST="${red}○ 已停止${re}"; XRAY_RAW="stopped"; fi
-    if argox-tunnel 2>/dev/null; then TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"
+    if systemctl is-active --quiet argox-tunnel 2>/dev/null; then TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"
     else TUNNEL_ST="${red}○ 已停止${re}"; TUNNEL_RAW="stopped"; fi
 }
 get_proto_summary() {
