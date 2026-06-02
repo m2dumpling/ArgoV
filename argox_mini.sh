@@ -458,7 +458,7 @@ do_install() {
     echo -e " ${purple}╚══════════════════════════════════════════╝${re}"; echo ""
 
     yellow_msg "[1/6] 清理..."
-    systemctl stop xray argox-tunnel 2>/dev/null; pkill -9 nginx caddy 2>/dev/null; systemctl stop nginx caddy 2>/dev/null; systemctl disable nginx caddy 2>/dev/null; green_msg "  完成"
+    systemctl stop xray argox-tunnel 2>/dev/null; pkill -9 nginx 2>/dev/null; systemctl stop nginx 2>/dev/null; systemctl disable nginx 2>/dev/null; green_msg "  完成"
 
     yellow_msg "[2/6] 依赖..."
     if command -v apt &>/dev/null; then DEBIAN_FRONTEND=noninteractive apt-get update -y -qq && apt-get install -y -qq jq unzip curl lsof openssl
