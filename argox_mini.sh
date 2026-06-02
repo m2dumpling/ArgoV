@@ -938,7 +938,7 @@ warp_menu() {
         clear
         echo ""
         echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
-        echo -e " ${purple}║${re}     ${white}WARP 域名分流配置${re}                       ${purple}║${re}"
+        echo -e " ${purple}║${re}     ${white}WARP SOCKS5 / IPv6 分流配置${re}            ${purple}║${re}"
         echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
         echo ""
 
@@ -1359,7 +1359,7 @@ main_menu() {
         echo -e " ${purple}───────────────── 系统维护 ─────────────────${re}"
         echo -e "  ${yellow}7${re}. 重新安装 (保留配置)    ${cyan}8${re}. 更新    ${red}9${re}. 卸载"
         echo ""
-        echo -e "  ${cyan}0${re}. 退出   ${purple}w${re}. WARP SOCKS域名分流"
+        echo -e "  ${cyan}0${re}. 退出   ${purple}w${re}. WARP分流 (SOCKS5 / IPv6 切换)"
         echo -e " ${purple}────────────────────────────────────────────${re}"
         read -p "  请输入 (0-9 / a / w): " c
         case "$c" in
