@@ -565,7 +565,9 @@ EOF
 
     cat > "$SCRIPT_PATH" << 'ARGOWRAP'
 #!/usr/bin/env bash
-bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoX-Mini/main/argox_mini.sh)
+T=$(mktemp /tmp/argox.XXXXXX)
+curl -sLo "$T" https://raw.githubusercontent.com/m2dumpling/ArgoX-Mini/main/argox_mini.sh
+bash "$T"; rm -f "$T"
 ARGOWRAP
     chmod +x "$SCRIPT_PATH"; save_conf
 
@@ -1422,19 +1424,22 @@ main_menu() {
             4) start_services; sleep 1 ;; 5) stop_services; sleep 1 ;; 6) restart_services; sleep 1 ;;
             7) echo -ne "  ${yellow}重新安装? (y/n): ${re}"; read cf
                [ "$cf" = "y" ] || [ "$cf" = "Y" ] && { load_conf; do_install; }; read -p "  按回车返回..." -r ;;
-            8) yellow_msg "拉取最新版..."; bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoX-Mini/main/argox_mini.sh); exit 0 ;;
+            8) yellow_msg "拉取最新版..."
+               local utmp; utmp=$(mktemp /tmp/argox.XXXXXX)
+               curl -sLo "$utmp" https://raw.githubusercontent.com/m2dumpling/ArgoX-Mini/main/argox_mini.sh && bash "$utmp" && rm -f "$utmp"
+               clear; continue ;;
             9) echo -ne "  ${red}⚠ 确定卸载? (y/n): ${re}"; read cf
                if [ "$cf" = "y" ] || [ "$cf" = "Y" ]; then
                    svc stop xray argox-tunnel 2>/dev/null; svc disable xray argox-tunnel 2>/dev/null
                    rm -rf "$WORK_DIR"; rm -f /etc/systemd/system/xray.service /etc/systemd/system/argox-tunnel.service /etc/init.d/xray /etc/init.d/argox-tunnel "$SCRIPT_PATH"
-                   svc daemon-reload; green_msg "卸载完成。"; exit 0; fi ;;
+                   svc daemon-reload; green_msg "卸载完成。"; fi ;;
             w|W) warp_menu ;;
-            0) clear; exit 0 ;;
+            0) clear; break ;;
             *) red_msg "无效 (0-9 / a / w)"; sleep 1 ;;
         esac
     done
 }
 
 load_conf
-[ ! -f "$CONFIG_FILE" ] && { interactive_install; exit 0; }
+[ ! -f "$CONFIG_FILE" ] && interactive_install
 main_menu
