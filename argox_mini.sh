@@ -1210,16 +1210,20 @@ with open(CONFIG, 'w') as f:
 print('CONFIG_OK')
 PYEOF
 
-    if [ $? -eq 0 ]; then
-        green_msg "规则注入成功！正在重启 Xray..."
-        svc restart xray; sleep 2
-        get_status
-        echo ""
-        echo -e "  ${green}WARP 分流已生效${re}"
-        echo -e "  ${cyan}以下域名将走 Cloudflare WARP 网络:${re}"
-        echo -e "  ${white}$(tr '\n' ' ' < "$WARP_DOMAIN_FILE")${re}"
+    if python3 -c "import json; json.load(open('${CONFIG_FILE}'))" 2>/dev/null; then
+        green_msg "规则注入成功，重启 Xray..."
+        svc restart xray 2>/dev/null; sleep 2
+        if svc is-active xray; then
+            get_status; green_msg "WARP 分流已生效"
+            echo ""; echo -e "  ${cyan}分流域名:${re} ${white}$(tr '\n' ' ' < "$WARP_DOMAIN_FILE")${re}"
+        else
+            red_msg "Xray 启动失败！自动回滚备份。"
+            cp "${CONFIG_FILE}.bak" "$CONFIG_FILE"
+            svc restart xray 2>/dev/null; sleep 2; get_status
+        fi
     else
-        red_msg "规则注入失败！已自动保留备份 ${CONFIG_FILE}.bak"
+        red_msg "JSON 写入不合法！自动回滚备份。"
+        cp "${CONFIG_FILE}.bak" "$CONFIG_FILE"
     fi
     echo ""; read -p "  按回车返回..." -r
 }
@@ -1345,18 +1349,28 @@ with open('${CONFIG_FILE}', 'w') as f:
 print('APPLY_OK')
 PYEOF
 
-    if [ $? -eq 0 ]; then
-        green_msg "应用成功！重启 Xray..."
-        svc restart xray; sleep 2; get_status
-        echo ""
-        case "$mode" in
-            socks5) echo -e "  ${cyan}全部域名${re} → ${green}WARP SOCKS5${re}" ;;
-            ipv6)   echo -e "  ${cyan}全部域名${re} → ${green}WARP IPv6 直连${re}" ;;
-            smart)  echo -e "  ${cyan}Google${re}  → ${green}IPv6 直连${re} (免验证码)"
-                    echo -e "  ${cyan}YouTube${re} → ${purple}WARP SOCKS5${re} (防弹窗)" ;;
-        esac
+    # 校验 JSON 合法性
+    if python3 -c "import json; json.load(open('${CONFIG_FILE}'))" 2>/dev/null; then
+        green_msg "规则注入成功，重启 Xray..."
+        svc restart xray 2>/dev/null; sleep 2
+        if svc is-active xray; then
+            get_status; green_msg "Xray 运行正常！"
+            echo ""
+            case "$mode" in
+                socks5) echo -e "  ${cyan}全部域名${re} → ${green}WARP SOCKS5${re}" ;;
+                ipv6)   echo -e "  ${cyan}全部域名${re} → ${green}WARP IPv6 直连${re}" ;;
+                smart)  echo -e "  ${cyan}Google${re}  → ${green}IPv6 直连${re} (免验证码)"
+                        echo -e "  ${cyan}YouTube${re} → ${purple}WARP SOCKS5${re} (防弹窗)" ;;
+            esac
+        else
+            red_msg "Xray 启动失败！JSON 虽然合法但配置有误，自动回滚备份。"
+            cp "${CONFIG_FILE}.bak" "$CONFIG_FILE"
+            svc restart xray 2>/dev/null; sleep 2
+            get_status
+        fi
     else
-        red_msg "应用失败！已保留备份 ${CONFIG_FILE}.bak"
+        red_msg "JSON 写入不合法！自动回滚备份。"
+        cp "${CONFIG_FILE}.bak" "$CONFIG_FILE"
     fi
 }
 
