@@ -169,7 +169,7 @@ install_qrencode() {
 get_status() {
     if systemctl is-active --quiet xray 2>/dev/null; then XRAY_ST="${green}● 运行中${re}"; XRAY_RAW="running"
     else XRAY_ST="${red}○ 已停止${re}"; XRAY_RAW="stopped"; fi
-    if systemctl is-active --quiet tunnel 2>/dev/null; then TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"
+    if argox-tunnel 2>/dev/null; then TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"
     else TUNNEL_ST="${red}○ 已停止${re}"; TUNNEL_RAW="stopped"; fi
 }
 get_proto_summary() {
@@ -236,9 +236,9 @@ show_node() {
 #==============================================================================
 # 服务控制
 #==============================================================================
-start_services() { yellow_msg "启动..."; systemctl start xray tunnel 2>/dev/null; sleep 2; get_status; echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; green_msg "完成"; }
-stop_services()  { yellow_msg "停止..."; systemctl stop xray tunnel 2>/dev/null; sleep 1; get_status; echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; red_msg "已停止"; }
-restart_services() { yellow_msg "重启..."; rm -f "$TUNNEL_LOG"; systemctl restart xray tunnel 2>/dev/null; sleep 3; get_status; local d; d=$(get_argo_domain); echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; green_msg "完成"; [ -n "$d" ] && echo -e "  域名: ${purple}${d}${re}"; }
+start_services() { yellow_msg "启动..."; systemctl start xray argox-tunnel 2>/dev/null; sleep 2; get_status; echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; green_msg "完成"; }
+stop_services()  { yellow_msg "停止..."; systemctl stop xray argox-tunnel 2>/dev/null; sleep 1; get_status; echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; red_msg "已停止"; }
+restart_services() { yellow_msg "重启..."; rm -f "$TUNNEL_LOG"; systemctl restart xray argox-tunnel 2>/dev/null; sleep 3; get_status; local d; d=$(get_argo_domain); echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; green_msg "完成"; [ -n "$d" ] && echo -e "  域名: ${purple}${d}${re}"; }
 
 #==============================================================================
 # 优选域名
@@ -341,7 +341,7 @@ switch_argo_tunnel() {
 }
 rebuild_tunnel() {
     if [ "$1" = "fixed-token" ]; then
-        cat > /etc/systemd/system/tunnel.service << EOF
+        cat > /etc/systemd/system/argox-tunnel.service << EOF
 [Unit]
 Description=Cloudflare Argo Tunnel (Fixed)
 After=network.target
@@ -356,7 +356,7 @@ RestartSec=5s
 WantedBy=multi-user.target
 EOF
     else
-        cat > /etc/systemd/system/tunnel.service << EOF
+        cat > /etc/systemd/system/argox-tunnel.service << EOF
 [Unit]
 Description=Cloudflare Argo Tunnel (Temp)
 After=network.target
@@ -458,7 +458,7 @@ do_install() {
     echo -e " ${purple}╚══════════════════════════════════════════╝${re}"; echo ""
 
     yellow_msg "[1/6] 清理..."
-    pkill -9 nginx caddy xray argo 2>/dev/null; systemctl stop nginx caddy xray tunnel 2>/dev/null; systemctl disable nginx caddy 2>/dev/null; green_msg "  完成"
+    systemctl stop xray argox-tunnel 2>/dev/null; pkill -9 nginx caddy 2>/dev/null; systemctl stop nginx caddy 2>/dev/null; systemctl disable nginx caddy 2>/dev/null; green_msg "  完成"
 
     yellow_msg "[2/6] 依赖..."
     if command -v apt &>/dev/null; then DEBIAN_FRONTEND=noninteractive apt-get update -y -qq && apt-get install -y -qq jq unzip curl lsof openssl
@@ -504,7 +504,7 @@ Restart=on-failure
 WantedBy=multi-user.target
 EOF
     rebuild_tunnel "$ARGO_MODE"; rm -f "$TUNNEL_LOG"; systemctl daemon-reload
-    systemctl enable xray tunnel 2>/dev/null; systemctl restart xray tunnel; sleep 5; green_msg "  完成"
+    systemctl enable xray argox-tunnel 2>/dev/null; systemctl restart xray argox-tunnel; sleep 5; green_msg "  完成"
 
     cat > "$SCRIPT_PATH" << 'ARGOWRAP'
 #!/usr/bin/env bash
@@ -868,8 +868,8 @@ main_menu() {
             8) yellow_msg "拉取最新版..."; bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoX-Mini/main/argox_mini.sh); exit 0 ;;
             9) echo -ne "  ${red}⚠ 确定卸载? (y/n): ${re}"; read cf
                if [ "$cf" = "y" ] || [ "$cf" = "Y" ]; then
-                   systemctl stop xray tunnel 2>/dev/null; systemctl disable xray tunnel 2>/dev/null
-                   rm -rf "$WORK_DIR"; rm -f /etc/systemd/system/xray.service /etc/systemd/system/tunnel.service "$SCRIPT_PATH"
+                   systemctl stop xray argox-tunnel 2>/dev/null; systemctl disable xray argox-tunnel 2>/dev/null
+                   rm -rf "$WORK_DIR"; rm -f /etc/systemd/system/xray.service /etc/systemd/system/argox-tunnel.service "$SCRIPT_PATH"
                    systemctl daemon-reload; green_msg "卸载完成。"; exit 0; fi ;;
             0) clear; exit 0 ;;
             *) red_msg "无效 (0-9 / a)"; sleep 1 ;;
