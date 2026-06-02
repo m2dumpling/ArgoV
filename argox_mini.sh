@@ -204,7 +204,7 @@ get_status() {
 get_proto_summary() {
     local s="VL-Argo VM-Argo"
     grep -q '"shadowsocks"' "$CONFIG_FILE" 2>/dev/null && s="$s SS"
-    grep -q '"tag":"reality"' "$CONFIG_FILE" 2>/dev/null && s="$s Reality"
+    grep -qE '"tag"[[:space:]]*:[[:space:]]*"reality"' "$CONFIG_FILE" 2>/dev/null && s="$s Reality"
     echo "$s"
 }
 
@@ -237,7 +237,7 @@ show_node() {
         show_qr "$(gen_vless_link "$uuid" "$hd" "$cd" "$cp")"
     fi
 
-    if grep -q '"tag":"reality"' "$CONFIG_FILE" 2>/dev/null && [ -n "$ip" ]; then
+    if grep -qE '"tag"[[:space:]]*:[[:space:]]*"reality"' "$CONFIG_FILE" 2>/dev/null && [ -n "$ip" ]; then
         local rport rsni rp
         rport=$(jq -r '.inbounds[]|select(.tag=="reality")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
         rsni=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames[0]//empty' "$CONFIG_FILE" 2>/dev/null)
@@ -634,7 +634,7 @@ manage_protocols() {
     [ ! -f "$CONFIG_FILE" ] && { red_msg "请先安装！"; return; }
 
     local has_reality=0 has_ss=0
-    grep -q '"tag":"reality"' "$CONFIG_FILE" 2>/dev/null && has_reality=1
+    grep -qE '"tag"[[:space:]]*:[[:space:]]*"reality"' "$CONFIG_FILE" 2>/dev/null && has_reality=1
     grep -q '"shadowsocks"' "$CONFIG_FILE" 2>/dev/null && has_ss=1
 
     while true; do
@@ -696,7 +696,7 @@ manage_protocols() {
 
         load_conf
         has_reality=0; has_ss=0
-        grep -q '"tag":"reality"' "$CONFIG_FILE" 2>/dev/null && has_reality=1
+        grep -qE '"tag"[[:space:]]*:[[:space:]]*"reality"' "$CONFIG_FILE" 2>/dev/null && has_reality=1
         grep -q '"shadowsocks"' "$CONFIG_FILE" 2>/dev/null && has_ss=1
     done
 }
@@ -1038,7 +1038,7 @@ add_single_protocol() {
 delete_protocol() {
     clear
     local has_reality=0 has_ss=0
-    grep -q '"tag":"reality"' "$CONFIG_FILE" 2>/dev/null && has_reality=1
+    grep -qE '"tag"[[:space:]]*:[[:space:]]*"reality"' "$CONFIG_FILE" 2>/dev/null && has_reality=1
     grep -q '"shadowsocks"' "$CONFIG_FILE" 2>/dev/null && has_ss=1
     [ $((has_reality+has_ss)) = 0 ] && { echo ""; green_msg "无可删除。"; echo ""; read -p "  按回车返回..." -r; return; }
 
