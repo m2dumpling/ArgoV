@@ -102,17 +102,18 @@ systemctl() {
     fi
 }
 get_argo_domain() {
+    # 1. 优先用持久化存储的域名
+    load_conf 2>/dev/null
+    [ -n "$LAST_ARGO_DOMAIN" ] && [ "$ARGO_MODE" != "fixed-token" ] && { echo "$LAST_ARGO_DOMAIN"; return; }
+    # 2. 从日志文件提取
     local d
-    # 先从日志文件取
     if [ -f "$TUNNEL_LOG" ]; then
-        for i in {1..3}; do
-            d=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' "$TUNNEL_LOG" | tail -n 1)
-            [ -n "$d" ] && { echo "$d"; return; }; sleep 1
-        done
+        d=$(grep -oP 'https://\K[^/\s]*trycloudflare\.com' "$TUNNEL_LOG" 2>/dev/null | tail -1)
+        [ -n "$d" ] && { echo "$d"; return; }
     fi
-    # 兜底：从 journalctl/system 日志里找
+    # 3. journalctl 兜底
     if [ "$IS_ALPINE" = 0 ]; then
-        d=$(journalctl -u argox-tunnel --no-pager -n 50 2>/dev/null | sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' | tail -n 1)
+        d=$(journalctl -u argox-tunnel --no-pager -n 100 2>/dev/null | grep -oP 'https://\K[^/\s]*trycloudflare\.com' | tail -1)
     fi
     echo "$d"
 }
@@ -145,7 +146,7 @@ load_conf() {
     VMESS_WS_PORT="${VMESS_WS_PORT:-8082}"
     CDN_PORT="${CDN_PORT:-443}"; CDN_DOMAIN="${CDN_DOMAIN:-$CDN_DEFAULT}"
     ARGO_MODE="${ARGO_MODE:-temp}"; ARGO_AUTH="${ARGO_AUTH:-}"
-    ARGO_FIXED_DOMAIN="${ARGO_FIXED_DOMAIN:-}"; UUID_CUSTOM="${UUID_CUSTOM:-}"
+    ARGO_FIXED_DOMAIN="${ARGO_FIXED_DOMAIN:-}"; UUID_CUSTOM="${UUID_CUSTOM:-}"; LAST_ARGO_DOMAIN="${LAST_ARGO_DOMAIN:-}"
     REALITY_PORT="${REALITY_PORT:-0}"; SS_PORT="${SS_PORT:-0}"
     REALITY_SNI="${REALITY_SNI:-www.amazon.com}"; SS_METHOD="${SS_METHOD:-aes-256-gcm}"
     ENABLE_REALITY="${ENABLE_REALITY:-0}"; ENABLE_SS="${ENABLE_SS:-0}"
@@ -159,7 +160,7 @@ NODE_NAME='${NODE_NAME}'
 ARGO_PORT='${ARGO_PORT}'; VLESS_WS_PORT='${VLESS_WS_PORT}'
 VMESS_WS_PORT='${VMESS_WS_PORT}'; CDN_PORT='${CDN_PORT}'
 CDN_DOMAIN='${CDN_DOMAIN}'; ARGO_MODE='${ARGO_MODE}'; ARGO_AUTH='${ARGO_AUTH}'
-ARGO_FIXED_DOMAIN='${ARGO_FIXED_DOMAIN}'; UUID_CUSTOM='${UUID_CUSTOM}'
+ARGO_FIXED_DOMAIN='${ARGO_FIXED_DOMAIN}'; UUID_CUSTOM='${UUID_CUSTOM}'; LAST_ARGO_DOMAIN='${LAST_ARGO_DOMAIN}'
 REALITY_PORT='${REALITY_PORT}'; SS_PORT='${SS_PORT}'
 REALITY_SNI='${REALITY_SNI}'; SS_METHOD='${SS_METHOD}'
 ENABLE_REALITY='${ENABLE_REALITY}'; ENABLE_SS='${ENABLE_SS}'
@@ -209,8 +210,8 @@ get_status() {
         rc-service xray status 2>/dev/null | grep -q "started" && { XRAY_ST="${green}● 运行中${re}"; XRAY_RAW="running"; } || { XRAY_ST="${red}○ 已停止${re}"; XRAY_RAW="stopped"; }
         rc-service argox-tunnel status 2>/dev/null | grep -q "started" && { TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"; } || { TUNNEL_ST="${red}○ 已停止${re}"; TUNNEL_RAW="stopped"; }
     else
-        systemctl is-active --quiet xray 2>/dev/null && { XRAY_ST="${green}● 运行中${re}"; XRAY_RAW="running"; } || { XRAY_ST="${red}○ 已停止${re}"; XRAY_RAW="stopped"; }
-        systemctl is-active --quiet argox-tunnel 2>/dev/null && { TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"; } || { TUNNEL_ST="${red}○ 已停止${re}"; TUNNEL_RAW="stopped"; }
+        (systemctl is-active --quiet xray 2>/dev/null || pgrep -x xray &>/dev/null) && { XRAY_ST="${green}● 运行中${re}"; XRAY_RAW="running"; } || { XRAY_ST="${red}○ 已停止${re}"; XRAY_RAW="stopped"; }
+        (systemctl is-active --quiet argox-tunnel 2>/dev/null || pgrep -f 'argo.*tunnel.*url.*localhost' &>/dev/null) && { TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"; } || { TUNNEL_ST="${red}○ 已停止${re}"; TUNNEL_RAW="stopped"; }
     fi
 }
 get_proto_summary() {
@@ -281,7 +282,7 @@ show_node() {
 #==============================================================================
 start_services() { yellow_msg "启动..."; systemctl start xray argox-tunnel 2>/dev/null; sleep 2; get_status; echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; green_msg "完成"; }
 stop_services()  { yellow_msg "停止..."; systemctl stop xray argox-tunnel 2>/dev/null; sleep 1; get_status; echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; red_msg "已停止"; }
-restart_services() { yellow_msg "重启..."; rm -f "$TUNNEL_LOG"; systemctl restart xray argox-tunnel 2>/dev/null; sleep 3; get_status; local d; d=$(get_argo_domain); echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; green_msg "完成"; [ -n "$d" ] && echo -e "  域名: ${purple}${d}${re}"; }
+restart_services() { yellow_msg "重启..."; rm -f "$TUNNEL_LOG"; svc restart xray argox-tunnel 2>/dev/null; sleep 3; get_status; local d; d=$(get_argo_domain); echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; green_msg "完成"; [ -n "$d" ] && { echo -e "  域名: ${purple}${d}${re}"; LAST_ARGO_DOMAIN="$d"; save_conf; }; }
 
 #==============================================================================
 # 优选域名
@@ -583,7 +584,9 @@ ARGOWRAP
     chmod +x "$SCRIPT_PATH"; save_conf
 
     local hd ip; [ "$ARGO_MODE" = "fixed-token" ] && hd="$ARGO_FIXED_DOMAIN" || hd=$(get_argo_domain)
-    [ -z "$hd" ] && [ "$ARGO_MODE" != "fixed-token" ] && { sleep 3; hd=$(get_argo_domain); }; ip=$(get_ip)
+    [ -z "$hd" ] && [ "$ARGO_MODE" != "fixed-token" ] && { sleep 3; hd=$(grep -oP 'https://\K[^/\s]*trycloudflare\.com' /etc/xray/argo.log 2>/dev/null | tail -1); }
+    [ -n "$hd" ] && LAST_ARGO_DOMAIN="$hd" && save_conf
+    ip=$(get_ip)
 
     echo ""; echo -e " ${purple}╔══════════════════════════════════════════════════╗${re}"
     echo -e " ${purple}║${re}       ${white}🎉 部署成功 · ${NODE_NAME}${re}"
