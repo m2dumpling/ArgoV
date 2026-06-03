@@ -1084,7 +1084,7 @@ warp_menu() {
 
         # 检测 WARP 状态
         local warp_socks_ok=0 warp_v6_ok=0
-        ss -ntlp 2>/dev/null | grep -q ':40000 ' && warp_socks_ok=1
+        (ss -tlnp 2>/dev/null || ss -tln 2>/dev/null || netstat -tlnp 2>/dev/null) | grep -q ':40000 ' && warp_socks_ok=1
         ip -6 addr show 2>/dev/null | grep -q 'wgcf\|Warp' && warp_v6_ok=1
 
         # 状态栏
@@ -1131,7 +1131,7 @@ warp_menu() {
 
 # === 自动安装 WARP SOCKS5（如未安装）===
 warp_auto_install_socks() {
-    ss -ntlp 2>/dev/null | grep -q ':40000 ' && return 0
+    (ss -tlnp 2>/dev/null || ss -tln 2>/dev/null || netstat -tlnp 2>/dev/null) | grep -q ':40000 ' && return 0
     yellow_msg "WARP SOCKS5 未安装，正在自动部署..."
     wget -N -q --no-check-certificate https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh -O /tmp/warp_menu.sh 2>/dev/null
     if [ -f /tmp/warp_menu.sh ]; then
@@ -1140,15 +1140,20 @@ warp_auto_install_socks() {
         rm -f /tmp/warp_menu.sh
     fi
     sleep 3
-    if ss -ntlp 2>/dev/null | grep -q ':40000 '; then
+    if (ss -tlnp 2>/dev/null || ss -tln 2>/dev/null || netstat -tlnp 2>/dev/null) | grep -q ':40000 '; then
         green_msg "WARP SOCKS5 安装成功！(127.0.0.1:40000)"
     else
         red_msg "WARP 安装失败 — 40000 端口未监听"
-        if systemctl is-active wireproxy &>/dev/null; then
-            :
-        elif systemctl list-units --type=service 2>/dev/null | grep -q wireproxy; then
-            yellow_msg "  wireproxy 服务存在但异常，执行: systemctl status wireproxy 查看原因"
-            journalctl -u wireproxy --no-pager -n 3 2>/dev/null | tail -3
+        # 尝试显示错误详情（兼容 systemd / OpenRC）
+        if [ "$IS_ALPINE" = 1 ]; then
+            rc-service wireproxy status 2>/dev/null
+            tail -20 /var/log/messages 2>/dev/null | grep -i 'wireproxy\|warp' | tail -3
+        else
+            if systemctl is-active wireproxy &>/dev/null; then :;
+            elif systemctl list-units --type=service 2>/dev/null | grep -q wireproxy; then
+                yellow_msg "  wireproxy 服务存在但异常，查看: systemctl status wireproxy"
+                journalctl -u wireproxy --no-pager -n 3 2>/dev/null | tail -3
+            fi
         fi
         echo ""; read -p "  按回车继续..." -r
     fi
@@ -1178,7 +1183,7 @@ warp_install() {
 
     # 验证安装
     sleep 3
-    if ss -ntlp 2>/dev/null | grep -q ':40000 '; then
+    if (ss -tlnp 2>/dev/null || ss -tln 2>/dev/null || netstat -tlnp 2>/dev/null) | grep -q ':40000 '; then
         green_msg "WARP Socks5 安装成功！(127.0.0.1:40000)"
     else
         yellow_msg "安装完成，但未检测到 40000 端口。请手动检查 warp 服务状态。"
@@ -1436,7 +1441,7 @@ warp_switch_mode() {
         1|2|3)
             # 安装所需 WARP 组件
             if [ "$mc" = "1" ] || [ "$mc" = "3" ]; then
-                if ! ss -ntlp 2>/dev/null | grep -q ':40000 '; then
+                if ! (ss -tlnp 2>/dev/null || ss -tln 2>/dev/null || netstat -tlnp 2>/dev/null) | grep -q ':40000 '; then
                     yellow_msg "安装 WARP SOCKS5 模式..."
                     wget -N -q --no-check-certificate https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh -O /tmp/warp_menu.sh 2>/dev/null
                     [ -f /tmp/warp_menu.sh ] && { chmod +x /tmp/warp_menu.sh; bash /tmp/warp_menu.sh w; rm -f /tmp/warp_menu.sh; }
