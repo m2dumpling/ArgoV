@@ -102,6 +102,7 @@ systemctl() {
     fi
 }
 get_argo_domain() {
+    [ -n "$LAST_ARGO_DOMAIN" ] && { echo "$LAST_ARGO_DOMAIN"; return; }
     local d; [ -f "$TUNNEL_LOG" ] && for i in {1..5}; do
         d=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' "$TUNNEL_LOG" | tail -n 1)
         [ -n "$d" ] && break; sleep 2
@@ -161,7 +162,7 @@ load_conf() {
     VMESS_WS_PORT="${VMESS_WS_PORT:-8082}"
     CDN_PORT="${CDN_PORT:-443}"; CDN_DOMAIN="${CDN_DOMAIN:-$CDN_DEFAULT}"
     ARGO_MODE="${ARGO_MODE:-temp}"; ARGO_AUTH="${ARGO_AUTH:-}"
-    ARGO_FIXED_DOMAIN="${ARGO_FIXED_DOMAIN:-}"; UUID_CUSTOM="${UUID_CUSTOM:-}"
+    ARGO_FIXED_DOMAIN="${ARGO_FIXED_DOMAIN:-}"; UUID_CUSTOM="${UUID_CUSTOM:-}"; LAST_ARGO_DOMAIN="${LAST_ARGO_DOMAIN:-}"
     REALITY_PORT="${REALITY_PORT:-0}"; SS_PORT="${SS_PORT:-0}"
     REALITY_SNI="${REALITY_SNI:-www.amazon.com}"; SS_METHOD="${SS_METHOD:-aes-256-gcm}"
     ENABLE_REALITY="${ENABLE_REALITY:-0}"; ENABLE_SS="${ENABLE_SS:-0}"
@@ -180,7 +181,7 @@ save_conf() {
         save_var REALITY_SNI "$REALITY_SNI"; save_var SS_METHOD "$SS_METHOD"
         save_var ENABLE_REALITY "$ENABLE_REALITY"; save_var ENABLE_SS "$ENABLE_SS"
         save_var REALITY_PRIV "$REALITY_PRIV"; save_var REALITY_PUB "$REALITY_PUB"
-        save_var REALITY_SHORTID "$REALITY_SHORTID"
+        save_var REALITY_SHORTID "$REALITY_SHORTID"; save_var LAST_ARGO_DOMAIN "$LAST_ARGO_DOMAIN"
     } > "$USER_CONF"
 }
 
@@ -294,7 +295,7 @@ show_node() {
 #==============================================================================
 start_services() { yellow_msg "启动..."; systemctl start xray argox-tunnel 2>/dev/null; sleep 2; get_status; echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; green_msg "完成"; }
 stop_services()  { yellow_msg "停止..."; systemctl stop xray argox-tunnel 2>/dev/null; sleep 1; get_status; echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; red_msg "已停止"; }
-restart_services() { yellow_msg "重启..."; rm -f "$TUNNEL_LOG"; systemctl restart xray argox-tunnel 2>/dev/null; sleep 3; get_status; local d; d=$(get_argo_domain); echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; green_msg "完成"; [ -n "$d" ] && echo -e "  域名: ${purple}${d}${re}"; }
+restart_services() { yellow_msg "重启..."; rm -f "$TUNNEL_LOG"; systemctl restart xray argox-tunnel 2>/dev/null; sleep 3; get_status; local d; d=$(get_argo_domain); echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; green_msg "完成"; [ -n "$d" ] && { echo -e "  域名: ${purple}${d}${re}"; LAST_ARGO_DOMAIN="$d"; save_conf; }; }
 
 #==============================================================================
 # 优选域名
@@ -611,7 +612,8 @@ ARGOWRAP
     chmod +x "$SCRIPT_PATH"; save_conf
 
     local hd ip; [ "$ARGO_MODE" = "fixed-token" ] && hd="$ARGO_FIXED_DOMAIN" || hd=$(get_argo_domain)
-    [ -z "$hd" ] && [ "$ARGO_MODE" != "fixed-token" ] && { sleep 3; hd=$(get_argo_domain); }; ip=$(get_ip)
+    [ -z "$hd" ] && [ "$ARGO_MODE" != "fixed-token" ] && { sleep 3; hd=$(get_argo_domain); }
+    [ -n "$hd" ] && LAST_ARGO_DOMAIN="$hd" && save_conf; ip=$(get_ip)
 
     echo ""; echo -e " ${purple}╔══════════════════════════════════════════════════╗${re}"
     echo -e " ${purple}║${re}       ${white}🎉 部署成功 · ${NODE_NAME}${re}"
