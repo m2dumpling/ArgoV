@@ -1088,9 +1088,9 @@ warp_menu() {
         ip -6 addr show 2>/dev/null | grep -q 'wgcf\|Warp' && warp_v6_ok=1
 
         # 状态栏
-        if [ "$warp_socks_ok" = 0 ] && [ "$warp_v6_ok" = 0 ]; then
-            echo -e "  ${red}WARP 未安装 (SOCKS5 / IPv6 均不可用)${re}"
-        else
+            if [ "$warp_socks_ok" = 0 ] && [ "$warp_v6_ok" = 0 ]; then
+                echo -e "  ${yellow}WARP 待安装 — 选择 1 一键部署或 6 切换模式${re}"
+            else
             [ "$warp_socks_ok" = 1 ] && echo -e "  ${green}WARP SOCKS5 就绪 (127.0.0.1:40000)${re}"
             [ "$warp_v6_ok" = 1 ]    && echo -e "  ${green}WARP IPv6 就绪${re}"
         fi
@@ -1104,7 +1104,7 @@ warp_menu() {
             echo -e "  ${yellow}当前无分流域名${re}"
         fi
         echo ""
-        echo -e "  ${green}1${re}. 一键注入 Google/YouTube 默认域名组"
+        echo -e "  ${green}1${re}. 一键部署 (注入默认域名 + 安装 WARP SOCKS5)"
         echo -e "  ${green}2${re}. 手动添加自定义域名 (逗号分隔)"
         echo -e "  ${green}3${re}. 删除指定域名"
         echo -e "  ${green}4${re}. 查看/清空分流域名列表"
@@ -1116,16 +1116,31 @@ warp_menu() {
         read -p "  请选择: " wc
 
         case "$wc" in
-            1) warp_add_defaults ;;
+            1) warp_auto_install_socks; warp_add_defaults
+               [ "$(wc -l < "$WARP_DOMAIN_FILE" 2>/dev/null)" -gt 0 ] && warp_apply_routing ;;
             2) warp_add_custom ;;
             3) warp_remove_domain ;;
             4) warp_view_clear ;;
-            5) warp_apply_routing ;;
+            5) warp_auto_install_socks; warp_apply_routing ;;
             6) warp_switch_mode ;;
             0) return ;;
             *) red_msg "无效"; sleep 1 ;;
         esac
     done
+}
+
+# === 自动安装 WARP SOCKS5（如未安装）===
+warp_auto_install_socks() {
+    ss -ntlp 2>/dev/null | grep -q ':40000 ' && return 0
+    yellow_msg "WARP SOCKS5 未安装，正在自动部署..."
+    wget -N -q --no-check-certificate https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh -O /tmp/warp_menu.sh 2>/dev/null
+    if [ -f /tmp/warp_menu.sh ]; then
+        chmod +x /tmp/warp_menu.sh
+        bash /tmp/warp_menu.sh w
+        rm -f /tmp/warp_menu.sh
+    fi
+    sleep 3
+    ss -ntlp 2>/dev/null | grep -q ':40000 ' && green_msg "WARP SOCKS5 安装成功！(127.0.0.1:40000)" || red_msg "WARP 安装可能失败，请检查网络"
 }
 
 # === 安装 fscarmen WARP ===
@@ -1279,10 +1294,8 @@ warp_view_clear() {
 # === 核心：使用 Python3 安全改写 config.json，应用 WARP 分流 ===
 warp_apply_routing() {
     [ ! -f "$WARP_DOMAIN_FILE" ] || [ ! -s "$WARP_DOMAIN_FILE" ] && { yellow_msg "分流域名列表为空，请先添加域名。"; echo ""; read -p "  按回车返回..." -r; return; }
-    # 提示安装 WARP
-    if ! ss -ntlp 2>/dev/null | grep -q ':40000 ' && ! ip -6 addr show 2>/dev/null | grep -q 'wgcf\|Warp'; then
-        yellow_msg "WARP 未安装，请先通过选项 6 选择并安装。"; echo ""; read -p "  按回车返回..." -r; return
-    fi
+    # 自动安装 WARP（如未安装）
+    warp_auto_install_socks
 
     clear
     echo ""
