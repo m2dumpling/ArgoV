@@ -408,11 +408,15 @@ command_background=true
 pidfile=/var/run/argox-tunnel.pid
 EOF
         else
+            cat > "${WORK_DIR}/argox-tunnel.sh" << EOF
+#!/bin/sh
+exec ${WORK_DIR}/argo tunnel --url http://localhost:${ARGO_PORT} --no-autoupdate --edge-ip-version auto --protocol http2 >> ${TUNNEL_LOG} 2>&1
+EOF
+            chmod +x "${WORK_DIR}/argox-tunnel.sh"
             cat > /etc/init.d/argox-tunnel << EOF
 #!/sbin/openrc-run
 name=argox-tunnel
-command=/bin/sh
-command_args="-c '${WORK_DIR}/argo tunnel --url http://localhost:${ARGO_PORT} --no-autoupdate --edge-ip-version auto --protocol http2 >> ${TUNNEL_LOG} 2>&1'"
+command=${WORK_DIR}/argox-tunnel.sh
 command_background=true
 pidfile=/var/run/argox-tunnel.pid
 EOF
@@ -1645,7 +1649,7 @@ main_menu() {
             9) echo -ne "  ${red}⚠ 确定卸载? (y/n): ${re}"; read cf
                if [ "$cf" = "y" ] || [ "$cf" = "Y" ]; then
                    systemctl stop xray argox-tunnel 2>/dev/null; systemctl disable xray argox-tunnel 2>/dev/null
-                   rm -rf "$WORK_DIR"; rm -f /etc/systemd/system/xray.service /etc/systemd/system/argox-tunnel.service /etc/init.d/xray /etc/init.d/argox-tunnel "$SCRIPT_PATH"
+                   rm -rf "$WORK_DIR"; rm -f /etc/systemd/system/xray.service /etc/systemd/system/argox-tunnel.service /etc/init.d/xray /etc/init.d/argox-tunnel "$SCRIPT_PATH" "${WORK_DIR}/argox-tunnel.sh"
                    systemctl daemon-reload; green_msg "卸载完成。"; fi ;;
             w|W) warp_menu ;;
             0) clear; break ;;
