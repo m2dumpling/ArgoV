@@ -102,18 +102,18 @@ systemctl() {
     fi
 }
 get_argo_domain() {
-    # 1. 优先用持久化存储的域名
-    load_conf 2>/dev/null
+    # 1. 持久化存储
+    [ -f "$USER_CONF" ] && . "$USER_CONF"
     [ -n "$LAST_ARGO_DOMAIN" ] && [ "$ARGO_MODE" != "fixed-token" ] && { echo "$LAST_ARGO_DOMAIN"; return; }
-    # 2. 从日志文件提取
+    # 2. 日志文件 (sed 兼容 all systems)
     local d
     if [ -f "$TUNNEL_LOG" ]; then
-        d=$(grep -oP 'https://\K[^/\s]*trycloudflare\.com' "$TUNNEL_LOG" 2>/dev/null | tail -1)
+        d=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' "$TUNNEL_LOG" | tail -1)
         [ -n "$d" ] && { echo "$d"; return; }
     fi
-    # 3. journalctl 兜底
+    # 3. journalctl
     if [ "$IS_ALPINE" = 0 ]; then
-        d=$(journalctl -u argox-tunnel --no-pager -n 100 2>/dev/null | grep -oP 'https://\K[^/\s]*trycloudflare\.com' | tail -1)
+        d=$(journalctl -u argox-tunnel --no-pager -n 200 2>/dev/null | sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' | tail -1)
     fi
     echo "$d"
 }
@@ -583,8 +583,16 @@ bash "$T"; rm -f "$T"
 ARGOWRAP
     chmod +x "$SCRIPT_PATH"; save_conf
 
-    local hd ip; [ "$ARGO_MODE" = "fixed-token" ] && hd="$ARGO_FIXED_DOMAIN" || hd=$(get_argo_domain)
-    [ -z "$hd" ] && [ "$ARGO_MODE" != "fixed-token" ] && { sleep 3; hd=$(grep -oP 'https://\K[^/\s]*trycloudflare\.com' /etc/xray/argo.log 2>/dev/null | tail -1); }
+    local hd ip
+    if [ "$ARGO_MODE" = "fixed-token" ]; then hd="$ARGO_FIXED_DOMAIN"
+    else
+        # 重试提取域名（cloudflared 重启后需要时间输出 URL）
+        for wait in 2 3 5 8; do
+            sleep $wait
+            hd=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' /etc/xray/argo.log 2>/dev/null | tail -1)
+            [ -n "$hd" ] && break
+        done
+    fi
     [ -n "$hd" ] && LAST_ARGO_DOMAIN="$hd" && save_conf
     ip=$(get_ip)
 
