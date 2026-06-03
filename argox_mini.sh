@@ -1133,27 +1133,31 @@ warp_menu() {
 warp_auto_install_socks() {
     (ss -tlnp 2>/dev/null || ss -tln 2>/dev/null || netstat -tlnp 2>/dev/null) | grep -q ':40000 ' && return 0
     yellow_msg "WARP SOCKS5 未安装，正在自动部署..."
-    wget -N -q --no-check-certificate https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh -O /tmp/warp_menu.sh 2>/dev/null
+    echo ""
+    wget -N --no-check-certificate https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh -O /tmp/warp_menu.sh 2>/dev/null
     if [ -f /tmp/warp_menu.sh ]; then
         chmod +x /tmp/warp_menu.sh
-        bash /tmp/warp_menu.sh w
+        bash /tmp/warp_menu.sh w; local warp_rc=$?
         rm -f /tmp/warp_menu.sh
+    else
+        red_msg "下载 fscarmen WARP 脚本失败，请检查网络"
+        echo ""; read -p "  按回车继续..." -r; return 1
     fi
-    sleep 3
+    echo ""; sleep 3
     if (ss -tlnp 2>/dev/null || ss -tln 2>/dev/null || netstat -tlnp 2>/dev/null) | grep -q ':40000 '; then
         green_msg "WARP SOCKS5 安装成功！(127.0.0.1:40000)"
     else
-        red_msg "WARP 安装失败 — 40000 端口未监听"
-        # 尝试显示错误详情（兼容 systemd / OpenRC）
+        red_msg "WARP 安装失败 — 40000 端口未监听 (exit: $warp_rc)"
+        echo -e "  ${yellow}排查步骤:${re}"
         if [ "$IS_ALPINE" = 1 ]; then
-            rc-service wireproxy status 2>/dev/null
-            tail -20 /var/log/messages 2>/dev/null | grep -i 'wireproxy\|warp' | tail -3
+            echo -e "  ${cyan}1${re}. 检查 WireGuard 接口: ${green}ip link show wgcf${re}"
+            echo -e "  ${cyan}2${re}. 检查服务: ${green}rc-service -l | grep -i warp${re}"
+            echo -e "  ${cyan}3${re}. 安装依赖: ${green}apk add wireguard-tools${re}"
+            echo -e "  ${cyan}4${re}. 查看日志: ${green}tail -30 /var/log/messages | grep -i warp${re}"
         else
-            if systemctl is-active wireproxy &>/dev/null; then :;
-            elif systemctl list-units --type=service 2>/dev/null | grep -q wireproxy; then
-                yellow_msg "  wireproxy 服务存在但异常，查看: systemctl status wireproxy"
-                journalctl -u wireproxy --no-pager -n 3 2>/dev/null | tail -3
-            fi
+            echo -e "  ${cyan}1${re}. 服务状态: ${green}systemctl status wireproxy${re}"
+            echo -e "  ${cyan}2${re}. 查看日志: ${green}journalctl -u wireproxy -n 10${re}"
+            echo -e "  ${cyan}3${re}. 检查端口: ${green}ss -tlnp | grep 40000${re}"
         fi
         echo ""; read -p "  按回车继续..." -r
     fi
