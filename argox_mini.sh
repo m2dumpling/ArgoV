@@ -102,20 +102,13 @@ systemctl() {
     fi
 }
 get_argo_domain() {
-    # 1. 持久化存储
-    [ -f "$USER_CONF" ] && . "$USER_CONF"
-    [ -n "$LAST_ARGO_DOMAIN" ] && [ "$ARGO_MODE" != "fixed-token" ] && { echo "$LAST_ARGO_DOMAIN"; return; }
-    # 2. 日志文件 (sed 兼容 all systems)
-    local d
-    if [ -f "$TUNNEL_LOG" ]; then
-        d=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' "$TUNNEL_LOG" | tail -1)
-        [ -n "$d" ] && { echo "$d"; return; }
-    fi
-    # 3. journalctl
-    if [ "$IS_ALPINE" = 0 ]; then
-        d=$(journalctl -u argox-tunnel --no-pager -n 200 2>/dev/null | sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' | tail -1)
-    fi
-    echo "$d"
+    # 持久化兜底
+    [ -n "$LAST_ARGO_DOMAIN" ] && { echo "$LAST_ARGO_DOMAIN"; return; }
+    # 原始重试逻辑
+    local d; [ -f "$TUNNEL_LOG" ] && for i in {1..5}; do
+        d=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' "$TUNNEL_LOG" | tail -n 1)
+        [ -n "$d" ] && break; sleep 2
+    done; echo "$d"
 }
 get_uuid()   { jq -r '.inbounds[0].settings.clients[0].id // empty' "$CONFIG_FILE" 2>/dev/null; }
 get_cdn()    { [ -f "$CONFIG_FILE" ] && jq -r '.current_cdn // empty' "$CONFIG_FILE" 2>/dev/null || echo "$CDN_DOMAIN"; }
@@ -206,13 +199,10 @@ install_qrencode() {
 # 状态 & 摘要
 #==============================================================================
 get_status() {
-    if [ "$IS_ALPINE" = 1 ]; then
-        rc-service xray status 2>/dev/null | grep -q "started" && { XRAY_ST="${green}● 运行中${re}"; XRAY_RAW="running"; } || { XRAY_ST="${red}○ 已停止${re}"; XRAY_RAW="stopped"; }
-        rc-service argox-tunnel status 2>/dev/null | grep -q "started" && { TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"; } || { TUNNEL_ST="${red}○ 已停止${re}"; TUNNEL_RAW="stopped"; }
-    else
-        (systemctl is-active --quiet xray 2>/dev/null || pgrep -x xray &>/dev/null) && { XRAY_ST="${green}● 运行中${re}"; XRAY_RAW="running"; } || { XRAY_ST="${red}○ 已停止${re}"; XRAY_RAW="stopped"; }
-        (systemctl is-active --quiet argox-tunnel 2>/dev/null || pgrep -f 'argo.*tunnel.*url.*localhost' &>/dev/null) && { TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"; } || { TUNNEL_ST="${red}○ 已停止${re}"; TUNNEL_RAW="stopped"; }
-    fi
+    if systemctl is-active xray 2>/dev/null; then XRAY_ST="${green}● 运行中${re}"; XRAY_RAW="running"
+    else XRAY_ST="${red}○ 已停止${re}"; XRAY_RAW="stopped"; fi
+    if systemctl is-active argox-tunnel 2>/dev/null; then TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"
+    else TUNNEL_ST="${red}○ 已停止${re}"; TUNNEL_RAW="stopped"; fi
 }
 get_proto_summary() {
     local s="VL-Argo VM-Argo"
@@ -583,16 +573,8 @@ bash "$T"; rm -f "$T"
 ARGOWRAP
     chmod +x "$SCRIPT_PATH"; save_conf
 
-    local hd ip
-    if [ "$ARGO_MODE" = "fixed-token" ]; then hd="$ARGO_FIXED_DOMAIN"
-    else
-        # 重试提取域名（cloudflared 重启后需要时间输出 URL）
-        for wait in 2 3 5 8; do
-            sleep $wait
-            hd=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' /etc/xray/argo.log 2>/dev/null | tail -1)
-            [ -n "$hd" ] && break
-        done
-    fi
+    local hd ip; [ "$ARGO_MODE" = "fixed-token" ] && hd="$ARGO_FIXED_DOMAIN" || hd=$(get_argo_domain)
+    [ -z "$hd" ] && [ "$ARGO_MODE" != "fixed-token" ] && { sleep 3; hd=$(get_argo_domain); }
     [ -n "$hd" ] && LAST_ARGO_DOMAIN="$hd" && save_conf
     ip=$(get_ip)
 
