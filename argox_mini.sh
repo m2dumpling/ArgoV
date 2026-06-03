@@ -95,8 +95,8 @@ systemctl() {
         esac
     else
         case "$cmd" in
-            is-active) systemctl is-active --quiet "$1" 2>/dev/null ;;
-            daemon-reload) systemctl daemon-reload 2>/dev/null ;;
+            is-active) command systemctl is-active --quiet "$1" 2>/dev/null ;;
+            daemon-reload) command systemctl daemon-reload 2>/dev/null ;;
             *) systemctl "$cmd" "$@" 2>/dev/null ;;
         esac
     fi
