@@ -102,10 +102,19 @@ systemctl() {
     fi
 }
 get_argo_domain() {
-    local d; [ -f "$TUNNEL_LOG" ] && for i in {1..5}; do
-        d=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' "$TUNNEL_LOG" | tail -n 1)
-        [ -n "$d" ] && break; sleep 2
-    done; echo "$d"
+    local d
+    # 先从日志文件取
+    if [ -f "$TUNNEL_LOG" ]; then
+        for i in {1..3}; do
+            d=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' "$TUNNEL_LOG" | tail -n 1)
+            [ -n "$d" ] && { echo "$d"; return; }; sleep 1
+        done
+    fi
+    # 兜底：从 journalctl/system 日志里找
+    if [ "$IS_ALPINE" = 0 ]; then
+        d=$(journalctl -u argox-tunnel --no-pager -n 50 2>/dev/null | sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' | tail -n 1)
+    fi
+    echo "$d"
 }
 get_uuid()   { jq -r '.inbounds[0].settings.clients[0].id // empty' "$CONFIG_FILE" 2>/dev/null; }
 get_cdn()    { [ -f "$CONFIG_FILE" ] && jq -r '.current_cdn // empty' "$CONFIG_FILE" 2>/dev/null || echo "$CDN_DOMAIN"; }
@@ -196,10 +205,13 @@ install_qrencode() {
 # 状态 & 摘要
 #==============================================================================
 get_status() {
-    if systemctl is-active xray 2>/dev/null; then XRAY_ST="${green}● 运行中${re}"; XRAY_RAW="running"
-    else XRAY_ST="${red}○ 已停止${re}"; XRAY_RAW="stopped"; fi
-    if systemctl is-active argox-tunnel 2>/dev/null; then TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"
-    else TUNNEL_ST="${red}○ 已停止${re}"; TUNNEL_RAW="stopped"; fi
+    if [ "$IS_ALPINE" = 1 ]; then
+        rc-service xray status 2>/dev/null | grep -q "started" && { XRAY_ST="${green}● 运行中${re}"; XRAY_RAW="running"; } || { XRAY_ST="${red}○ 已停止${re}"; XRAY_RAW="stopped"; }
+        rc-service argox-tunnel status 2>/dev/null | grep -q "started" && { TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"; } || { TUNNEL_ST="${red}○ 已停止${re}"; TUNNEL_RAW="stopped"; }
+    else
+        systemctl is-active --quiet xray 2>/dev/null && { XRAY_ST="${green}● 运行中${re}"; XRAY_RAW="running"; } || { XRAY_ST="${red}○ 已停止${re}"; XRAY_RAW="stopped"; }
+        systemctl is-active --quiet argox-tunnel 2>/dev/null && { TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"; } || { TUNNEL_ST="${red}○ 已停止${re}"; TUNNEL_RAW="stopped"; }
+    fi
 }
 get_proto_summary() {
     local s="VL-Argo VM-Argo"
