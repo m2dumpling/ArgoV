@@ -513,7 +513,9 @@ interactive_install() {
            [ -n "$ARGO_FIXED_DOMAIN" ] && [ -n "$ARGO_AUTH" ] && ARGO_MODE="fixed-token" ;; esac; echo ""
 
     echo -e " ${white}━━━ ⑥ 内部端口 ━━━${re}"; echo -e "  ${cyan}Argo:${ARGO_PORT}  VLESS:${VLESS_WS_PORT}  VMess:${VMESS_WS_PORT}${re}"
-    read -p "  起始端口 [回车跳过]: " bp; [ -n "$bp" ] && { ARGO_PORT="$bp"; VLESS_WS_PORT=$((bp+1)); VMESS_WS_PORT=$((bp+2)); }; echo ""
+    read -p "  起始端口 [回车跳过]: " bp
+    if [ -n "$bp" ] && is_port "$bp"; then ARGO_PORT="$bp"; VLESS_WS_PORT=$((bp+1)); VMESS_WS_PORT=$((bp+2)); fi
+    echo ""
     select_protocols
     save_conf; do_install
 }
@@ -547,6 +549,12 @@ do_install() {
     install_qrencode; green_msg "  完成"
 
     yellow_msg "[4/6] 端口检测..."
+    # 防御：确保 Argo 三端口不同
+    is_port "$ARGO_PORT" || ARGO_PORT=8080
+    is_port "$VLESS_WS_PORT" || VLESS_WS_PORT=8081
+    is_port "$VMESS_WS_PORT" || VMESS_WS_PORT=8082
+    [ "$VLESS_WS_PORT" -eq "$ARGO_PORT" ] && VLESS_WS_PORT=$((ARGO_PORT+1))
+    [ "$VMESS_WS_PORT" -eq "$ARGO_PORT" ] || [ "$VMESS_WS_PORT" -eq "$VLESS_WS_PORT" ] && VMESS_WS_PORT=$((ARGO_PORT+2))
     port_in_use "$ARGO_PORT" && ARGO_PORT=$(find_free_port "$ARGO_PORT")
     port_in_use "$VLESS_WS_PORT" && VLESS_WS_PORT=$(find_free_port "$VLESS_WS_PORT")
     port_in_use "$VMESS_WS_PORT" && VMESS_WS_PORT=$(find_free_port "$VMESS_WS_PORT")
