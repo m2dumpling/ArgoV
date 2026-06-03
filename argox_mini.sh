@@ -97,7 +97,7 @@ systemctl() {
         case "$cmd" in
             is-active) command systemctl is-active --quiet "$1" 2>/dev/null ;;
             daemon-reload) command systemctl daemon-reload 2>/dev/null ;;
-            *) systemctl "$cmd" "$@" 2>/dev/null ;;
+            *) command systemctl "$cmd" "$@" 2>/dev/null ;;
         esac
     fi
 }
@@ -108,11 +108,36 @@ get_argo_domain() {
     done; echo "$d"
 }
 get_uuid()   { jq -r '.inbounds[0].settings.clients[0].id // empty' "$CONFIG_FILE" 2>/dev/null; }
-get_cdn()    { [ -f "$CONFIG_FILE" ] && jq -r '.current_cdn // empty' "$CONFIG_FILE" 2>/dev/null || echo "$CDN_DOMAIN"; }
-get_cdn_port() { [ -f "$CONFIG_FILE" ] && jq -r '.current_cdn_port // empty' "$CONFIG_FILE" 2>/dev/null || echo "$CDN_PORT"; }
+get_cdn() {
+    local v=""
+    [ -f "$CONFIG_FILE" ] && v=$(jq -r '.current_cdn // empty' "$CONFIG_FILE" 2>/dev/null)
+    [ -n "$v" ] && [ "$v" != "null" ] && echo "$v" || echo "$CDN_DOMAIN"
+}
+get_cdn_port() {
+    local v=""
+    [ -f "$CONFIG_FILE" ] && v=$(jq -r '.current_cdn_port // empty' "$CONFIG_FILE" 2>/dev/null)
+    [ -n "$v" ] && [ "$v" != "null" ] && echo "$v" || echo "$CDN_PORT"
+}
 get_ip() {
     local ip; ip=$(curl -s --max-time 2 ipv4.ip.sb 2>/dev/null)
     [ -z "$ip" ] && ip=$(curl -s --max-time 2 ifconfig.me 2>/dev/null); echo "$ip"
+}
+is_port() { [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
+save_var() { printf "%s=%q\n" "$1" "$2"; }
+json_array_from_file() {
+    local file="$1" py
+    py=$(command -v python3 || command -v python || true)
+    [ -z "$py" ] && { echo '[]'; return; }
+    "$py" - "$file" << 'PYEOF'
+import json, sys
+items = []
+with open(sys.argv[1], 'r', encoding='utf-8') as f:
+    for line in f:
+        item = line.strip()
+        if item and item not in items:
+            items.append(item)
+print(json.dumps(items, ensure_ascii=False))
+PYEOF
 }
 gen_reality_keys() {
     local keys; keys=($("${WORK_DIR}/xray" x25519 2>/dev/null | sed 's/.*://'))
@@ -144,19 +169,19 @@ load_conf() {
     REALITY_SHORTID="${REALITY_SHORTID:-}"
 }
 save_conf() {
-    cat > "$USER_CONF" << EOF
-# ArgoX-Mini — $(date '+%Y-%m-%d %H:%M:%S')
-NODE_NAME='${NODE_NAME}'
-ARGO_PORT='${ARGO_PORT}'; VLESS_WS_PORT='${VLESS_WS_PORT}'
-VMESS_WS_PORT='${VMESS_WS_PORT}'; CDN_PORT='${CDN_PORT}'
-CDN_DOMAIN='${CDN_DOMAIN}'; ARGO_MODE='${ARGO_MODE}'; ARGO_AUTH='${ARGO_AUTH}'
-ARGO_FIXED_DOMAIN='${ARGO_FIXED_DOMAIN}'; UUID_CUSTOM='${UUID_CUSTOM}'
-REALITY_PORT='${REALITY_PORT}'; SS_PORT='${SS_PORT}'
-REALITY_SNI='${REALITY_SNI}'; SS_METHOD='${SS_METHOD}'
-ENABLE_REALITY='${ENABLE_REALITY}'; ENABLE_SS='${ENABLE_SS}'
-REALITY_PRIV='${REALITY_PRIV}'; REALITY_PUB='${REALITY_PUB}'
-REALITY_SHORTID='${REALITY_SHORTID}'
-EOF
+    {
+        echo "# ArgoX-Mini — $(date '+%Y-%m-%d %H:%M:%S')"
+        save_var NODE_NAME "$NODE_NAME"
+        save_var ARGO_PORT "$ARGO_PORT"; save_var VLESS_WS_PORT "$VLESS_WS_PORT"
+        save_var VMESS_WS_PORT "$VMESS_WS_PORT"; save_var CDN_PORT "$CDN_PORT"
+        save_var CDN_DOMAIN "$CDN_DOMAIN"; save_var ARGO_MODE "$ARGO_MODE"; save_var ARGO_AUTH "$ARGO_AUTH"
+        save_var ARGO_FIXED_DOMAIN "$ARGO_FIXED_DOMAIN"; save_var UUID_CUSTOM "$UUID_CUSTOM"
+        save_var REALITY_PORT "$REALITY_PORT"; save_var SS_PORT "$SS_PORT"
+        save_var REALITY_SNI "$REALITY_SNI"; save_var SS_METHOD "$SS_METHOD"
+        save_var ENABLE_REALITY "$ENABLE_REALITY"; save_var ENABLE_SS "$ENABLE_SS"
+        save_var REALITY_PRIV "$REALITY_PRIV"; save_var REALITY_PUB "$REALITY_PUB"
+        save_var REALITY_SHORTID "$REALITY_SHORTID"
+    } > "$USER_CONF"
 }
 
 #==============================================================================
@@ -420,6 +445,7 @@ NoNewPrivileges=yes
 TimeoutStartSec=0
 ExecStart=${WORK_DIR}/argo tunnel --url http://localhost:${ARGO_PORT} --no-autoupdate --edge-ip-version auto --protocol http2
 StandardOutput=append:${TUNNEL_LOG}
+StandardError=append:${TUNNEL_LOG}
 Restart=on-failure
 RestartSec=5s
 [Install]
@@ -488,6 +514,7 @@ interactive_install() {
 
     echo -e " ${white}━━━ ⑥ 内部端口 ━━━${re}"; echo -e "  ${cyan}Argo:${ARGO_PORT}  VLESS:${VLESS_WS_PORT}  VMess:${VMESS_WS_PORT}${re}"
     read -p "  起始端口 [回车跳过]: " bp; [ -n "$bp" ] && { ARGO_PORT="$bp"; VLESS_WS_PORT=$((bp+1)); VMESS_WS_PORT=$((bp+2)); }; echo ""
+    select_protocols
     save_conf; do_install
 }
 
@@ -523,7 +550,12 @@ do_install() {
     port_in_use "$ARGO_PORT" && ARGO_PORT=$(find_free_port "$ARGO_PORT")
     port_in_use "$VLESS_WS_PORT" && VLESS_WS_PORT=$(find_free_port "$VLESS_WS_PORT")
     port_in_use "$VMESS_WS_PORT" && VMESS_WS_PORT=$(find_free_port "$VMESS_WS_PORT")
-    if [ "$ENABLE_REALITY" = 1 ]; then [ "$REALITY_PORT" = "0" ] && REALITY_PORT=$(shuf -i 10000-60000 -n 1); port_in_use "$REALITY_PORT" && REALITY_PORT=$(find_free_port "$REALITY_PORT"); gen_reality_keys; fi
+    if [ "$ENABLE_REALITY" = 1 ]; then
+        [ "$REALITY_PORT" = "0" ] && REALITY_PORT=$(shuf -i 10000-60000 -n 1)
+        port_in_use "$REALITY_PORT" && REALITY_PORT=$(find_free_port "$REALITY_PORT")
+        { [ -z "$REALITY_PRIV" ] || [ "$REALITY_PRIV" = "REPLACE_ME" ]; } && gen_reality_keys
+        [ -z "$REALITY_SHORTID" ] && gen_reality_shortid
+    fi
     if [ "$ENABLE_SS" = 1 ]; then [ "$SS_PORT" = "0" ] && SS_PORT=$(shuf -i 10000-60000 -n 1); port_in_use "$SS_PORT" && SS_PORT=$(find_free_port "$SS_PORT"); fi
 
     local UUID; UUID="${UUID_CUSTOM:-$(cat /proc/sys/kernel/random/uuid)}"
@@ -610,7 +642,7 @@ build_xray_config() {
     # 3. VMess WS
     inbounds+=',{"port":'"${VMESS_WS_PORT}"',"listen":"127.0.0.1","protocol":"vmess","tag":"vmess-ws","settings":{"clients":[{"id":"'"${uuid}"'","alterId":0}]},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vmess-argo"}}}'
     # 4. Reality (opt)
-    [ "$ENABLE_REALITY" = 1 ] && inbounds+=',{"port":'"${REALITY_PORT}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${REALITY_SNI}"':443","serverNames":["'"${REALITY_SNI}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":[""]}},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":true}}'
+    [ "$ENABLE_REALITY" = 1 ] && inbounds+=',{"port":'"${REALITY_PORT}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${REALITY_SNI}"':443","serverNames":["'"${REALITY_SNI}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":["'"${REALITY_SHORTID}"'"],"fingerprint":"chrome"}},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":true}}'
     # 5. SS (opt)
     [ "$ENABLE_SS" = 1 ] && inbounds+=',{"port":'"${SS_PORT}"',"listen":"0.0.0.0","protocol":"shadowsocks","tag":"ss","settings":{"method":"'"${SS_METHOD}"'","password":"'"${ss_pass}"'","network":"tcp,udp"}}'
     inbounds+=']'
@@ -1116,12 +1148,12 @@ warp_menu() {
         read -p "  请选择: " wc
 
         case "$wc" in
-            1) warp_auto_install_socks; warp_add_defaults
+            1) warp_auto_install_socks || continue; warp_add_defaults
                [ "$(wc -l < "$WARP_DOMAIN_FILE" 2>/dev/null)" -gt 0 ] && warp_apply_routing ;;
             2) warp_add_custom ;;
             3) warp_remove_domain ;;
             4) warp_view_clear ;;
-            5) warp_auto_install_socks; warp_apply_routing ;;
+            5) warp_auto_install_socks || continue; warp_apply_routing ;;
             6) warp_switch_mode ;;
             0) return ;;
             *) red_msg "无效"; sleep 1 ;;
@@ -1146,6 +1178,7 @@ warp_auto_install_socks() {
     echo ""; sleep 3
     if (ss -tlnp 2>/dev/null || ss -tln 2>/dev/null || netstat -tlnp 2>/dev/null) | grep -q ':40000 '; then
         green_msg "WARP SOCKS5 安装成功！(127.0.0.1:40000)"
+        return 0
     else
         red_msg "WARP 安装失败 — 40000 端口未监听 (exit: $warp_rc)"
         echo -e "  ${yellow}排查步骤:${re}"
@@ -1160,6 +1193,7 @@ warp_auto_install_socks() {
             echo -e "  ${cyan}3${re}. 检查端口: ${green}ss -tlnp | grep 40000${re}"
         fi
         echo ""; read -p "  按回车继续..." -r
+        return 1
     fi
 }
 
@@ -1315,7 +1349,7 @@ warp_view_clear() {
 warp_apply_routing() {
     [ ! -f "$WARP_DOMAIN_FILE" ] || [ ! -s "$WARP_DOMAIN_FILE" ] && { yellow_msg "分流域名列表为空，请先添加域名。"; echo ""; read -p "  按回车返回..." -r; return; }
     # 自动安装 WARP（如未安装）
-    warp_auto_install_socks
+    warp_auto_install_socks || return
 
     clear
     echo ""
@@ -1331,8 +1365,8 @@ warp_apply_routing() {
     fi
 
     # 读取域名列表
-    local domains_list; domains_list=$(sed 's/^/"/;s/$/"/' "$WARP_DOMAIN_FILE" | tr '\n' ',' | sed 's/,$//')
-    [ -z "$domains_list" ] && { yellow_msg "域名列表解析失败。"; return; }
+    local domains_json; domains_json=$(json_array_from_file "$WARP_DOMAIN_FILE")
+    [ "$domains_json" = "[]" ] && { yellow_msg "域名列表解析失败。"; return; }
 
     # 备份 config.json
     cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
@@ -1344,7 +1378,7 @@ warp_apply_routing() {
 import json, sys
 
 CONFIG = '${CONFIG_FILE}'
-DOMAINS = [${domains_list}]
+DOMAINS = ${domains_json}
 
 # 读取配置
 with open(CONFIG, 'r') as f:
@@ -1472,13 +1506,11 @@ warp_switch_mode() {
 warp_py_apply() {
     local mode="$1"
 
-    # 构建域名列表
-    local all_domains; all_domains=$(sed 's/^/"/;s/$/"/' "$WARP_DOMAIN_FILE" | tr '\n' ',' | sed 's/,$//')
-    # 智能分流：分离 Google 和 YouTube
-    local google_list yt_domains yt_list
-    google_list='"google.com","googleapis.com","googleusercontent.com","gstatic.com","ggpht.com","google-analytics.com","googletagmanager.com","googleadservices.com","googlesyndication.com","google.com.hk","google.cn"'
-    yt_domains="youtube.com ytimg.com googlevideo.com"
-    yt_list=$(for d in $yt_domains; do echo "\"$d\""; done | tr '\n' ',' | sed 's/,$//')
+    # 构建域名列表 (JSON-safe via json_array_from_file)
+    local all_domains; all_domains=$(json_array_from_file "$WARP_DOMAIN_FILE")
+    local google_list yt_list
+    google_list='["google.com","googleapis.com","googleusercontent.com","gstatic.com","ggpht.com","google-analytics.com","googletagmanager.com","googleadservices.com","googlesyndication.com","google.com.hk","google.cn"]'
+    yt_list='["youtube.com","ytimg.com","googlevideo.com"]'
 
     local label
     case "$mode" in
@@ -1505,21 +1537,21 @@ mode = '${mode}'
 if mode == 'socks5':
     # SOCKS5 — 全部走 warp-out
     config['outbounds'].append({"tag":"warp-out","protocol":"socks","settings":{"servers":[{"address":"127.0.0.1","port":40000}]}})
-    config['routing']['rules'].insert(0, {"type":"field","outboundTag":"warp-out","domain":[${all_domains}]})
+    config['routing']['rules'].insert(0, {"type":"field","outboundTag":"warp-out","domain":${all_domains}})
 
 elif mode == 'ipv6':
     # IPv6 — 全部走 v6-direct
     config['outbounds'].append({"tag":"v6-direct","protocol":"freedom","settings":{"domainStrategy":"UseIPv6"}})
-    config['routing']['rules'].insert(0, {"type":"field","outboundTag":"v6-direct","domain":[${all_domains}]})
+    config['routing']['rules'].insert(0, {"type":"field","outboundTag":"v6-direct","domain":${all_domains}})
 
 elif mode == 'smart':
     # 智能分流：Google → IPv6, YouTube → SOCKS5
     config['outbounds'].append({"tag":"v6-direct","protocol":"freedom","settings":{"domainStrategy":"UseIPv6"}})
     config['outbounds'].append({"tag":"warp-out","protocol":"socks","settings":{"servers":[{"address":"127.0.0.1","port":40000}]}})
     # Google → v6-direct (最高优先级)
-    config['routing']['rules'].insert(0, {"type":"field","outboundTag":"v6-direct","domain":[${google_list}]})
+    config['routing']['rules'].insert(0, {"type":"field","outboundTag":"v6-direct","domain":${google_list}})
     # YouTube → warp-out
-    config['routing']['rules'].insert(1, {"type":"field","outboundTag":"warp-out","domain":[${yt_list}]})
+    config['routing']['rules'].insert(1, {"type":"field","outboundTag":"warp-out","domain":${yt_list}})
 
 with open('${CONFIG_FILE}', 'w') as f:
     json.dump(config, f, indent=2, ensure_ascii=False)
