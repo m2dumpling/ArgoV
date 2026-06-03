@@ -102,9 +102,6 @@ systemctl() {
     fi
 }
 get_argo_domain() {
-    # 持久化兜底
-    [ -n "$LAST_ARGO_DOMAIN" ] && { echo "$LAST_ARGO_DOMAIN"; return; }
-    # 原始重试逻辑
     local d; [ -f "$TUNNEL_LOG" ] && for i in {1..5}; do
         d=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' "$TUNNEL_LOG" | tail -n 1)
         [ -n "$d" ] && break; sleep 2
@@ -139,7 +136,7 @@ load_conf() {
     VMESS_WS_PORT="${VMESS_WS_PORT:-8082}"
     CDN_PORT="${CDN_PORT:-443}"; CDN_DOMAIN="${CDN_DOMAIN:-$CDN_DEFAULT}"
     ARGO_MODE="${ARGO_MODE:-temp}"; ARGO_AUTH="${ARGO_AUTH:-}"
-    ARGO_FIXED_DOMAIN="${ARGO_FIXED_DOMAIN:-}"; UUID_CUSTOM="${UUID_CUSTOM:-}"; LAST_ARGO_DOMAIN="${LAST_ARGO_DOMAIN:-}"
+    ARGO_FIXED_DOMAIN="${ARGO_FIXED_DOMAIN:-}"; UUID_CUSTOM="${UUID_CUSTOM:-}"
     REALITY_PORT="${REALITY_PORT:-0}"; SS_PORT="${SS_PORT:-0}"
     REALITY_SNI="${REALITY_SNI:-www.amazon.com}"; SS_METHOD="${SS_METHOD:-aes-256-gcm}"
     ENABLE_REALITY="${ENABLE_REALITY:-0}"; ENABLE_SS="${ENABLE_SS:-0}"
@@ -153,7 +150,7 @@ NODE_NAME='${NODE_NAME}'
 ARGO_PORT='${ARGO_PORT}'; VLESS_WS_PORT='${VLESS_WS_PORT}'
 VMESS_WS_PORT='${VMESS_WS_PORT}'; CDN_PORT='${CDN_PORT}'
 CDN_DOMAIN='${CDN_DOMAIN}'; ARGO_MODE='${ARGO_MODE}'; ARGO_AUTH='${ARGO_AUTH}'
-ARGO_FIXED_DOMAIN='${ARGO_FIXED_DOMAIN}'; UUID_CUSTOM='${UUID_CUSTOM}'; LAST_ARGO_DOMAIN='${LAST_ARGO_DOMAIN}'
+ARGO_FIXED_DOMAIN='${ARGO_FIXED_DOMAIN}'; UUID_CUSTOM='${UUID_CUSTOM}'
 REALITY_PORT='${REALITY_PORT}'; SS_PORT='${SS_PORT}'
 REALITY_SNI='${REALITY_SNI}'; SS_METHOD='${SS_METHOD}'
 ENABLE_REALITY='${ENABLE_REALITY}'; ENABLE_SS='${ENABLE_SS}'
@@ -272,7 +269,7 @@ show_node() {
 #==============================================================================
 start_services() { yellow_msg "启动..."; systemctl start xray argox-tunnel 2>/dev/null; sleep 2; get_status; echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; green_msg "完成"; }
 stop_services()  { yellow_msg "停止..."; systemctl stop xray argox-tunnel 2>/dev/null; sleep 1; get_status; echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; red_msg "已停止"; }
-restart_services() { yellow_msg "重启..."; rm -f "$TUNNEL_LOG"; svc restart xray argox-tunnel 2>/dev/null; sleep 3; get_status; local d; d=$(get_argo_domain); echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; green_msg "完成"; [ -n "$d" ] && { echo -e "  域名: ${purple}${d}${re}"; LAST_ARGO_DOMAIN="$d"; save_conf; }; }
+restart_services() { yellow_msg "重启..."; rm -f "$TUNNEL_LOG"; systemctl restart xray argox-tunnel 2>/dev/null; sleep 3; get_status; local d; d=$(get_argo_domain); echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; green_msg "完成"; [ -n "$d" ] && echo -e "  域名: ${purple}${d}${re}"; }
 
 #==============================================================================
 # 优选域名
@@ -574,9 +571,7 @@ ARGOWRAP
     chmod +x "$SCRIPT_PATH"; save_conf
 
     local hd ip; [ "$ARGO_MODE" = "fixed-token" ] && hd="$ARGO_FIXED_DOMAIN" || hd=$(get_argo_domain)
-    [ -z "$hd" ] && [ "$ARGO_MODE" != "fixed-token" ] && { sleep 3; hd=$(get_argo_domain); }
-    [ -n "$hd" ] && LAST_ARGO_DOMAIN="$hd" && save_conf
-    ip=$(get_ip)
+    [ -z "$hd" ] && [ "$ARGO_MODE" != "fixed-token" ] && { sleep 3; hd=$(get_argo_domain); }; ip=$(get_ip)
 
     echo ""; echo -e " ${purple}╔══════════════════════════════════════════════════╗${re}"
     echo -e " ${purple}║${re}       ${white}🎉 部署成功 · ${NODE_NAME}${re}"
@@ -615,7 +610,7 @@ build_xray_config() {
     # 3. VMess WS
     inbounds+=',{"port":'"${VMESS_WS_PORT}"',"listen":"127.0.0.1","protocol":"vmess","tag":"vmess-ws","settings":{"clients":[{"id":"'"${uuid}"'","alterId":0}]},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vmess-argo"}}}'
     # 4. Reality (opt)
-    [ "$ENABLE_REALITY" = 1 ] && inbounds+=',{"port":'"${REALITY_PORT}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${REALITY_SNI}"':443","serverNames":["'"${REALITY_SNI}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":["'"${REALITY_SHORTID}"'"]}},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":true}}'
+    [ "$ENABLE_REALITY" = 1 ] && inbounds+=',{"port":'"${REALITY_PORT}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${REALITY_SNI}"':443","serverNames":["'"${REALITY_SNI}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":[""]}},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":true}}'
     # 5. SS (opt)
     [ "$ENABLE_SS" = 1 ] && inbounds+=',{"port":'"${SS_PORT}"',"listen":"0.0.0.0","protocol":"shadowsocks","tag":"ss","settings":{"method":"'"${SS_METHOD}"'","password":"'"${ss_pass}"'","network":"tcp,udp"}}'
     inbounds+=']'
@@ -864,8 +859,9 @@ edit_protocol() {
                    "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
             fi
             if [ "$nsid" = "new" ] || [ "$nsid" = "NEW" ] || [ -n "$nsid" ]; then
-                jq --arg sid "${REALITY_SHORTID:-}" \
-                   '(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.shortIds)=[$sid]' \
+                local sid_val; [ -n "$REALITY_SHORTID" ] && sid_val="\"$REALITY_SHORTID\"" || sid_val="\"\""
+                jq --argjson s "[${sid_val}]" \
+                   '(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.shortIds)=$s' \
                    "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
             fi
             if [ -n "$new_fp" ]; then
@@ -1023,23 +1019,12 @@ add_single_protocol() {
         reality)
             [ -z "$REALITY_PRIV" ] || [ "$REALITY_PRIV" = "REPLACE_ME" ] && gen_reality_keys
             REALITY_SHORTID="$r_sid"
-            new_inbound='{"port":'"${r_port}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${r_sni}"':443","serverNames":["'"${r_sni}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":["'"${REALITY_SHORTID}"'"],"fingerprint":"'"${r_fp}"'"}},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":true}}'
+            local sid_val="\"$REALITY_SHORTID\""
+            new_inbound='{"port":'"${r_port}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${r_sni}"':443","serverNames":["'"${r_sni}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":['"${sid_val}"'],"fingerprint":"'"${r_fp}"'"}},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":true}}'
             REALITY_PORT="$r_port"; REALITY_SNI="$r_sni"; ENABLE_REALITY=1 ;;
     esac
-    cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
-    if ! jq --argjson i "$new_inbound" '.inbounds+=[$i]' "$CONFIG_FILE">"${CONFIG_FILE}.tmp" 2>/dev/null; then
-        red_msg "JSON 注入失败，请检查输入参数。"
-        rm -f "${CONFIG_FILE}.tmp"
-        echo ""; read -p "  按回车返回..." -r; return
-    fi
-    mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-    save_conf; yellow_msg "验证配置...";
-    if ! "$WORK_DIR/xray" run -test -config "$CONFIG_FILE">/dev/null 2>&1; then
-        red_msg "Xray 配置验证失败！已回滚。"
-        cp "${CONFIG_FILE}.bak" "$CONFIG_FILE" 2>/dev/null
-        echo ""; read -p "  按回车返回..." -r; return
-    fi
-    yellow_msg "重启 Xray..."; systemctl restart xray 2>/dev/null; sleep 2; get_status; green_msg "完成"
+    jq --argjson i "$new_inbound" '.inbounds+=[$i]' "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+    save_conf; yellow_msg "重启 Xray..."; systemctl restart xray 2>/dev/null; sleep 2; get_status; green_msg "完成"
 
     echo ""; echo -e " ${white}━━━ 链接 ━━━${re}"; echo ""
     local ip; ip=$(get_ip)
