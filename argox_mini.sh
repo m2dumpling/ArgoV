@@ -610,7 +610,7 @@ build_xray_config() {
     # 3. VMess WS
     inbounds+=',{"port":'"${VMESS_WS_PORT}"',"listen":"127.0.0.1","protocol":"vmess","tag":"vmess-ws","settings":{"clients":[{"id":"'"${uuid}"'","alterId":0}]},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vmess-argo"}}}'
     # 4. Reality (opt)
-    [ "$ENABLE_REALITY" = 1 ] && inbounds+=',{"port":'"${REALITY_PORT}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${REALITY_SNI}"':443","serverNames":["'"${REALITY_SNI}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":[""]}},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":true}}'
+    [ "$ENABLE_REALITY" = 1 ] && inbounds+=',{"port":'"${REALITY_PORT}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${REALITY_SNI}"':443","serverNames":["'"${REALITY_SNI}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":["'"${REALITY_SHORTID}"'"]}},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":true}}'
     # 5. SS (opt)
     [ "$ENABLE_SS" = 1 ] && inbounds+=',{"port":'"${SS_PORT}"',"listen":"0.0.0.0","protocol":"shadowsocks","tag":"ss","settings":{"method":"'"${SS_METHOD}"'","password":"'"${ss_pass}"'","network":"tcp,udp"}}'
     inbounds+=']'
@@ -859,9 +859,8 @@ edit_protocol() {
                    "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
             fi
             if [ "$nsid" = "new" ] || [ "$nsid" = "NEW" ] || [ -n "$nsid" ]; then
-                local sid_val; [ -n "$REALITY_SHORTID" ] && sid_val="\"$REALITY_SHORTID\"" || sid_val="\"\""
-                jq --argjson s "[${sid_val}]" \
-                   '(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.shortIds)=$s' \
+                jq --arg sid "${REALITY_SHORTID:-}" \
+                   '(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.shortIds)=[$sid]' \
                    "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
             fi
             if [ -n "$new_fp" ]; then
@@ -1019,12 +1018,23 @@ add_single_protocol() {
         reality)
             [ -z "$REALITY_PRIV" ] || [ "$REALITY_PRIV" = "REPLACE_ME" ] && gen_reality_keys
             REALITY_SHORTID="$r_sid"
-            local sid_val="\"$REALITY_SHORTID\""
-            new_inbound='{"port":'"${r_port}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${r_sni}"':443","serverNames":["'"${r_sni}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":['"${sid_val}"'],"fingerprint":"'"${r_fp}"'"}},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":true}}'
+            new_inbound='{"port":'"${r_port}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${r_sni}"':443","serverNames":["'"${r_sni}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":["'"${REALITY_SHORTID}"'"],"fingerprint":"'"${r_fp}"'"}},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":true}}'
             REALITY_PORT="$r_port"; REALITY_SNI="$r_sni"; ENABLE_REALITY=1 ;;
     esac
-    jq --argjson i "$new_inbound" '.inbounds+=[$i]' "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-    save_conf; yellow_msg "重启 Xray..."; systemctl restart xray 2>/dev/null; sleep 2; get_status; green_msg "完成"
+    cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
+    if ! jq --argjson i "$new_inbound" '.inbounds+=[$i]' "$CONFIG_FILE">"${CONFIG_FILE}.tmp" 2>/dev/null; then
+        red_msg "JSON 注入失败，请检查输入参数。"
+        rm -f "${CONFIG_FILE}.tmp"
+        echo ""; read -p "  按回车返回..." -r; return
+    fi
+    mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+    save_conf; yellow_msg "验证配置...";
+    if ! "$WORK_DIR/xray" run -test -config "$CONFIG_FILE">/dev/null 2>&1; then
+        red_msg "Xray 配置验证失败！已回滚。"
+        cp "${CONFIG_FILE}.bak" "$CONFIG_FILE" 2>/dev/null
+        echo ""; read -p "  按回车返回..." -r; return
+    fi
+    yellow_msg "重启 Xray..."; systemctl restart xray 2>/dev/null; sleep 2; get_status; green_msg "完成"
 
     echo ""; echo -e " ${white}━━━ 链接 ━━━${re}"; echo ""
     local ip; ip=$(get_ip)
