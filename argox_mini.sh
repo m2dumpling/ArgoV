@@ -1140,7 +1140,18 @@ warp_auto_install_socks() {
         rm -f /tmp/warp_menu.sh
     fi
     sleep 3
-    ss -ntlp 2>/dev/null | grep -q ':40000 ' && green_msg "WARP SOCKS5 安装成功！(127.0.0.1:40000)" || red_msg "WARP 安装可能失败，请检查网络"
+    if ss -ntlp 2>/dev/null | grep -q ':40000 '; then
+        green_msg "WARP SOCKS5 安装成功！(127.0.0.1:40000)"
+    else
+        red_msg "WARP 安装失败 — 40000 端口未监听"
+        if systemctl is-active wireproxy &>/dev/null; then
+            :
+        elif systemctl list-units --type=service 2>/dev/null | grep -q wireproxy; then
+            yellow_msg "  wireproxy 服务存在但异常，执行: systemctl status wireproxy 查看原因"
+            journalctl -u wireproxy --no-pager -n 3 2>/dev/null | tail -3
+        fi
+        echo ""; read -p "  按回车继续..." -r
+    fi
 }
 
 # === 安装 fscarmen WARP ===
