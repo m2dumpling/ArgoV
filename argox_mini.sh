@@ -517,6 +517,7 @@ interactive_install() {
     read -p "  起始端口 [回车跳过]: " bp
     if [ -n "$bp" ] && is_port "$bp"; then ARGO_PORT="$bp"; VLESS_WS_PORT=$((bp+1)); VMESS_WS_PORT=$((bp+2)); fi
     echo ""
+    echo -e " ${white}━━━ ⑦ 额外协议（可选）━━━${re}"
     select_protocols
     save_conf; do_install
 }
