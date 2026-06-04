@@ -381,7 +381,8 @@ show_node() {
         echo ""
         echo -e "  ${yellow}① VLESS${re}  ${green}$(gen_vless_link "$uuid" "$hd" "$cd" "$cp")${re}\n"
         echo -e "  ${yellow}② VMess${re}  ${green}$(gen_vmess_link "$uuid" "$hd" "$cd" "$cp")${re}\n"
-        show_qr "$(gen_vless_link "$uuid" "$hd" "$cd" "$cp")"
+        load_conf 2>/dev/null; local su=""; [ -n "$SUB_PORT" ] && [ "$SUB_PORT" != "0" ] && [ -n "$SUB_PATH" ] && su="http://${ip}:${SUB_PORT}${SUB_PATH}"
+        show_qr "${su:-$(gen_vless_link "$uuid" "$hd" "$cd" "$cp")}"
     fi
 
     if grep -qE '"tag"[[:space:]]*:[[:space:]]*"reality"' "$CONFIG_FILE" 2>/dev/null && [ -n "$ip" ]; then
@@ -410,7 +411,7 @@ show_node() {
 
     echo -e "  ${yellow}💡${re} 复制链接 → 客户端导入    菜单 2 换线路 | 菜单 3 改配置"
     load_conf 2>/dev/null
-    [ -n "$SUB_PORT" ] && [ "$SUB_PORT" != "0" ] && [ -n "$SUB_PATH" ] && [ -n "$ip" ] && echo -e "  ${cyan}📡 订阅${re}: ${green}http://${ip}:${SUB_PORT}${SUB_PATH}${re} (重启后自动更新)"
+    [ -n "$SUB_PORT" ] && [ "$SUB_PORT" != "0" ] && [ -n "$SUB_PATH" ] && [ -n "$ip" ] && { echo ""; echo -e "  ${purple}━━━ 📡 订阅链接 ━━━${re}"; echo -e "  ${white}http://${ip}:${SUB_PORT}${SUB_PATH}${re}"; echo -e "  ${yellow}💡 客户端填入 → 更新订阅 → 全部节点一键导入，重启自动刷新域名${re}"; }
 }
 
 #==============================================================================
@@ -788,7 +789,8 @@ ARGOWRAP
         echo -e "  ${white}── Argo (无需开放端口) ──${re}\n"
         echo -e "  ${yellow}VLESS${re} ${green}$(gen_vless_link "$UUID" "$hd" "$CDN_DOMAIN" "$CDN_PORT")${re}\n"
         echo -e "  ${yellow}VMess${re} ${green}$(gen_vmess_link "$UUID" "$hd" "$CDN_DOMAIN" "$CDN_PORT")${re}\n"
-        show_qr "$(gen_vless_link "$UUID" "$hd" "$CDN_DOMAIN" "$CDN_PORT")"
+        local su=""; [ -n "$SUB_PORT" ] && [ "$SUB_PORT" != "0" ] && [ -n "$ip" ] && su="http://${ip}:${SUB_PORT}${SUB_PATH}"
+        show_qr "${su:-$(gen_vless_link "$UUID" "$hd" "$CDN_DOMAIN" "$CDN_PORT")}"
     fi
     if [ "$ENABLE_REALITY" = 1 ] && [ -n "$ip" ]; then
         echo -e "  ${white}── Reality (端口 ${REALITY_PORT}) ──${re}\n"
