@@ -29,6 +29,8 @@ VMESS_WS_PORT="${VMESS_WS_PORT:-8082}"
 CDN_PORT="${CDN_PORT:-443}"
 REALITY_PORT="${REALITY_PORT:-0}"
 SS_PORT="${SS_PORT:-0}"
+SUB_PORT="${SUB_PORT:-0}"
+SUB_PATH="${SUB_PATH:-}"
 
 # --- 节点名称 ---
 NODE_NAME="${NODE_NAME:-ArgoX-Mini}"
@@ -164,6 +166,7 @@ load_conf() {
     ARGO_MODE="${ARGO_MODE:-temp}"; ARGO_AUTH="${ARGO_AUTH:-}"
     ARGO_FIXED_DOMAIN="${ARGO_FIXED_DOMAIN:-}"; UUID_CUSTOM="${UUID_CUSTOM:-}"; LAST_ARGO_DOMAIN="${LAST_ARGO_DOMAIN:-}"
     REALITY_PORT="${REALITY_PORT:-0}"; SS_PORT="${SS_PORT:-0}"
+    SUB_PORT="${SUB_PORT:-0}"; SUB_PATH="${SUB_PATH:-}"
     REALITY_SNI="${REALITY_SNI:-www.amazon.com}"; SS_METHOD="${SS_METHOD:-aes-256-gcm}"
     ENABLE_REALITY="${ENABLE_REALITY:-0}"; ENABLE_SS="${ENABLE_SS:-0}"
     REALITY_PRIV="${REALITY_PRIV:-}"; REALITY_PUB="${REALITY_PUB:-}"
@@ -177,7 +180,7 @@ save_conf() {
         save_var VMESS_WS_PORT "$VMESS_WS_PORT"; save_var CDN_PORT "$CDN_PORT"
         save_var CDN_DOMAIN "$CDN_DOMAIN"; save_var ARGO_MODE "$ARGO_MODE"; save_var ARGO_AUTH "$ARGO_AUTH"
         save_var ARGO_FIXED_DOMAIN "$ARGO_FIXED_DOMAIN"; save_var UUID_CUSTOM "$UUID_CUSTOM"
-        save_var REALITY_PORT "$REALITY_PORT"; save_var SS_PORT "$SS_PORT"
+        save_var REALITY_PORT "$REALITY_PORT"; save_var SS_PORT "$SS_PORT"; save_var SUB_PORT "$SUB_PORT"; save_var SUB_PATH "$SUB_PATH"
         save_var REALITY_SNI "$REALITY_SNI"; save_var SS_METHOD "$SS_METHOD"
         save_var ENABLE_REALITY "$ENABLE_REALITY"; save_var ENABLE_SS "$ENABLE_SS"
         save_var REALITY_PRIV "$REALITY_PRIV"; save_var REALITY_PUB "$REALITY_PUB"
@@ -206,6 +209,37 @@ gen_reality_link() {
     printf '%s' "vless://$1@$2:$3?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=$4&pbk=$5&fp=${fp}${sid}#${7:-${NODE_NAME}-Reality}"
 }
 
+# --- 订阅生成（所有已安装协议）---
+gen_subscription() {
+    load_conf 2>/dev/null
+    local uuid hd cd cp ip links
+    uuid=$(get_uuid); hd=$(get_argo_domain); cd=$(get_cdn); cp=$(get_cdn_port); ip=$(get_ip)
+    [ "$ARGO_MODE" = "fixed-token" ] && hd="$ARGO_FIXED_DOMAIN"
+
+    # Argo 协议（动态域名）
+    if [ -n "$hd" ]; then
+        links+=$(gen_vless_link "$uuid" "$hd" "$cd" "$cp")$'\n'
+        links+=$(gen_vmess_link "$uuid" "$hd" "$cd" "$cp")$'\n'
+    fi
+    # Reality
+    if grep -q '"tag":"reality"' "$CONFIG_FILE" 2>/dev/null; then
+        local rp rs rport rpub
+        rport=$(jq -r '.inbounds[]|select(.tag=="reality")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
+        rs=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames[0]//empty' "$CONFIG_FILE" 2>/dev/null)
+        rpub=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.publicKey//empty' "$CONFIG_FILE" 2>/dev/null)
+        [ -n "$rport" ] && [ -n "$ip" ] && links+=$(gen_reality_link "$uuid" "$ip" "$rport" "$rs" "$rpub")$'\n'
+    fi
+    # Shadowsocks
+    if grep -q '"shadowsocks"' "$CONFIG_FILE" 2>/dev/null; then
+        local sp sm sport
+        sport=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
+        sm=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.settings.method//empty' "$CONFIG_FILE" 2>/dev/null)
+        sp=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.settings.password//empty' "$CONFIG_FILE" 2>/dev/null)
+        [ -n "$sport" ] && [ -n "$ip" ] && links+=$(gen_ss_link "$sm" "$sp" "$ip" "$sport")$'\n'
+    fi
+    printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n'
+}
+
 show_qr() {
     local qr="${WORK_DIR}/qrencode"
     [ ! -f "$qr" ] && { yellow_msg "QR 工具未安装"; return 1; }
@@ -216,6 +250,113 @@ install_qrencode() {
     local qr="${WORK_DIR}/qrencode"; [ -f "$qr" ] && return 0
     local a; case "$(uname -m)" in x86_64) a="amd64" ;; aarch64|arm64) a="arm64" ;; *) return 1 ;; esac
     curl -sLo "$qr" "https://github.com/eooce/test/releases/download/${a}/qrencode-linux-${a}" 2>/dev/null; chmod +x "$qr" 2>/dev/null
+}
+
+#==============================================================================
+# 订阅服务器
+#==============================================================================
+start_sub_server() {
+    [ "$SUB_PORT" = "0" ] && SUB_PORT=$(find_free_port "$(shuf -i 20000-50000 -n 1)")
+    [ -z "$SUB_PATH" ] && SUB_PATH="/$(openssl rand -hex 8 2>/dev/null || printf '%08x%08x' $RANDOM $RANDOM)"
+    save_conf
+
+    local py; py=$(command -v python3 || command -v python || true)
+    [ -z "$py" ] && { yellow_msg "Python3 未安装，订阅跳过"; return 1; }
+
+    # 自包含 Python 订阅服务器
+    cat > "${WORK_DIR}/sub.py" << PYEOF
+import json, base64, os, subprocess, socket
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+CFG='/etc/xray/config.json'; LOG='/etc/xray/argo.log'; DOM=''
+
+def get_json(path, query):
+    try:
+        with open(CFG) as f: c=json.load(f)
+        return json.loads(subprocess.check_output(['jq', '-r', query], input=json.dumps(c).encode(), timeout=5).decode())
+    except: return ''
+
+def get_ip():
+    try: return subprocess.check_output(['curl','-s','--max-time','2','ipv4.ip.sb'], timeout=5).decode().strip()
+    except: return ''
+
+def get_domain():
+    try:
+        with open('/etc/xray/argox.conf') as f:
+            for ln in f:
+                if ln.startswith('LAST_ARGO_DOMAIN='):
+                    v=ln.strip().split('=',1)[1].strip("'")
+                    if v: return v
+        with open(LOG) as f:
+            for ln in f:
+                import re; m=re.search(r'https://([^/]*trycloudflare\\.com)', ln)
+                if m: return m.group(1)
+    except: pass
+    return ''
+
+def b64(s): return base64.b64encode(s.encode()).decode().replace('\\n','')
+
+class H(BaseHTTPRequestHandler):
+    def do_GET(s):
+        if s.path == '${SUB_PATH}':
+            try:
+                uuid=get_json(CFG,'.inbounds[0].settings.clients[0].id') or 'unknown'
+                cdn=get_json(CFG,'.current_cdn') or 'cdn.31514926.xyz'
+                cp=get_json(CFG,'.current_cdn_port') or '443'
+                hd=get_domain(); ip=get_ip(); name='$(echo "${NODE_NAME}" | sed "s/'/\\\\'/g")'
+                lines=[]
+                if hd:
+                    lines.append(f'vless://{uuid}@{cdn}:{cp}?encryption=none&security=tls&sni={hd}&type=ws&host={hd}&path=%2Fvless-argo%3Fed%3D2560#{name}-VLESS')
+                    j='{"v":"2","ps":"'+name+'-VMess","add":"'+cdn+'","port":"'+str(cp)+'","id":"'+uuid+'","aid":"0","scy":"none","net":"ws","type":"none","host":"'+hd+'","path":"/vmess-argo?ed=2560","tls":"tls","sni":"'+hd+'","alpn":"","fp":""}'
+                    lines.append('vmess://'+b64(j))
+                try:
+                    with open(CFG) as f: c=json.load(f)
+                    for ib in c.get('inbounds',[]):
+                        tag=ib.get('tag','')
+                        if tag=='reality' and ip:
+                            rs=ib.get('streamSettings',{}).get('realitySettings',{})
+                            sni=(rs.get('serverNames',[''])[0])
+                            pub=rs.get('publicKey',''); pt=ib.get('port','')
+                            lines.append(f'vless://{uuid}@{ip}:{pt}?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni={sni}&pbk={pub}&fp=chrome#{name}-Reality')
+                        if ib.get('protocol')=='shadowsocks' and ip:
+                            sm=ib.get('settings',{}).get('method','aes-256-gcm')
+                            sp=ib.get('settings',{}).get('password',uuid)
+                            pt=ib.get('port','')
+                            lines.append('ss://'+b64(f'{sm}:{sp}')+'@'+ip+':'+str(pt)+'#'+name+'-SS')
+                except: pass
+                s.send_response(200); s.send_header('Content-Type','text/plain')
+                s.send_header('Subscription-Userinfo','upload=0; download=0; total=0')
+                s.end_headers()
+                s.wfile.write(b64('\\n'.join(lines)).encode())
+            except: s.send_response(500); s.end_headers()
+        else: s.send_response(404); s.end_headers()
+    def log_message(s,*a): pass
+
+HTTPServer(('0.0.0.0',${SUB_PORT}),H).serve_forever()
+PYEOF
+
+    cat > /etc/systemd/system/argox-sub.service << EOF
+[Unit]
+Description=ArgoX Subscription Server
+After=network.target
+[Service]
+Type=simple
+ExecStart=$py ${WORK_DIR}/sub.py
+Restart=always
+RestartSec=10s
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable argox-sub 2>/dev/null || true
+    systemctl restart argox-sub 2>/dev/null || true
+}
+
+stop_sub_server() {
+    systemctl stop argox-sub 2>/dev/null
+    systemctl disable argox-sub 2>/dev/null
+    rm -f /etc/systemd/system/argox-sub.service "${WORK_DIR}/sub.py"
+    systemctl daemon-reload 2>/dev/null || true
 }
 
 #==============================================================================
@@ -288,6 +429,8 @@ show_node() {
     fi
 
     echo -e "  ${yellow}💡${re} 复制链接 → 客户端导入    菜单 2 换线路 | 菜单 3 改配置"
+    load_conf 2>/dev/null
+    [ -n "$SUB_PORT" ] && [ "$SUB_PORT" != "0" ] && [ -n "$SUB_PATH" ] && [ -n "$ip" ] && echo -e "  ${cyan}📡 订阅${re}: ${green}http://${ip}:${SUB_PORT}${SUB_PATH}${re} (重启后自动更新)"
 }
 
 #==============================================================================
@@ -633,6 +776,7 @@ ARGOWRAP
     local hd ip; [ "$ARGO_MODE" = "fixed-token" ] && hd="$ARGO_FIXED_DOMAIN" || hd=$(get_argo_domain)
     [ -z "$hd" ] && [ "$ARGO_MODE" != "fixed-token" ] && { sleep 3; hd=$(get_argo_domain); }
     [ -n "$hd" ] && LAST_ARGO_DOMAIN="$hd" && save_conf; ip=$(get_ip)
+    start_sub_server 2>/dev/null &
 
     echo ""; echo -e " ${purple}╔══════════════════════════════════════════════════╗${re}"
     echo -e " ${purple}║${re}       ${white}🎉 部署成功 · ${NODE_NAME}${re}"
@@ -652,6 +796,10 @@ ARGOWRAP
     if [ "$ENABLE_SS" = 1 ] && [ -n "$ip" ]; then
         echo -e "  ${white}── Shadowsocks (端口 ${SS_PORT}) ──${re}\n"
         echo -e "  ${green}$(gen_ss_link "$SS_METHOD" "$SS_PASS" "$ip" "$SS_PORT" "${NODE_NAME}-SS")${re}\n"
+    fi
+    if [ -n "$ip" ] && [ "$SUB_PORT" != "0" ] && [ -n "$SUB_PATH" ]; then
+        echo -e "  ${cyan}📡 订阅${re}: ${green}http://${ip}:${SUB_PORT}${SUB_PATH}${re}"
+        echo -e "  ${yellow}💡${re} 客户端填入订阅URL → 更新 → 所有协议自动导入"
     fi
     echo -e "  ${yellow}📋${re} argov    ${yellow}💡${re} 复制链接 → 客户端导入"
 }
@@ -1661,8 +1809,9 @@ main_menu() {
                clear; continue ;;
             9) echo -ne "  ${red}⚠ 确定卸载? (y/n): ${re}"; read cf
                if [ "$cf" = "y" ] || [ "$cf" = "Y" ]; then
+                   stop_sub_server 2>/dev/null
                    systemctl stop xray argox-tunnel 2>/dev/null; systemctl disable xray argox-tunnel 2>/dev/null
-                   rm -rf "$WORK_DIR"; rm -f /etc/systemd/system/xray.service /etc/systemd/system/argox-tunnel.service /etc/init.d/xray /etc/init.d/argox-tunnel "$SCRIPT_PATH" "${WORK_DIR}/argox-tunnel.sh"
+                   rm -rf "$WORK_DIR"; rm -f /etc/systemd/system/xray.service /etc/systemd/system/argox-tunnel.service /etc/systemd/system/argox-sub.service /etc/init.d/xray /etc/init.d/argox-tunnel "$SCRIPT_PATH" "${WORK_DIR}/argox-tunnel.sh"
                    systemctl daemon-reload; green_msg "卸载完成。"; fi ;;
             w|W) warp_menu ;;
             0) clear; break ;;
