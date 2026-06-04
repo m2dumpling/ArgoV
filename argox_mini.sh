@@ -262,12 +262,6 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 CFG='/etc/xray/config.json'; LOG='/etc/xray/argo.log'; DOM=''
 
-def get_json(path, query):
-    try:
-        with open(CFG) as f: c=json.load(f)
-        return json.loads(subprocess.check_output(['jq', '-r', query], input=json.dumps(c).encode(), timeout=5).decode())
-    except: return ''
-
 def get_ip():
     try: return subprocess.check_output(['curl','-s','--max-time','2','ipv4.ip.sb'], timeout=5).decode().strip()
     except: return ''
@@ -295,9 +289,10 @@ class H(BaseHTTPRequestHandler):
     def do_GET(s):
         if s.path == '${SUB_PATH}':
             try:
-                uuid=get_json(CFG,'.inbounds[0].settings.clients[0].id') or 'unknown'
-                cdn=get_json(CFG,'.current_cdn') or 'cdn.31514926.xyz'
-                cp=get_json(CFG,'.current_cdn_port') or '443'
+                with open(CFG) as f: c=json.load(f)
+                uuid=c.get('inbounds',[{}])[0].get('settings',{}).get('clients',[{}])[0].get('id','unknown')
+                cdn=c.get('current_cdn','cdn.31514926.xyz')
+                cp=str(c.get('current_cdn_port',443))
                 hd=get_domain(); ip=get_ip(); name='$(echo "${NODE_NAME}" | sed "s/'/\\\\'/g")'
                 lines=[]
                 if hd:
