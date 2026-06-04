@@ -260,7 +260,7 @@ start_sub_server() {
 
     # 自包含 Python 订阅服务器
     cat > "${WORK_DIR}/sub.py" << PYEOF
-import json, base64, os, subprocess, socket
+import json, base64, os, subprocess, socket, time, re, datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 CFG='/etc/xray/config.json'; LOG='/etc/xray/argo.log'; DOM=''
@@ -270,35 +270,40 @@ def get_ip():
     except: return ''
 
 def get_domain():
-    import time
-    for attempt in range(10):
-        try:
-            # 日志优先 — 始终是最新的隧道域名
-            with open(LOG) as f:
-                for ln in f:
-                    m=re.search(r'https://([^/]*trycloudflare\\.com)', ln)
-                    if m: return m.group(1)
-            # 持久化兜底
-            with open('/etc/xray/argox.conf') as f:
-                for ln in f:
-                    if ln.startswith('LAST_ARGO_DOMAIN='):
-                        v=ln.strip().split('=',1)[1].strip("'")
-                        if v: return v
-        except: pass
-        time.sleep(3)  # 等 tunnel 重连
+    try:
+        with open(LOG) as f:
+            for ln in f:
+                m=re.search(r'https://([^/]*trycloudflare\\.com)', ln)
+                if m: return m.group(1)
+        with open('/etc/xray/argox.conf') as f:
+            for ln in f:
+                if ln.startswith('LAST_ARGO_DOMAIN='):
+                    v=ln.strip().split('=',1)[1].strip("'")
+                    if v: return v
+    except: pass
     return ''
 
 def b64(s): return base64.b64encode(s.encode()).decode().replace('\\n','')
 
 class H(BaseHTTPRequestHandler):
+    cached_uuid=''; cached_cdn=''; cached_cp=''; cached_ip=''; cached_domain=''; cached_name=''
+    last_refresh=0
     def do_GET(s):
         if s.path == '${SUB_PATH}':
             try:
-                with open(CFG) as f: c=json.load(f)
-                uuid=c.get('inbounds',[{}])[0].get('settings',{}).get('clients',[{}])[0].get('id','unknown')
-                cdn=c.get('current_cdn','cdn.31514926.xyz')
-                cp=str(c.get('current_cdn_port',443))
-                hd=get_domain(); ip=get_ip(); name='$(echo "${NODE_NAME}" | sed "s/'/\\\\'/g")'
+                # 缓存读取（首次或超过5分钟才刷新）
+                now=time.time()
+                if not s.cached_uuid or now-s.last_refresh>300:
+                    with open(CFG) as f: c=json.load(f)
+                    s.cached_uuid=c.get('inbounds',[{}])[0].get('settings',{}).get('clients',[{}])[0].get('id','unknown')
+                    s.cached_cdn=c.get('current_cdn','cdn.31514926.xyz')
+                    s.cached_cp=str(c.get('current_cdn_port',443))
+                    s.cached_name='$(echo "${NODE_NAME}" | sed "s/'/\\\\'/g")'
+                    s.cached_ip=get_ip()
+                    s.cached_domain=get_domain()
+                    s.last_refresh=now
+                uuid=s.cached_uuid; cdn=s.cached_cdn; cp=s.cached_cp
+                name=s.cached_name; ip=s.cached_ip; hd=s.cached_domain
                 lines=[]
                 if hd:
                     lines.append(f'vless://{uuid}@{cdn}:{cp}?encryption=none&security=tls&sni={hd}&type=ws&host={hd}&path=%2Fvless-argo%3Fed%3D2560#{name}-VLESS')
