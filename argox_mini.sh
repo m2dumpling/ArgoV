@@ -588,24 +588,45 @@ EOF
 select_protocols() {
     while true; do
         clear
+        local sum="VLESS-Argo + VMess-Argo"
+        [ "$ENABLE_REALITY" = 1 ] && sum="$sum + Reality"
+        [ "$ENABLE_SS" = 1 ] && sum="$sum + Shadowsocks"
         echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
         echo -e " ${purple}║${re}     ${white}选择额外协议（可选）${re}                    ${purple}║${re}"
         echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
         echo ""
-        echo -e "  ${green}1${re}. VLESS Reality ${cyan}[$( [ "$ENABLE_REALITY" = 1 ] && echo "●" || echo "○" )]${re}"
-        echo -e "     XTLS Vision + Reality，需开放端口"
-        echo ""
-        echo -e "  ${green}2${re}. Shadowsocks ${cyan}[$( [ "$ENABLE_SS" = 1 ] && echo "●" || echo "○" )]${re}"
-        echo -e "     AEAD/2022 加密，需开放端口"
-        echo ""
         echo -e "  ${white}始终安装：VLESS-Argo + VMess-Argo${re}"
-        echo -e "  ${yellow}输序号切换，0 确认${re}"
+        echo ""
+        echo -e "  ${green}1${re}. VLESS Reality ${cyan}[$( [ "$ENABLE_REALITY" = 1 ] && echo "●● 已选" || echo "○○" )]${re}"
+        echo -e "     XTLS Vision + Reality，需开放端口，抗封锁"
+        echo ""
+        echo -e "  ${green}2${re}. Shadowsocks ${cyan}[$( [ "$ENABLE_SS" = 1 ] && echo "●● 已选" || echo "○○" )]${re}"
+        echo -e "     AEAD/2022 加密，需开放端口，轻量高速"
+        echo ""
+        echo -e "  ${yellow}📋 当前: ${green}${sum}${re}"
+        echo -e "  ${yellow}💡 输 1/2 切换勾选，输 0 进入端口配置${re}"
         echo -e " ${purple}────────────────────────────────────────${re}"
-        read -p "  (1-2 / 0=确认): " c
+        read -p "  (1/2=切换 / 0=下一步): " c
         case "$c" in
             1) ENABLE_REALITY=$((1-ENABLE_REALITY)); continue ;;
             2) ENABLE_SS=$((1-ENABLE_SS)); continue ;;
-            0) save_conf; return ;;
+            0)
+                echo ""
+                [ "$ENABLE_REALITY" = 1 ] && { local rp; rp=$(find_free_port "$(shuf -i 10000-60000 -n 1)"); read -p "  ${cyan}Reality 端口 [随机 ${rp}]: ${re}" ri; REALITY_PORT="${ri:-$rp}"; echo -e "  → ${green}${REALITY_PORT}${re}"; }
+                [ "$ENABLE_SS" = 1 ] && { local sp; sp=$(find_free_port "$(shuf -i 10000-60000 -n 1)"); read -p "  ${cyan}Shadowsocks 端口 [随机 ${sp}]: ${re}" si; SS_PORT="${si:-$sp}"; echo -e "  → ${green}${SS_PORT}${re}"; }
+                echo ""
+                echo -e "  ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
+                echo -e "  ${white}即将安装:${re}  Argo: VLESS+VMess"
+                [ "$ENABLE_REALITY" = 1 ] && echo -e "  Reality: 端口 ${green}${REALITY_PORT}${re}  (UUID/SNI/密钥 自动生成)"
+                [ "$ENABLE_SS" = 1 ] && echo -e "  Shadowsocks: 端口 ${green}${SS_PORT}${re}  (加密/密码 自动生成)"
+                echo -e "  ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
+                echo ""
+                echo -ne "  ${yellow}开始安装? (y/n/0=返回) [y]: ${re}"
+                read cf
+                [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "已取消。"; exit 0; }
+                [ "$cf" = "0" ] && continue
+                save_conf; return
+                ;;
             *) red_msg "无效"; sleep 1; continue ;;
         esac
     done
