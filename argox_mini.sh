@@ -212,29 +212,6 @@ gen_reality_link() {
     printf '%s' "vless://$1@$2:$3?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=$4&pbk=$5&fp=${fp}${sid}#${7:-${NODE_NAME}-Reality}"
 }
 
-# --- 订阅生成（所有已安装协议）---
-gen_subscription() {
-    load_conf 2>/dev/null
-    local uuid hd cd cp ip links
-    uuid=$(get_uuid); hd=$(get_argo_domain); cd=$(get_cdn); cp=$(get_cdn_port); ip=$(get_ip)
-    [ "$ARGO_MODE" = "fixed-token" ] && hd="$ARGO_FIXED_DOMAIN"
-
-    # Argo 协议（动态域名）
-    if [ -n "$hd" ]; then
-        links+=$(gen_vless_link "$uuid" "$hd" "$cd" "$cp")$'\n'
-        links+=$(gen_vmess_link "$uuid" "$hd" "$cd" "$cp")$'\n'
-    fi
-    # Reality
-    if grep -q '"tag":"reality"' "$CONFIG_FILE" 2>/dev/null; then
-        local rp rs rport rpub
-        rport=$(jq -r '.inbounds[]|select(.tag=="reality")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
-        rs=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames[0]//empty' "$CONFIG_FILE" 2>/dev/null)
-        rpub=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.publicKey//empty' "$CONFIG_FILE" 2>/dev/null)
-        [ -n "$rport" ] && [ -n "$ip" ] && links+=$(gen_reality_link "$uuid" "$ip" "$rport" "$rs" "$rpub")$'\n'
-    fi
-    printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n'
-}
-
 show_qr() {
     local qr="${WORK_DIR}/qrencode"
     [ ! -f "$qr" ] && { yellow_msg "QR 工具未安装"; return 1; }
@@ -251,12 +228,10 @@ install_qrencode() {
 #==============================================================================
 # 订阅服务器（极简：Bash 生成内容 → 文件 → Python serve 文件）
 #==============================================================================
-refresh_sub() { gen_subscription > "${WORK_DIR}/sub.txt" 2>/dev/null; }
-
 start_sub_server() {
     [ "$SUB_PORT" = "0" ] && SUB_PORT=$(find_free_port "$(shuf -i 20000-50000 -n 1)")
     [ -z "$SUB_PATH" ] && SUB_PATH="/$(openssl rand -hex 8 2>/dev/null || printf '%08x%08x' $RANDOM $RANDOM)"
-    save_conf; refresh_sub
+    save_conf; bash "${WORK_DIR}/sub_gen.sh" 2>/dev/null
 
     local py; py=$(command -v python3 || command -v python || true)
     [ -z "$py" ] && { yellow_msg "Python3 未安装，订阅跳过"; return 1; }
