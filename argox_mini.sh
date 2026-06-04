@@ -104,11 +104,14 @@ systemctl() {
     fi
 }
 get_argo_domain() {
-    [ -n "$LAST_ARGO_DOMAIN" ] && { echo "$LAST_ARGO_DOMAIN"; return; }
+    # 日志优先（始终是最新的隧道域名）
     local d; [ -f "$TUNNEL_LOG" ] && for i in {1..5}; do
         d=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' "$TUNNEL_LOG" | tail -n 1)
-        [ -n "$d" ] && break; sleep 2
-    done; echo "$d"
+        [ -n "$d" ] && { echo "$d"; return; }; sleep 2
+    done
+    # 持久化兜底
+    [ -n "$LAST_ARGO_DOMAIN" ] && { echo "$LAST_ARGO_DOMAIN"; return; }
+    echo "$d"
 }
 get_uuid()   { jq -r '.inbounds[0].settings.clients[0].id // empty' "$CONFIG_FILE" 2>/dev/null; }
 get_cdn() {
@@ -270,15 +273,17 @@ def get_domain():
     import time
     for attempt in range(10):
         try:
+            # 日志优先 — 始终是最新的隧道域名
+            with open(LOG) as f:
+                for ln in f:
+                    m=re.search(r'https://([^/]*trycloudflare\\.com)', ln)
+                    if m: return m.group(1)
+            # 持久化兜底
             with open('/etc/xray/argox.conf') as f:
                 for ln in f:
                     if ln.startswith('LAST_ARGO_DOMAIN='):
                         v=ln.strip().split('=',1)[1].strip("'")
                         if v: return v
-            with open(LOG) as f:
-                for ln in f:
-                    import re; m=re.search(r'https://([^/]*trycloudflare\\.com)', ln)
-                    if m: return m.group(1)
         except: pass
         time.sleep(3)  # 等 tunnel 重连
     return ''
