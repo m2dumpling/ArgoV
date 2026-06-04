@@ -612,8 +612,8 @@ select_protocols() {
             2) ENABLE_SS=$((1-ENABLE_SS)); continue ;;
             0)
                 echo ""
-                [ "$ENABLE_REALITY" = 1 ] && { local rp; rp=$(find_free_port "$(shuf -i 10000-60000 -n 1)"); read -p "  ${cyan}Reality 端口 [随机 ${rp}]: ${re}" ri; REALITY_PORT="${ri:-$rp}"; echo -e "  → ${green}${REALITY_PORT}${re}"; }
-                [ "$ENABLE_SS" = 1 ] && { local sp; sp=$(find_free_port "$(shuf -i 10000-60000 -n 1)"); read -p "  ${cyan}Shadowsocks 端口 [随机 ${sp}]: ${re}" si; SS_PORT="${si:-$sp}"; echo -e "  → ${green}${SS_PORT}${re}"; }
+                [ "$ENABLE_REALITY" = 1 ] && { local rp; rp=$(find_free_port "$(shuf -i 10000-60000 -n 1)"); echo -ne "  ${cyan}Reality 端口 [随机 ${rp}]: ${re}"; read ri; REALITY_PORT="${ri:-$rp}"; echo -e "  → ${green}${REALITY_PORT}${re}"; }
+                [ "$ENABLE_SS" = 1 ] && { local sp; sp=$(find_free_port "$(shuf -i 10000-60000 -n 1)"); echo -ne "  ${cyan}Shadowsocks 端口 [随机 ${sp}]: ${re}"; read si; SS_PORT="${si:-$sp}"; echo -e "  → ${green}${SS_PORT}${re}"; }
                 echo ""
                 echo -e "  ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
                 echo -e "  ${white}即将安装:${re}  Argo: VLESS+VMess"
