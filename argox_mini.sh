@@ -748,9 +748,8 @@ manage_protocols() {
             e3) if [ "$has_reality" = 1 ]; then edit_protocol "reality" "VLESS Reality"
                 elif [ "$has_ss" = 1 ]; then edit_protocol "ss" "Shadowsocks"; fi ;;
             e4) [ "$has_ss" = 1 ] && [ "$has_reality" = 1 ] && edit_protocol "ss" "Shadowsocks" ;;
-            a1) if [ "$has_reality" = 0 ]; then add_single_protocol "reality"
-                elif [ "$has_ss" = 0 ]; then add_single_protocol "ss"; fi ;;
-            a2) [ "$has_ss" = 0 ] && [ "$has_reality" = 1 ] && add_single_protocol "ss" ;;
+            a1) [ "$has_reality" = 0 ] && add_single_protocol "reality" ;;
+            a2) [ "$has_ss" = 0 ] && add_single_protocol "ss" ;;
             d|D) delete_protocol ;;
             *) red_msg "无效"; sleep 1; continue ;;
         esac
