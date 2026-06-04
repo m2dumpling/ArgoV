@@ -318,7 +318,20 @@ fi
 SUBEOF
     chmod +x "${WORK_DIR}/sub_gen.sh"
 
-    cat > /etc/systemd/system/argox-sub.service << EOF
+    if [ "$IS_ALPINE" = 1 ]; then
+        cat > /etc/init.d/argox-sub << EOF
+#!/sbin/openrc-run
+name=argox-sub
+command=$py
+command_args="${WORK_DIR}/sub.py"
+command_background=true
+pidfile=/var/run/argox-sub.pid
+EOF
+        chmod +x /etc/init.d/argox-sub
+        rc-update add argox-sub default 2>/dev/null || true
+        rc-service argox-sub restart 2>/dev/null || true
+    else
+        cat > /etc/systemd/system/argox-sub.service << EOF
 [Unit]
 Description=ArgoX Subscription Server
 After=network.target
@@ -330,14 +343,22 @@ RestartSec=10s
 [Install]
 WantedBy=multi-user.target
 EOF
-    systemctl daemon-reload 2>/dev/null || true
-    systemctl enable argox-sub 2>/dev/null || true
-    systemctl restart argox-sub 2>/dev/null || true
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl enable argox-sub 2>/dev/null || true
+        systemctl restart argox-sub 2>/dev/null || true
+    fi
 }
 
 stop_sub_server() {
-    systemctl stop argox-sub 2>/dev/null; systemctl disable argox-sub 2>/dev/null
-    rm -f /etc/systemd/system/argox-sub.service "${WORK_DIR}/sub.py" "${WORK_DIR}/sub_gen.sh" "${WORK_DIR}/sub.txt"
+    if [ "$IS_ALPINE" = 1 ]; then
+        rc-service argox-sub stop 2>/dev/null
+        rc-update del argox-sub default 2>/dev/null
+        rm -f /etc/init.d/argox-sub
+    else
+        systemctl stop argox-sub 2>/dev/null; systemctl disable argox-sub 2>/dev/null
+        rm -f /etc/systemd/system/argox-sub.service
+    fi
+    rm -f "${WORK_DIR}/sub.py" "${WORK_DIR}/sub_gen.sh" "${WORK_DIR}/sub.txt"
     systemctl daemon-reload 2>/dev/null || true
 }
 
