@@ -579,7 +579,21 @@ do_install() {
     green_msg "  完成"
 
     yellow_msg "[5/6] 生成配置..."
-    build_xray_config "$UUID" "$SS_PASS"; green_msg "  完成"
+    # 重装时保留已有 SS/Reality inbound（解耦 Argo 和可选协议）
+    local saved_inbounds=""
+    if [ -f "$CONFIG_FILE" ]; then
+        saved_inbounds=$(jq -c '[.inbounds[] | select(.tag=="reality" or .tag=="ss")]' "$CONFIG_FILE" 2>/dev/null)
+        [ "$saved_inbounds" = "[]" ] && saved_inbounds=""
+    fi
+    build_xray_config "$UUID" "$SS_PASS"
+    # 合并回已保存的 inbound
+    if [ -n "$saved_inbounds" ]; then
+        jq --argjson saved "$saved_inbounds" '.inbounds += $saved' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+        # 恢复 ENABLE 标志
+        echo "$saved_inbounds" | jq -e '.[] | select(.tag=="reality")' &>/dev/null && ENABLE_REALITY=1
+        echo "$saved_inbounds" | jq -e '.[] | select(.tag=="ss")'       &>/dev/null && ENABLE_SS=1
+    fi
+    green_msg "  完成"
 
     yellow_msg "[6/6] 启动..."
     if [ "$IS_ALPINE" = 1 ]; then
@@ -1626,7 +1640,7 @@ main_menu() {
         echo -e "  ${green}3${re}. 修改配置         ${cyan}a${re}. 管理节点 (添加/编辑/删除)"
         echo ""
         echo -e " ${purple}───────────────── 服务控制 ─────────────────${re}"
-        echo -e "  ${green}4${re}. 启动    ${red}5${re}. 停止    ${yellow}6${re}. 重启 (刷新域名)"
+        echo -e "  ${green}4${re}. 启动    ${red}5${re}. 停止    ${yellow}6${re}. 重启/恢复 (仅Argo,不动SS/Reality)"
         echo ""
         echo -e " ${purple}───────────────── 系统维护 ─────────────────${re}"
         echo -e "  ${yellow}7${re}. 重新安装 (保留配置)    ${cyan}8${re}. 更新    ${red}9${re}. 卸载"
