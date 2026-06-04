@@ -281,17 +281,20 @@ def get_ip():
     except: return ''
 
 def get_domain():
-    try:
-        with open('/etc/xray/argox.conf') as f:
-            for ln in f:
-                if ln.startswith('LAST_ARGO_DOMAIN='):
-                    v=ln.strip().split('=',1)[1].strip("'")
-                    if v: return v
-        with open(LOG) as f:
-            for ln in f:
-                import re; m=re.search(r'https://([^/]*trycloudflare\\.com)', ln)
-                if m: return m.group(1)
-    except: pass
+    import time
+    for attempt in range(10):
+        try:
+            with open('/etc/xray/argox.conf') as f:
+                for ln in f:
+                    if ln.startswith('LAST_ARGO_DOMAIN='):
+                        v=ln.strip().split('=',1)[1].strip("'")
+                        if v: return v
+            with open(LOG) as f:
+                for ln in f:
+                    import re; m=re.search(r'https://([^/]*trycloudflare\\.com)', ln)
+                    if m: return m.group(1)
+        except: pass
+        time.sleep(3)  # 等 tunnel 重连
     return ''
 
 def b64(s): return base64.b64encode(s.encode()).decode().replace('\\n','')
@@ -578,7 +581,7 @@ NoNewPrivileges=yes
 TimeoutStartSec=0
 ExecStart=${WORK_DIR}/argo tunnel --edge-ip-version auto --no-autoupdate run --token ${ARGO_AUTH}
 Restart=on-failure
-RestartSec=5s
+RestartSec=30s
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -595,7 +598,7 @@ ExecStart=${WORK_DIR}/argo tunnel --url http://localhost:${ARGO_PORT} --no-autou
 StandardOutput=append:${TUNNEL_LOG}
 StandardError=append:${TUNNEL_LOG}
 Restart=on-failure
-RestartSec=5s
+RestartSec=30s
 [Install]
 WantedBy=multi-user.target
 EOF
