@@ -248,6 +248,11 @@ start_sub_server() {
     [ -z "$SUB_PATH" ] && SUB_PATH="/${SUB_TOKEN}"
     save_conf; bash "${WORK_DIR}/sub_gen.sh" 2>/dev/null
 
+    # 自签证书（CF Full 模式需要）
+    if [ -n "$SUB_DOMAIN" ] && [ ! -f "${WORK_DIR}/sub_cert.pem" ]; then
+        openssl req -x509 -newkey rsa:2048 -keyout "${WORK_DIR}/sub_key.pem" -out "${WORK_DIR}/sub_cert.pem" -days 3650 -nodes -subj "/CN=${SUB_DOMAIN}" 2>/dev/null
+    fi
+
     local py; py=$(command -v python3 || command -v python || true)
     [ -z "$py" ] && { yellow_msg "Python3 未安装，订阅跳过"; return 1; }
 
@@ -271,7 +276,13 @@ class H(BaseHTTPRequestHandler):
             except: s.send_response(500); s.end_headers()
         else: s.send_response(404); s.end_headers()
     def log_message(s,*a): pass
-HTTPServer(('0.0.0.0',PORT),H).serve_forever()
+import ssl
+ctx=None
+try: ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain('${WORK_DIR}/sub_cert.pem','${WORK_DIR}/sub_key.pem')
+except: pass
+srv=HTTPServer(('0.0.0.0',PORT),H)
+if ctx: srv.socket=ctx.wrap_socket(srv.socket,server_side=True)
+srv.serve_forever()
 PYEOF
 
     # 刷新脚本：供 Python 调用，每次请求前更新订阅文件
