@@ -248,87 +248,68 @@ install_qrencode() {
 }
 
 #==============================================================================
-# 订阅服务器
 #==============================================================================
+# 订阅服务器（极简：Bash 生成内容 → 文件 → Python serve 文件）
+#==============================================================================
+refresh_sub() { gen_subscription > "${WORK_DIR}/sub.txt" 2>/dev/null; }
+
 start_sub_server() {
     [ "$SUB_PORT" = "0" ] && SUB_PORT=$(find_free_port "$(shuf -i 20000-50000 -n 1)")
     [ -z "$SUB_PATH" ] && SUB_PATH="/$(openssl rand -hex 8 2>/dev/null || printf '%08x%08x' $RANDOM $RANDOM)"
-    save_conf
+    save_conf; refresh_sub
 
     local py; py=$(command -v python3 || command -v python || true)
     [ -z "$py" ] && { yellow_msg "Python3 未安装，订阅跳过"; return 1; }
 
-    # 自包含 Python 订阅服务器
     cat > "${WORK_DIR}/sub.py" << PYEOF
-import json, base64, os, subprocess, socket, time, re, datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
-
-CFG='/etc/xray/config.json'; LOG='/etc/xray/argo.log'; DOM=''
-
-def get_ip():
-    try: return subprocess.check_output(['curl','-s','--max-time','2','ipv4.ip.sb'], timeout=5).decode().strip()
-    except: return ''
-
-def get_domain():
-    try:
-        with open(LOG) as f:
-            for ln in f:
-                m=re.search(r'https://([^/]*trycloudflare\\.com)', ln)
-                if m: return m.group(1)
-        with open('/etc/xray/argox.conf') as f:
-            for ln in f:
-                if ln.startswith('LAST_ARGO_DOMAIN='):
-                    v=ln.strip().split('=',1)[1].strip("'")
-                    if v: return v
-    except: pass
-    return ''
-
-def b64(s): return base64.b64encode(s.encode()).decode().replace('\\n','')
-
+import subprocess, os
+SUB_FILE='/etc/xray/sub.txt'; PORT=${SUB_PORT}
 class H(BaseHTTPRequestHandler):
-    cached_uuid=''; cached_cdn=''; cached_cp=''; cached_ip=''; cached_domain=''; cached_name=''
-    last_refresh=0
     def do_GET(s):
-        if s.path == '${SUB_PATH}':
+        if s.path=='${SUB_PATH}':
             try:
-                # 缓存读取（首次或超过5分钟才刷新）
-                now=time.time()
-                if not s.cached_uuid or now-s.last_refresh>300:
-                    with open(CFG) as f: c=json.load(f)
-                    s.cached_uuid=c.get('inbounds',[{}])[0].get('settings',{}).get('clients',[{}])[0].get('id','unknown')
-                    s.cached_cdn=c.get('current_cdn','cdn.31514926.xyz')
-                    s.cached_cp=str(c.get('current_cdn_port',443))
-                    s.cached_name='$(echo "${NODE_NAME}" | sed "s/'/\\\\'/g")'
-                    s.cached_ip=get_ip()
-                    s.cached_domain=get_domain()
-                    s.last_refresh=now
-                uuid=s.cached_uuid; cdn=s.cached_cdn; cp=s.cached_cp
-                name=s.cached_name; ip=s.cached_ip; hd=s.cached_domain
-                lines=[]
-                if hd:
-                    lines.append(f'vless://{uuid}@{cdn}:{cp}?encryption=none&security=tls&sni={hd}&type=ws&host={hd}&path=%2Fvless-argo%3Fed%3D2560#{name}-VLESS')
-                    j='{"v":"2","ps":"'+name+'-VMess","add":"'+cdn+'","port":"'+str(cp)+'","id":"'+uuid+'","aid":"0","scy":"none","net":"ws","type":"none","host":"'+hd+'","path":"/vmess-argo?ed=2560","tls":"tls","sni":"'+hd+'","alpn":"","fp":""}'
-                    lines.append('vmess://'+b64(j))
-                try:
-                    with open(CFG) as f: c=json.load(f)
-                    for ib in c.get('inbounds',[]):
-                        tag=ib.get('tag','')
-                        if tag=='reality' and ip:
-                            rs=ib.get('streamSettings',{}).get('realitySettings',{})
-                            sni=(rs.get('serverNames',[''])[0])
-                            pub=rs.get('publicKey',''); pt=ib.get('port','')
-                            lines.append(f'vless://{uuid}@{ip}:{pt}?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni={sni}&pbk={pub}&fp=chrome#{name}-Reality')
-                except: pass
-                s.send_response(200); s.send_header('Content-Type','text/plain')
-                s.send_header('Subscription-Userinfo','upload=0; download=0; total=0')
-                s.end_headers()
-                s.wfile.write(b64('\\n'.join(lines)).encode())
+                subprocess.run(['${WORK_DIR}/sub_gen.sh'],timeout=10)
+            except: pass
+            try:
+                with open(SUB_FILE,'rb') as f: data=f.read()
+                s.send_response(200); s.send_header('Content-Type','text/plain'); s.end_headers(); s.wfile.write(data)
             except: s.send_response(500); s.end_headers()
         else: s.send_response(404); s.end_headers()
     def log_message(s,*a): pass
-
-HTTPServer(('0.0.0.0',${SUB_PORT}),H).serve_forever()
+HTTPServer(('0.0.0.0',PORT),H).serve_forever()
 PYEOF
+
+    # 刷新脚本：供 Python 调用，每次请求前更新订阅文件
+    cat > "${WORK_DIR}/sub_gen.sh" << 'SUBEOF'
+#!/usr/bin/env bash
+CONFIG_FILE=/etc/xray/config.json; TUNNEL_LOG=/etc/xray/argo.log; USER_CONF=/etc/xray/argox.conf
+WORK_DIR=/etc/xray; CDN_DEFAULT=cdn.31514926.xyz
+[ -f "$USER_CONF" ] && . "$USER_CONF"
+NODE_NAME="${NODE_NAME:-ArgoX-Mini}"; ARGO_MODE="${ARGO_MODE:-temp}"; ARGO_FIXED_DOMAIN="${ARGO_FIXED_DOMAIN:-}"
+get_uuid() { jq -r '.inbounds[0].settings.clients[0].id//empty' "$CONFIG_FILE" 2>/dev/null; }
+get_cdn() { local v; v=$(jq -r '.current_cdn//empty' "$CONFIG_FILE" 2>/dev/null); [ -n "$v" ] && echo "$v" || echo "$CDN_DEFAULT"; }
+get_cdn_port() { local v; v=$(jq -r '.current_cdn_port//empty' "$CONFIG_FILE" 2>/dev/null); [ -n "$v" ] && echo "$v" || echo "$CDN_PORT"; }
+get_domain() { local d; [ -f "$TUNNEL_LOG" ] && for i in {1..3}; do d=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' "$TUNNEL_LOG"|tail -1); [ -n "$d" ] && echo "$d" && return; sleep 1; done; echo "$LAST_ARGO_DOMAIN"; }
+get_ip() { curl -s --max-time 2 ipv4.ip.sb 2>/dev/null; }
+b64() { printf '%s' "$1" | base64 -w0 2>/dev/null || printf '%s' "$1" | base64 | tr -d '\n'; }
+uuid=$(get_uuid); hd=$(get_domain); cd=$(get_cdn); cp=$(get_cdn_port); ip=$(get_ip)
+[ "$ARGO_MODE" = "fixed-token" ] && hd="$ARGO_FIXED_DOMAIN"
+links=""
+if [ -n "$hd" ]; then
+    links+="vless://${uuid}@${cd}:${cp}?encryption=none&security=tls&sni=${hd}&type=ws&host=${hd}&path=%2Fvless-argo%3Fed%3D2560#${NODE_NAME}-VLESS"$'\n'
+    j="{\"v\":\"2\",\"ps\":\"${NODE_NAME}-VMess\",\"add\":\"${cd}\",\"port\":\"${cp}\",\"id\":\"${uuid}\",\"aid\":\"0\",\"scy\":\"none\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${hd}\",\"path\":\"/vmess-argo?ed=2560\",\"tls\":\"tls\",\"sni\":\"${hd}\",\"alpn\":\"\",\"fp\":\"\"}"
+    links+="vmess://$(b64 "$j")"$'\n'
+fi
+if grep -q '"tag":"reality"' "$CONFIG_FILE" 2>/dev/null && [ -n "$ip" ]; then
+    rport=$(jq -r '.inbounds[]|select(.tag=="reality")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
+    rs=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames[0]//empty' "$CONFIG_FILE" 2>/dev/null)
+    rpub=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.publicKey//empty' "$CONFIG_FILE" 2>/dev/null)
+    [ -n "$rport" ] && links+="vless://${uuid}@${ip}:${rport}?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=${rs}&pbk=${rpub}&fp=chrome#${NODE_NAME}-Reality"$'\n'
+fi
+printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n' > "$WORK_DIR/sub.txt"
+SUBEOF
+    chmod +x "${WORK_DIR}/sub_gen.sh"
 
     cat > /etc/systemd/system/argox-sub.service << EOF
 [Unit]
@@ -348,9 +329,8 @@ EOF
 }
 
 stop_sub_server() {
-    systemctl stop argox-sub 2>/dev/null
-    systemctl disable argox-sub 2>/dev/null
-    rm -f /etc/systemd/system/argox-sub.service "${WORK_DIR}/sub.py"
+    systemctl stop argox-sub 2>/dev/null; systemctl disable argox-sub 2>/dev/null
+    rm -f /etc/systemd/system/argox-sub.service "${WORK_DIR}/sub.py" "${WORK_DIR}/sub_gen.sh" "${WORK_DIR}/sub.txt"
     systemctl daemon-reload 2>/dev/null || true
 }
 
