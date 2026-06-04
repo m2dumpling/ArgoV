@@ -448,8 +448,7 @@ After=network.target
 Type=simple
 NoNewPrivileges=yes
 TimeoutStartSec=0
-ExecStart=${WORK_DIR}/argo tunnel --url http://localhost:${ARGO_PORT} --no-autoupdate --edge-ip-version auto --protocol http2
-StandardOutput=append:${TUNNEL_LOG}
+ExecStart=${WORK_DIR}/argo tunnel --url http://localhost:${ARGO_PORT} --no-autoupdate --edge-ip-version autoStandardOutput=append:${TUNNEL_LOG}
 StandardError=append:${TUNNEL_LOG}
 Restart=on-failure
 RestartSec=5s
