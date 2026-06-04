@@ -403,14 +403,14 @@ rebuild_tunnel() {
 #!/sbin/openrc-run
 name=argox-tunnel
 command=${WORK_DIR}/argo
-command_args="tunnel --edge-ip-version auto --no-autoupdate --protocol http2 run --token ${ARGO_AUTH}"
+command_args="tunnel --edge-ip-version auto --no-autoupdate run --token ${ARGO_AUTH}"
 command_background=true
 pidfile=/var/run/argox-tunnel.pid
 EOF
         else
             cat > "${WORK_DIR}/argox-tunnel.sh" << EOF
 #!/bin/sh
-exec ${WORK_DIR}/argo tunnel --url http://localhost:${ARGO_PORT} --no-autoupdate --edge-ip-version auto --protocol http2 >> ${TUNNEL_LOG} 2>&1
+exec ${WORK_DIR}/argo tunnel --url http://localhost:${ARGO_PORT} --no-autoupdate --edge-ip-version auto >> ${TUNNEL_LOG} 2>&1
 EOF
             chmod +x "${WORK_DIR}/argox-tunnel.sh"
             cat > /etc/init.d/argox-tunnel << EOF
@@ -433,7 +433,7 @@ After=network.target
 Type=simple
 NoNewPrivileges=yes
 TimeoutStartSec=0
-ExecStart=${WORK_DIR}/argo tunnel --edge-ip-version auto --no-autoupdate --protocol http2 run --token ${ARGO_AUTH}
+ExecStart=${WORK_DIR}/argo tunnel --edge-ip-version auto --no-autoupdate run --token ${ARGO_AUTH}
 Restart=on-failure
 RestartSec=5s
 [Install]
@@ -448,7 +448,8 @@ After=network.target
 Type=simple
 NoNewPrivileges=yes
 TimeoutStartSec=0
-ExecStart=${WORK_DIR}/argo tunnel --url http://localhost:${ARGO_PORT} --no-autoupdate --edge-ip-version autoStandardOutput=append:${TUNNEL_LOG}
+ExecStart=${WORK_DIR}/argo tunnel --url http://localhost:${ARGO_PORT} --no-autoupdate --edge-ip-version auto
+StandardOutput=append:${TUNNEL_LOG}
 StandardError=append:${TUNNEL_LOG}
 Restart=on-failure
 RestartSec=5s
