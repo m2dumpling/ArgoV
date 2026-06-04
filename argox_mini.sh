@@ -234,14 +234,16 @@ install_qrencode() {
 get_sub_url() {
     local ip; ip=$(get_ip 2>/dev/null || echo "127.0.0.1")
     if [ -n "$SUB_DOMAIN" ]; then
-        echo "https://${SUB_DOMAIN}/sub?token=${SUB_TOKEN}"
+        echo "https://${SUB_DOMAIN}:${SUB_PORT}/sub?token=${SUB_TOKEN}"
     else
         echo "$(get_sub_url)"
     fi
 }
 
 start_sub_server() {
-    [ "$SUB_PORT" = "0" ] && SUB_PORT=$(find_free_port "$(shuf -i 20000-50000 -n 1)")
+    if [ "$SUB_PORT" = "0" ]; then
+        [ -n "$SUB_DOMAIN" ] && SUB_PORT=2053 || SUB_PORT=$(find_free_port "$(shuf -i 20000-50000 -n 1)")
+    fi
     [ -z "$SUB_TOKEN" ] && SUB_TOKEN=$(openssl rand -hex 8 2>/dev/null || printf '%08x%08x' $RANDOM $RANDOM)
     [ -z "$SUB_PATH" ] && SUB_PATH="/${SUB_TOKEN}"
     save_conf; bash "${WORK_DIR}/sub_gen.sh" 2>/dev/null
@@ -685,12 +687,20 @@ interactive_install() {
     if [ -n "$bp" ] && is_port "$bp"; then ARGO_PORT="$bp"; VLESS_WS_PORT=$((bp+1)); VMESS_WS_PORT=$((bp+2)); fi
     echo ""
     echo -e " ${white}━━━ ⑦ 订阅域名（可选）━━━${re}"
-    echo -e "  ${yellow}输入已指向本机IP的域名，订阅URL将变为 https://域名/sub?token=xxx${re}"
+    echo -e "  ${yellow}输入已指向本机IP的域名，订阅URL变为 https://域名:端口/sub?token=xxx${re}"
+    echo -e "  ${yellow}CF支持的HTTPS端口: 443 8443 2053 2083 2087 2096，默认 2053${re}"
+    echo -e "  ${yellow}域名DNS需开小黄云，且在CF Origin Rules中将域名→本机端口${re}"
     echo -e "  ${yellow}回车跳过则使用 http://IP:端口 格式${re}"
     [ -n "$SUB_DOMAIN" ] && echo -e "  ${cyan}当前: ${SUB_DOMAIN}${re}"
     read -p "  域名 [回车跳过]: " sd
     [ -n "$sd" ] && SUB_DOMAIN="$sd"
-    [ -n "$SUB_DOMAIN" ] && echo -e "  → ${green}https://${SUB_DOMAIN}/sub?token=(自动生成)${re}" || echo -e "  → ${yellow}将使用 IP:端口 格式${re}"
+    if [ -n "$SUB_DOMAIN" ]; then
+        [ "$SUB_PORT" = "0" ] && SUB_PORT=2053
+        echo -e "  → ${green}https://${SUB_DOMAIN}:${SUB_PORT}/sub?token=(自动生成)${re}"
+        echo -e "  ${yellow}⚠ CF Origin Rules: ${SUB_DOMAIN} → VPS_IP:${SUB_PORT}${re}"
+    else
+        echo -e "  → ${yellow}将使用 http://IP:端口 格式${re}"
+    fi
     echo ""
 
     echo -e " ${white}━━━ ⑧ 额外协议（可选）━━━${re}"
