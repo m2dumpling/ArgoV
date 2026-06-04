@@ -229,14 +229,6 @@ gen_subscription() {
         rpub=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.publicKey//empty' "$CONFIG_FILE" 2>/dev/null)
         [ -n "$rport" ] && [ -n "$ip" ] && links+=$(gen_reality_link "$uuid" "$ip" "$rport" "$rs" "$rpub")$'\n'
     fi
-    # Shadowsocks
-    if grep -q '"shadowsocks"' "$CONFIG_FILE" 2>/dev/null; then
-        local sp sm sport
-        sport=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
-        sm=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.settings.method//empty' "$CONFIG_FILE" 2>/dev/null)
-        sp=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.settings.password//empty' "$CONFIG_FILE" 2>/dev/null)
-        [ -n "$sport" ] && [ -n "$ip" ] && links+=$(gen_ss_link "$sm" "$sp" "$ip" "$sport")$'\n'
-    fi
     printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n'
 }
 
@@ -321,11 +313,6 @@ class H(BaseHTTPRequestHandler):
                             sni=(rs.get('serverNames',[''])[0])
                             pub=rs.get('publicKey',''); pt=ib.get('port','')
                             lines.append(f'vless://{uuid}@{ip}:{pt}?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni={sni}&pbk={pub}&fp=chrome#{name}-Reality')
-                        if ib.get('protocol')=='shadowsocks' and ip:
-                            sm=ib.get('settings',{}).get('method','aes-256-gcm')
-                            sp=ib.get('settings',{}).get('password',uuid)
-                            pt=ib.get('port','')
-                            lines.append('ss://'+b64(f'{sm}:{sp}')+'@'+ip+':'+str(pt)+'#'+name+'-SS')
                 except: pass
                 s.send_response(200); s.send_header('Content-Type','text/plain')
                 s.send_header('Subscription-Userinfo','upload=0; download=0; total=0')
