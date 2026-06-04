@@ -283,37 +283,38 @@ PYEOF
     # 刷新脚本：供 Python 调用，每次请求前更新订阅文件
     cat > "${WORK_DIR}/sub_gen.sh" << 'SUBEOF'
 #!/usr/bin/env bash
-# 用绝对路径避免 systemd PATH 问题
-export PATH="/usr/bin:/usr/sbin:/bin:/sbin:$PATH"
-CONFIG_FILE=/etc/xray/config.json; TUNNEL_LOG=/etc/xray/argo.log; USER_CONF=/etc/xray/argox.conf
-WORK_DIR=/etc/xray; CDN_FALLBACK=cdn.31514926.xyz
-[ -f "$USER_CONF" ] && . "$USER_CONF"
-NODE_NAME="${NODE_NAME:-ArgoX-Mini}"; ARGO_MODE="${ARGO_MODE:-temp}"; ARGO_FIXED_DOMAIN="${ARGO_FIXED_DOMAIN:-}"
+JQ=/usr/bin/jq
+CFG=/etc/xray/config.json; LOG=/etc/xray/argo.log; CONF=/etc/xray/argox.conf
+[ -f "$CONF" ] && . "$CONF"
+NODE_NAME="${NODE_NAME:-ArgoX-Mini}"; MODE="${ARGO_MODE:-temp}"; FIXED="${ARGO_FIXED_DOMAIN:-}"
 CDN_PORT="${CDN_PORT:-443}"
-# 用 grep/sed 替代 jq 读取 config.json（避免 systemd 下 jq 不在 PATH）
-get_json_val() { grep -oP "\"$1\"\s*:\s*\"?\K[^\",}]+" "$CONFIG_FILE" 2>/dev/null | head -1; }
-get_uuid() { get_json_val "id"; }
-get_cdn() { local v; v=$(get_json_val "current_cdn"); [ -n "$v" ] && echo "$v" || echo "$CDN_FALLBACK"; }
-get_cdn_port() { local v; v=$(get_json_val "current_cdn_port"); [ -n "$v" ] && echo "$v" || echo "$CDN_PORT"; }
-get_domain() { local d; [ -f "$TUNNEL_LOG" ] && for i in {1..3}; do d=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' "$TUNNEL_LOG"|tail -1); [ -n "$d" ] && echo "$d" && return; sleep 1; done; echo "$LAST_ARGO_DOMAIN"; }
-get_ip() { curl -s --max-time 2 ipv4.ip.sb 2>/dev/null; }
+get_domain() {
+    local d
+    [ -f "$LOG" ] && for i in 1 2 3; do
+        d=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' "$LOG" | tail -1)
+        [ -n "$d" ] && echo "$d" && return; sleep 1
+    done
+    echo "$LAST_ARGO_DOMAIN"
+}
 b64() { printf '%s' "$1" | base64 -w0 2>/dev/null || printf '%s' "$1" | base64 | tr -d '\n'; }
-uuid=$(get_uuid); hd=$(get_domain); cd=$(get_cdn); cp=$(get_cdn_port); ip=$(get_ip)
-[ "$ARGO_MODE" = "fixed-token" ] && hd="$ARGO_FIXED_DOMAIN"
+uuid=$($JQ -r '.inbounds[0].settings.clients[0].id//empty' "$CFG")
+cdn=$($JQ -r '.current_cdn//"cdn.31514926.xyz"' "$CFG")
+cp=$($JQ -r '.current_cdn_port//443' "$CFG")
+hd=$(get_domain); ip=$(curl -s --max-time 2 ipv4.ip.sb 2>/dev/null)
+[ "$MODE" = "fixed-token" ] && hd="$FIXED"
 links=""
 if [ -n "$hd" ]; then
-    links+="vless://${uuid}@${cd}:${cp}?encryption=none&security=tls&sni=${hd}&type=ws&host=${hd}&path=%2Fvless-argo%3Fed%3D2560#${NODE_NAME}-VLESS"$'\n'
-    j="{\"v\":\"2\",\"ps\":\"${NODE_NAME}-VMess\",\"add\":\"${cd}\",\"port\":\"${cp}\",\"id\":\"${uuid}\",\"aid\":\"0\",\"scy\":\"none\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${hd}\",\"path\":\"/vmess-argo?ed=2560\",\"tls\":\"tls\",\"sni\":\"${hd}\",\"alpn\":\"\",\"fp\":\"\"}"
+    links+="vless://${uuid}@${cdn}:${cp}?encryption=none&security=tls&sni=${hd}&type=ws&host=${hd}&path=%2Fvless-argo%3Fed%3D2560#${NODE_NAME}-VLESS"$'\n'
+    j='{"v":"2","ps":"'"${NODE_NAME}"'-VMess","add":"'"${cdn}"'","port":"'"${cp}"'","id":"'"${uuid}"'","aid":"0","scy":"none","net":"ws","type":"none","host":"'"${hd}"'","path":"/vmess-argo?ed=2560","tls":"tls","sni":"'"${hd}"'","alpn":"","fp":""}'
     links+="vmess://$(b64 "$j")"$'\n'
 fi
-# Reality — 用 grep/sed 读取
-if grep -q '"tag":"reality"' "$CONFIG_FILE" 2>/dev/null && [ -n "$ip" ]; then
-    rport=$(grep -A20 '"tag":"reality"' "$CONFIG_FILE" | grep -oP '"port":\s*\K[0-9]+' | head -1)
-    rs=$(grep -A20 '"tag":"reality"' "$CONFIG_FILE" | grep -oP '"serverNames":\s*\[\s*"\K[^"]+' | head -1)
-    rpub=$(grep -A20 '"tag":"reality"' "$CONFIG_FILE" | grep -oP '"publicKey":\s*"\K[^"]+' | head -1)
+if $JQ -e '.inbounds[]|select(.tag=="reality")' "$CFG" >/dev/null 2>&1 && [ -n "$ip" ]; then
+    rport=$($JQ -r '.inbounds[]|select(.tag=="reality")|.port' "$CFG")
+    rs=$($JQ -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames[0]' "$CFG")
+    rpub=$($JQ -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.publicKey' "$CFG")
     [ -n "$rport" ] && links+="vless://${uuid}@${ip}:${rport}?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=${rs}&pbk=${rpub}&fp=chrome#${NODE_NAME}-Reality"$'\n'
 fi
-{ printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n'; } > "$WORK_DIR/sub.txt"
+{ printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n'; } > /etc/xray/sub.txt
 SUBEOF
     chmod +x "${WORK_DIR}/sub_gen.sh"
 
