@@ -313,7 +313,7 @@ if grep -q '"tag":"reality"' "$CONFIG_FILE" 2>/dev/null && [ -n "$ip" ]; then
     rpub=$(grep -oP '"publicKey":\s*"\K[^"]+' "$CONFIG_FILE" | head -1)
     [ -n "$rport" ] && links+="vless://${uuid}@${ip}:${rport}?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=${rs}&pbk=${rpub}&fp=chrome#${NODE_NAME}-Reality"$'\n'
 fi
-printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n' > "$WORK_DIR/sub.txt"
+{ printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n'; } > "$WORK_DIR/sub.txt"
 SUBEOF
     chmod +x "${WORK_DIR}/sub_gen.sh"
 
