@@ -31,6 +31,8 @@ REALITY_PORT="${REALITY_PORT:-0}"
 SS_PORT="${SS_PORT:-0}"
 SUB_PORT="${SUB_PORT:-0}"
 SUB_PATH="${SUB_PATH:-}"
+SUB_DOMAIN="${SUB_DOMAIN:-}"
+SUB_TOKEN="${SUB_TOKEN:-}"
 
 # --- 节点名称 ---
 NODE_NAME="${NODE_NAME:-ArgoX-Mini}"
@@ -170,6 +172,7 @@ load_conf() {
     ARGO_FIXED_DOMAIN="${ARGO_FIXED_DOMAIN:-}"; UUID_CUSTOM="${UUID_CUSTOM:-}"; LAST_ARGO_DOMAIN="${LAST_ARGO_DOMAIN:-}"
     REALITY_PORT="${REALITY_PORT:-0}"; SS_PORT="${SS_PORT:-0}"
     SUB_PORT="${SUB_PORT:-0}"; SUB_PATH="${SUB_PATH:-}"
+    SUB_DOMAIN="${SUB_DOMAIN:-}"; SUB_TOKEN="${SUB_TOKEN:-}"
     REALITY_SNI="${REALITY_SNI:-www.amazon.com}"; SS_METHOD="${SS_METHOD:-aes-256-gcm}"
     ENABLE_REALITY="${ENABLE_REALITY:-0}"; ENABLE_SS="${ENABLE_SS:-0}"
     REALITY_PRIV="${REALITY_PRIV:-}"; REALITY_PUB="${REALITY_PUB:-}"
@@ -183,7 +186,7 @@ save_conf() {
         save_var VMESS_WS_PORT "$VMESS_WS_PORT"; save_var CDN_PORT "$CDN_PORT"
         save_var CDN_DOMAIN "$CDN_DOMAIN"; save_var ARGO_MODE "$ARGO_MODE"; save_var ARGO_AUTH "$ARGO_AUTH"
         save_var ARGO_FIXED_DOMAIN "$ARGO_FIXED_DOMAIN"; save_var UUID_CUSTOM "$UUID_CUSTOM"
-        save_var REALITY_PORT "$REALITY_PORT"; save_var SS_PORT "$SS_PORT"; save_var SUB_PORT "$SUB_PORT"; save_var SUB_PATH "$SUB_PATH"
+        save_var REALITY_PORT "$REALITY_PORT"; save_var SS_PORT "$SS_PORT"; save_var SUB_PORT "$SUB_PORT"; save_var SUB_PATH "$SUB_PATH"; save_var SUB_DOMAIN "$SUB_DOMAIN"; save_var SUB_TOKEN "$SUB_TOKEN"
         save_var REALITY_SNI "$REALITY_SNI"; save_var SS_METHOD "$SS_METHOD"
         save_var ENABLE_REALITY "$ENABLE_REALITY"; save_var ENABLE_SS "$ENABLE_SS"
         save_var REALITY_PRIV "$REALITY_PRIV"; save_var REALITY_PUB "$REALITY_PUB"
@@ -228,9 +231,19 @@ install_qrencode() {
 #==============================================================================
 # 订阅服务器（极简：Bash 生成内容 → 文件 → Python serve 文件）
 #==============================================================================
+get_sub_url() {
+    local ip; ip=$(get_ip 2>/dev/null || echo "127.0.0.1")
+    if [ -n "$SUB_DOMAIN" ]; then
+        echo "https://${SUB_DOMAIN}/sub?token=${SUB_TOKEN}"
+    else
+        echo "$(get_sub_url)"
+    fi
+}
+
 start_sub_server() {
     [ "$SUB_PORT" = "0" ] && SUB_PORT=$(find_free_port "$(shuf -i 20000-50000 -n 1)")
-    [ -z "$SUB_PATH" ] && SUB_PATH="/$(openssl rand -hex 8 2>/dev/null || printf '%08x%08x' $RANDOM $RANDOM)"
+    [ -z "$SUB_TOKEN" ] && SUB_TOKEN=$(openssl rand -hex 8 2>/dev/null || printf '%08x%08x' $RANDOM $RANDOM)
+    [ -z "$SUB_PATH" ] && SUB_PATH="/${SUB_TOKEN}"
     save_conf; bash "${WORK_DIR}/sub_gen.sh" 2>/dev/null
 
     local py; py=$(command -v python3 || command -v python || true)
@@ -242,7 +255,11 @@ import subprocess, os
 SUB_FILE='/etc/xray/sub.txt'; PORT=${SUB_PORT}
 class H(BaseHTTPRequestHandler):
     def do_GET(s):
-        if s.path=='${SUB_PATH}':
+        import urllib.parse as up
+        qs=up.parse_qs(up.urlparse(s.path).query)
+        tok=qs.get('token',[None])[0]
+        ok=(s.path=='${SUB_PATH}' or tok=='${SUB_TOKEN}')
+        if ok:
             try:
                 subprocess.run(['${WORK_DIR}/sub_gen.sh'],timeout=10)
             except: pass
@@ -381,7 +398,7 @@ show_node() {
         echo ""
         echo -e "  ${yellow}① VLESS${re}  ${green}$(gen_vless_link "$uuid" "$hd" "$cd" "$cp")${re}\n"
         echo -e "  ${yellow}② VMess${re}  ${green}$(gen_vmess_link "$uuid" "$hd" "$cd" "$cp")${re}\n"
-        load_conf 2>/dev/null; local su=""; [ -n "$SUB_PORT" ] && [ "$SUB_PORT" != "0" ] && [ -n "$SUB_PATH" ] && su="http://${ip}:${SUB_PORT}${SUB_PATH}"
+        load_conf 2>/dev/null; local su; su=$(get_sub_url 2>/dev/null)
         show_qr "${su:-$(gen_vless_link "$uuid" "$hd" "$cd" "$cp")}"
     fi
 
@@ -411,7 +428,8 @@ show_node() {
 
     echo -e "  ${yellow}💡${re} 复制链接 → 客户端导入    菜单 2 换线路 | 菜单 3 改配置"
     load_conf 2>/dev/null
-    [ -n "$SUB_PORT" ] && [ "$SUB_PORT" != "0" ] && [ -n "$SUB_PATH" ] && [ -n "$ip" ] && { echo ""; echo -e "  ${purple}━━━ 📡 订阅链接 ━━━${re}"; echo -e "  ${white}http://${ip}:${SUB_PORT}${SUB_PATH}${re}"; echo -e "  ${yellow}💡 客户端填入 → 更新订阅 → 全部节点一键导入，重启自动刷新域名${re}"; }
+    load_conf 2>/dev/null; local su; su=$(get_sub_url 2>/dev/null)
+    [ -n "$su" ] && { echo ""; echo -e "  ${purple}━━━ 📡 订阅链接 ━━━${re}"; echo -e "  ${white}${su}${re}"; echo -e "  ${yellow}💡 客户端填入 → 更新订阅 → 全部节点一键导入，重启自动刷新域名${re}"; }
 }
 
 #==============================================================================
@@ -666,7 +684,16 @@ interactive_install() {
     read -p "  起始端口 [回车跳过]: " bp
     if [ -n "$bp" ] && is_port "$bp"; then ARGO_PORT="$bp"; VLESS_WS_PORT=$((bp+1)); VMESS_WS_PORT=$((bp+2)); fi
     echo ""
-    echo -e " ${white}━━━ ⑦ 额外协议（可选）━━━${re}"
+    echo -e " ${white}━━━ ⑦ 订阅域名（可选）━━━${re}"
+    echo -e "  ${yellow}输入已指向本机IP的域名，订阅URL将变为 https://域名/sub?token=xxx${re}"
+    echo -e "  ${yellow}回车跳过则使用 http://IP:端口 格式${re}"
+    [ -n "$SUB_DOMAIN" ] && echo -e "  ${cyan}当前: ${SUB_DOMAIN}${re}"
+    read -p "  域名 [回车跳过]: " sd
+    [ -n "$sd" ] && SUB_DOMAIN="$sd"
+    [ -n "$SUB_DOMAIN" ] && echo -e "  → ${green}https://${SUB_DOMAIN}/sub?token=(自动生成)${re}" || echo -e "  → ${yellow}将使用 IP:端口 格式${re}"
+    echo ""
+
+    echo -e " ${white}━━━ ⑧ 额外协议（可选）━━━${re}"
     select_protocols
     save_conf; do_install
 }
@@ -789,7 +816,7 @@ ARGOWRAP
         echo -e "  ${white}── Argo (无需开放端口) ──${re}\n"
         echo -e "  ${yellow}VLESS${re} ${green}$(gen_vless_link "$UUID" "$hd" "$CDN_DOMAIN" "$CDN_PORT")${re}\n"
         echo -e "  ${yellow}VMess${re} ${green}$(gen_vmess_link "$UUID" "$hd" "$CDN_DOMAIN" "$CDN_PORT")${re}\n"
-        local su=""; [ -n "$SUB_PORT" ] && [ "$SUB_PORT" != "0" ] && [ -n "$ip" ] && su="http://${ip}:${SUB_PORT}${SUB_PATH}"
+        local su=""; [ -n "$SUB_PORT" ] && [ "$SUB_PORT" != "0" ] && [ -n "$ip" ] && su="$(get_sub_url)"
         show_qr "${su:-$(gen_vless_link "$UUID" "$hd" "$CDN_DOMAIN" "$CDN_PORT")}"
     fi
     if [ "$ENABLE_REALITY" = 1 ] && [ -n "$ip" ]; then
@@ -801,7 +828,7 @@ ARGOWRAP
         echo -e "  ${green}$(gen_ss_link "$SS_METHOD" "$SS_PASS" "$ip" "$SS_PORT" "${NODE_NAME}-SS")${re}\n"
     fi
     if [ -n "$ip" ] && [ "$SUB_PORT" != "0" ] && [ -n "$SUB_PATH" ]; then
-        echo -e "  ${cyan}📡 订阅${re}: ${green}http://${ip}:${SUB_PORT}${SUB_PATH}${re}"
+        echo -e "  ${cyan}📡 订阅${re}: ${green}$(get_sub_url)${re}"
         echo -e "  ${yellow}💡${re} 客户端填入订阅URL → 更新 → 所有协议自动导入"
     fi
     echo -e "  ${yellow}📋${re} argov    ${yellow}💡${re} 复制链接 → 客户端导入"
