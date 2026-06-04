@@ -308,9 +308,9 @@ if [ -n "$hd" ]; then
 fi
 # Reality — 用 grep/sed 读取
 if grep -q '"tag":"reality"' "$CONFIG_FILE" 2>/dev/null && [ -n "$ip" ]; then
-    rport=$(get_json_val '"port"' | head -1)
-    rs=$(grep -oP '"serverNames":\s*\[\s*"\K[^"]+' "$CONFIG_FILE" | head -1)
-    rpub=$(grep -oP '"publicKey":\s*"\K[^"]+' "$CONFIG_FILE" | head -1)
+    rport=$(grep -A20 '"tag":"reality"' "$CONFIG_FILE" | grep -oP '"port":\s*\K[0-9]+' | head -1)
+    rs=$(grep -A20 '"tag":"reality"' "$CONFIG_FILE" | grep -oP '"serverNames":\s*\[\s*"\K[^"]+' | head -1)
+    rpub=$(grep -A20 '"tag":"reality"' "$CONFIG_FILE" | grep -oP '"publicKey":\s*"\K[^"]+' | head -1)
     [ -n "$rport" ] && links+="vless://${uuid}@${ip}:${rport}?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=${rs}&pbk=${rpub}&fp=chrome#${NODE_NAME}-Reality"$'\n'
 fi
 { printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n'; } > "$WORK_DIR/sub.txt"
