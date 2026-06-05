@@ -691,6 +691,9 @@ interactive_install() {
     echo -e " ${purple}║${re}  ${white}ArgoX-Mini · 交互式安装向导${re}              ${purple}║${re}"
     echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
     echo ""; yellow_msg "按提示配置，回车使用默认值。"; echo ""
+    # 系统检测展示
+    local sys_type; [ "$IS_ALPINE" = 1 ] && sys_type="Alpine Linux (OpenRC)" || sys_type="Debian/Ubuntu (systemd)"
+    echo -e "  ${cyan}🖥 检测到系统: ${green}${sys_type}${re}\n"
 
     echo -e " ${white}━━━ ① 节点名称 ━━━${re}"; read -p "  [${NODE_NAME}]: " n; [ -n "$n" ] && NODE_NAME="$n"; echo -e "  → ${green}${NODE_NAME}${re}\n"
     echo -e " ${white}━━━ ② CDN 地址 ━━━${re}"; echo -e "  ${green}1${re}. 默认 ${green}2${re}. 列表选 ${green}3${re}. 自定义"; read -p "  [1]: " ct
