@@ -299,7 +299,7 @@ class H(BaseHTTPRequestHandler):
 refresh_cache()
 def bg_refresh():
     while True:
-        time.sleep(60); refresh_cache()
+        time.sleep(10); refresh_cache()
 threading.Thread(target=bg_refresh,daemon=True).start()
 
 import ssl, os
