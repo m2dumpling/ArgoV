@@ -276,13 +276,16 @@ class H(BaseHTTPRequestHandler):
             except: s.send_response(500); s.end_headers()
         else: s.send_response(404); s.end_headers()
     def log_message(s,*a): pass
-import ssl
-ctx=None
-try: ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain('${WORK_DIR}/sub_cert.pem','${WORK_DIR}/sub_key.pem')
-except: pass
-srv=HTTPServer(('0.0.0.0',PORT),H)
-if ctx: srv.socket=ctx.wrap_socket(srv.socket,server_side=True)
-srv.serve_forever()
+import ssl, os
+CERT='${WORK_DIR}/sub_cert.pem'; KEY='${WORK_DIR}/sub_key.pem'
+if os.path.exists(CERT) and os.path.exists(KEY):
+    ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(CERT,KEY)
+    httpd=HTTPServer(('0.0.0.0',PORT),H)
+    httpd.socket=ctx.wrap_socket(httpd.socket,server_side=True)
+else:
+    httpd=HTTPServer(('0.0.0.0',PORT),H)
+httpd.serve_forever()
 PYEOF
 
     # 刷新脚本：供 Python 调用，每次请求前更新订阅文件
