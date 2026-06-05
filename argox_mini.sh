@@ -258,7 +258,7 @@ start_sub_server() {
 
     cat > "${WORK_DIR}/sub.py" << PYEOF
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import subprocess, os
+import subprocess, os, socketserver
 SUB_FILE='/etc/xray/sub.txt'; PORT=${SUB_PORT}
 class H(BaseHTTPRequestHandler):
     def do_GET(s):
@@ -281,10 +281,12 @@ CERT='${WORK_DIR}/sub_cert.pem'; KEY='${WORK_DIR}/sub_key.pem'
 if os.path.exists(CERT) and os.path.exists(KEY):
     ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(CERT,KEY)
-    httpd=HTTPServer(('0.0.0.0',PORT),H)
+    socketserver.TCPServer.allow_reuse_address=True
+httpd=HTTPServer(('0.0.0.0',PORT),H)
     httpd.socket=ctx.wrap_socket(httpd.socket,server_side=True)
 else:
-    httpd=HTTPServer(('0.0.0.0',PORT),H)
+    socketserver.TCPServer.allow_reuse_address=True
+httpd=HTTPServer(('0.0.0.0',PORT),H)
 httpd.serve_forever()
 PYEOF
 
