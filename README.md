@@ -1,56 +1,78 @@
 # ArgoX-Mini
 
-An ultra-lightweight Cloudflare Argo Tunnel management script — **VLESS + VMess + Shadowsocks + VLESS Reality**, with built-in **WARP domain routing** and **subscription server**.
+> Cloudflare Argo Tunnel one-click deployment script  
+> VLESS + VMess + Shadowsocks + VLESS Reality | WARP SOCKS5/IPv6 smart routing | Built-in subscription server
 
-Installs only the essentials: Xray-core + cloudflared. No Nginx, no Caddy. Argo inbounds listen on `127.0.0.1` only — zero public ports. Full Debian / Ubuntu / CentOS / Alpine support.
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Platform](https://img.shields.io/badge/Platform-Debian_Ubuntu_CentOS_Alpine-lightgrey)
 
-## ✨ Features
+[中文版](README_CN.md)
 
-**Core**
-- VLESS + VMess Argo tunnel (always installed). Optional: Shadowsocks, VLESS Reality
-- 8-step interactive install wizard with automatic system detection
-- `vless://` / `vmess://` / `ss://` one-click import links + subscription QR code
+---
 
-**Subscription Server** — auto-recovery after reboot, zero SSH
-- Dual mode: `https://yourdomain:port/sub?token=xxx` or `http://IP:port/TOKEN`
-- Self-signed cert for HTTPS (CF Full SSL compatible), CF port picker (2096/8443/2053 etc.)
-- Random token auth, Python3 15-line HTTP server
-- Fresh links generated on every request — config changes sync instantly
+## Table of Contents
 
-**Node Management** — Menu `a`
-- Add, edit, delete any protocol without full reinstall
-- Argo VLESS/VMess: editable port, path, auto-sync fallback router
-- Shadowsocks: 7 ciphers (AEAD + SS2022), editable method/password/port
-- Reality: 8 destination SNIs, editable SNI/port/shortId/fingerprint/keys
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Install Wizard](#install-wizard)
+- [Management Panel](#management-panel)
+- [Subscription Server](#subscription-server)
+- [WARP Domain Routing](#warp-domain-routing)
+- [Node Management](#node-management)
+- [Architecture](#architecture)
+- [Alpine Support](#alpine-support)
+- [Client Config](#client-config)
+- [License](#license)
 
-**WARP Domain Routing** — Menu `w`
-- One-click fscarmen WARP (SOCKS5 :40000 / IPv6 WireGuard)
-- Custom domain lists or inject Google/YouTube defaults
-- Three modes: All SOCKS5 / All IPv6 / Smart Split (Google→IPv6 + YouTube→SOCKS5)
-- Python3 safe JSON rewrite with auto-rollback on failure
+---
 
-**Security & Compatibility**
-- Zero public exposure (Argo mode), `127.0.0.1` only, immune to active scans
-- Fixed Argo tunnel + temporary tunnel, switch anytime
-- Persistent config `/etc/xray/argox.conf`, survives reinstall
-- Auto-start on boot, tunnel crash auto-retry (Alpine 30s network wait)
-- Full Alpine Linux support (openrc / apk / init.d)
-- Service isolated as `argox-tunnel` — coexists with existing tunnels
-- 13 pre-configured CDN domains, auto port conflict resolution
-- Env var deployment
+## Features
 
-## 🚀 Install
+| Category | Details |
+|----------|---------|
+| **Argo Tunnel** | VLESS + VMess dual protocol, WS+TLS, zero public ports, `127.0.0.1` only |
+| **Direct Protocols** | VLESS Reality (XTLS Vision), Shadowsocks (7 ciphers: AEAD + SS2022) |
+| **Install Wizard** | 8-step interactive with sensible defaults, auto system detection |
+| **Subscription Server** | Auto-recovery after reboot, dual-mode (domain HTTPS / IP HTTP), token auth, QR code |
+| **WARP Routing** | One-click fscarmen WARP, Smart Split (Google→IPv6 + YouTube→SOCKS5) |
+| **Node Management** | Add/edit/delete any protocol, no full reinstall |
+| **Compatibility** | Debian / Ubuntu / CentOS / Alpine Linux, openrc + systemd |
+| **Service Isolation** | `argox-tunnel` service, no conflict with existing tunnels |
+
+---
+
+## Quick Start
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoX-Mini/main/argox_mini.sh)
 ```
 
-Non-interactive:
+First run auto-launches the install wizard. Press Enter through each step for defaults.
+
+Non-interactive (env vars):
+
 ```bash
 NODE_NAME=Tokyo CDN_DOMAIN=skk.moe bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoX-Mini/main/argox_mini.sh)
 ```
 
-## 🛠️ Management
+---
+
+## Install Wizard
+
+```
+━━━ ① Node Name ━━━
+  ② CDN Address (default / list / custom)
+  ③ Client Port (CF edge, default 443)
+  ④ UUID (auto-generate or custom)
+  ⑤ Argo Tunnel Type (temp / fixed token)
+  ⑥ Internal Ports (127.0.0.1 only, auto)
+  ⑦ Subscription Domain (optional, CF port picker)
+  ⑧ Extra Protocols (Reality / Shadowsocks, port input)
+```
+
+---
+
+## Management Panel
 
 ```bash
 argov
@@ -62,33 +84,129 @@ argov
 ║     VL-Argo VM-Argo SS Reality                  ║
 ╚══════════════════════════════════════════════════╝
 
-  Name : Tokyo    Xray: ● up    Argo: ● up
+  Name : Tokyo    Xray: ● up    Argo: ● up    CDN : cdn.xxx:443
 
 ── Nodes ──
-  1. Show links    2. Change CDN    3. Config    a. Manage Nodes
-── Services ──
-  4. Start    5. Stop    6. Restart/Recover
-── System ──
-  7. Reinstall    8. Update    9. Uninstall    0. Exit    w. WARP
+  1. Show links    2. Change CDN    3. Config    a. Manage nodes
 
-─── Install Wizard ───
-① Node name → ② CDN → ③ Client port → ④ UUID → ⑤ Tunnel type
-→ ⑥ Internal ports → ⑦ Sub domain (optional, CF port picker) → ⑧ Extra protocols
+── Services ──
+  4. Start    5. Stop    6. Restart/Recover (Argo only)
+
+── System ──
+  7. Reinstall (preserve)    8. Update    9. Uninstall
+  0. Exit    w. WARP routing
 ```
 
-## 💻 Client Config
+---
 
-Copy links from terminal → import to clipboard, or use subscription URL for one-click import.
+## Subscription Server
 
-| Protocol | Format |
-|----------|--------|
-| VLESS Argo | `vless://uuid@cdn:port?...&path=%2Fvless-argo#Name-VLESS` |
-| VMess Argo | `vmess://base64(JSON)#Name-VMess` |
-| SS | `ss://base64(method:pass)@ip:port#Name-SS` |
-| Reality | `vless://uuid@ip:port?...&security=reality&pbk=xxx#Name-Reality` |
+After reboot, the Argo tunnel auto-recovers with a new domain. The subscription server returns fresh links on every request — **zero SSH needed**.
+
+### URLs
+
+| Mode | URL | Setup |
+|------|-----|-------|
+| Domain (HTTPS) | `https://sub.yourdomain.com:2096/sub?token=xxx` | CF proxy ON, DNS → VPS IP |
+| IP (HTTP) | `http://VPS_IP:PORT/TOKEN` | No setup needed |
+
+### Features
+
+- Token auth via random 64-bit hex string
+- Self-signed TLS certificate (CF Full SSL mode compatible)
+- CF-supported port picker: 2096, 8443, 2053, 2083, 2087, 443, or custom
+- 15-line Python3 HTTP server, `systemd` / `openrc` managed
+- QR code encodes subscription URL for mobile import
+
+---
+
+## WARP Domain Routing
+
+Press `w` to access WARP management. Three routing modes:
+
+| Mode | Google / Search | YouTube | Other |
+|------|-----------------|---------|-------|
+| SOCKS5 | WARP IPv4 | WARP IPv4 | WARP IPv4 |
+| IPv6 | WARP IPv6 | WARP IPv6 | WARP IPv6 |
+| **Smart Split** (recommended) | WARP IPv6 | WARP SOCKS5 | Direct |
+
+- fscarmen WARP auto-install (SOCKS5 :40000, IPv6 WireGuard)
+- Custom domain lists or Google/YouTube defaults
+- Python3 safe JSON rewrite with validation and auto-rollback
+
+---
+
+## Node Management
+
+Press `a` to manage all protocol nodes:
+
+```
+╔══════════════════════════════════════════╗
+║         Manage Nodes                    ║
+╚══════════════════════════════════════════╝
+
+  ── Argo Tunnel ──
+  e1. VLESS + Argo    port 8081    /vless-argo
+  e2. VMess + Argo    port 8082    /vmess-argo
+
+  ── Optional ──
+  e3. VLESS Reality   amazon.com   :43210
+  e4. Shadowsocks      aes-256-gcm  :8388
+
+  a1. Add Reality    a2. Add SS    d. Delete
+```
+
+Editable fields per protocol:
+
+| Protocol | Editable |
+|----------|----------|
+| VLESS/VMess Argo | Port, WS path (auto-sync fallback) |
+| Shadowsocks | Cipher, password, port |
+| VLESS Reality | SNI, port, shortId, fingerprint, regenerate x25519 keys |
+
+---
+
+## Architecture
+
+```
+Client → CF Edge (TLS) → Argo Tunnel → localhost:8080 Xray fallback
+                                           ├── /vless-argo → VLESS+WS :8081
+                                           └── /vmess-argo → VMess+WS :8082
+
+Optional direct:  VLESS+Reality (public port)  ·  Shadowsocks (public port)
+
+WARP routing:  Xray rules → warp-out (SOCKS5 :40000) or v6-direct (IPv6)
+```
+
+---
+
+## Alpine Support
+
+| Feature | Debian/Ubuntu | Alpine |
+|---------|--------------|--------|
+| Service control | `systemctl` | `rc-service` |
+| Package manager | `apt` | `apk` |
+| Service files | `/etc/systemd/system/` | `/etc/init.d/` |
+| Tunnel recovery | `Restart=on-failure` | while-loop retry + 30s network wait |
+| Port detection | `netstat` → `ss` → `lsof` | same |
+
+---
+
+## Client Config
+
+Copy links from terminal → import to clipboard, or use subscription URL.
+
+| Protocol | Example |
+|----------|---------|
+| VLESS Argo | `vless://UUID@CDN:443?...&path=%2Fvless-argo#Name-VLESS` |
+| VMess Argo | `vmess://base64(#Name-VMess)` |
+| SS | `ss://base64@IP:PORT#Name-SS` |
+| Reality | `vless://UUID@IP:PORT?...&security=reality&pbk=KEY#Name-Reality` |
 
 Clients: v2rayN · Nekoray · Shadowrocket · Sing-box · Clash Meta
 
-## 📄 License
+---
 
-MIT License
+## License
+
+MIT License. Fork, modify, share freely.
