@@ -128,9 +128,11 @@ get_cdn_port() {
 }
 get_ip() {
     local ip
-    ip=$(curl -s --max-time 3 ifconfig.me 2>/dev/null)
-    [ -z "$ip" ] && ip=$(curl -s --max-time 3 icanhazip.com 2>/dev/null)
-    [ -z "$ip" ] && ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    for s in ifconfig.me icanhazip.com checkip.amazonaws.com api.ipify.org ipinfo.io/ip myip.zealyun.com; do
+        ip=$(curl -s --max-time 3 "$s" 2>/dev/null | tr -d '[:space:]')
+        [ -n "$ip" ] && [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && { echo "$ip"; return; }
+    done
+    ip=$(hostname -I 2>/dev/null | awk '{print $1}')
     [ -z "$ip" ] && ip=$(ip -4 addr show 2>/dev/null | awk '/inet / && !/127\./ {print $2}' | cut -d/ -f1 | head -1)
     echo "$ip"
 }
