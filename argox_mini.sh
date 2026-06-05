@@ -839,11 +839,12 @@ do_install() {
         saved_inbounds=$(jq -c '[.inbounds[] | select(.tag=="reality" or .tag=="ss")]' "$CONFIG_FILE" 2>/dev/null)
         [ "$saved_inbounds" = "[]" ] && saved_inbounds=""
     fi
+    # 重装时关掉可选协议（下面会从保存的 merge 回来，避免重复）
+    [ -n "$saved_inbounds" ] && { ENABLE_REALITY=0; ENABLE_SS=0; }
     build_xray_config "$UUID" "$SS_PASS"
     # 合并回已保存的 inbound
     if [ -n "$saved_inbounds" ]; then
         jq --argjson saved "$saved_inbounds" '.inbounds += $saved' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-        # 恢复 ENABLE 标志
         echo "$saved_inbounds" | jq -e '.[] | select(.tag=="reality")' &>/dev/null && ENABLE_REALITY=1
         echo "$saved_inbounds" | jq -e '.[] | select(.tag=="ss")'       &>/dev/null && ENABLE_SS=1
     fi
