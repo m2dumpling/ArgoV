@@ -128,10 +128,10 @@ get_cdn_port() {
 }
 get_ip() {
     local ip
-    ip=$(ip -4 addr show scope global 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
-    [ -z "$ip" ] && ip=$(hostname -I 2>/dev/null | awk '{print $1}')
-    [ -z "$ip" ] && ip=$(curl -s --max-time 2 ipv4.ip.sb 2>/dev/null)
+    ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    [ -z "$ip" ] && ip=$(ip -4 addr show 2>/dev/null | awk '/inet / && !/127\./ {print $2}' | cut -d/ -f1 | head -1)
     [ -z "$ip" ] && ip=$(curl -s --max-time 2 ifconfig.me 2>/dev/null)
+    [ -z "$ip" ] && ip=$(curl -s --max-time 2 icanhazip.com 2>/dev/null)
     echo "$ip"
 }
 is_port() { [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
