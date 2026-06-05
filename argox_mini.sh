@@ -127,8 +127,12 @@ get_cdn_port() {
     [ -n "$v" ] && [ "$v" != "null" ] && echo "$v" || echo "$CDN_PORT"
 }
 get_ip() {
-    local ip; ip=$(curl -s --max-time 2 ipv4.ip.sb 2>/dev/null)
-    [ -z "$ip" ] && ip=$(curl -s --max-time 2 ifconfig.me 2>/dev/null); echo "$ip"
+    local ip
+    ip=$(ip -4 addr show scope global 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
+    [ -z "$ip" ] && ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    [ -z "$ip" ] && ip=$(curl -s --max-time 2 ipv4.ip.sb 2>/dev/null)
+    [ -z "$ip" ] && ip=$(curl -s --max-time 2 ifconfig.me 2>/dev/null)
+    echo "$ip"
 }
 is_port() { [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
 save_var() { printf "%s=%q\n" "$1" "$2"; }
