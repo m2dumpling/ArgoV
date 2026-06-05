@@ -128,13 +128,13 @@ get_cdn_port() {
 }
 get_ip() {
     local ip
-    for s in ifconfig.me icanhazip.com checkip.amazonaws.com api.ipify.org ipinfo.io/ip myip.zealyun.com; do
-        ip=$(curl -s --max-time 3 "$s" 2>/dev/null | tr -d '[:space:]')
-        [ -n "$ip" ] && [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && { echo "$ip"; return; }
+    for s in ifconfig.me icanhazip.com checkip.amazonaws.com api.ipify.org ipinfo.io/ip; do
+        ip=$(curl -s --max-time 3 "$s" 2>/dev/null || wget -qO- -T3 "$s" 2>/dev/null)
+        [ -n "$ip" ] && echo "$ip" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' && { echo "$ip"; return; }
     done
     ip=$(hostname -I 2>/dev/null | awk '{print $1}')
     [ -z "$ip" ] && ip=$(ip -4 addr show 2>/dev/null | awk '/inet / && !/127\./ {print $2}' | cut -d/ -f1 | head -1)
-    echo "$ip"
+    echo "${ip:-NAT环境}"
 }
 is_port() { [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
 save_var() { printf "%s=%q\n" "$1" "$2"; }
