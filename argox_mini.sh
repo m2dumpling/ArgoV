@@ -132,8 +132,8 @@ get_ip() {
         ip=$(curl -s --max-time 3 "$s" 2>/dev/null || wget -qO- -T3 "$s" 2>/dev/null)
         [ -n "$ip" ] && echo "$ip" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' && { echo "$ip"; return; }
     done
-    ip=$(hostname -I 2>/dev/null | awk '{print $1}')
-    [ -z "$ip" ] && ip=$(ip -4 addr show 2>/dev/null | awk '/inet / && !/127\./ {print $2}' | cut -d/ -f1 | head -1)
+    ip=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+    [ -z "$ip" ] && ip=$(ip -4 addr show 2>/dev/null | awk '/inet / && !/127\./ {print $2}' | cut -d/ -f1 | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
     echo "${ip:-NAT环境}"
 }
 is_port() { [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
