@@ -356,7 +356,8 @@ WantedBy=multi-user.target
 EOF
         systemctl daemon-reload 2>/dev/null || true
         systemctl enable argox-sub 2>/dev/null || true
-        systemctl restart argox-sub 2>/dev/null || true
+        systemctl stop argox-sub 2>/dev/null; fuser -k ${SUB_PORT}/tcp 2>/dev/null; sleep 1
+        systemctl start argox-sub 2>/dev/null || true
     fi
 }
 
