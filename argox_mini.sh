@@ -249,6 +249,8 @@ start_sub_server() {
     if [ "$SUB_PORT" = "0" ]; then
         [ -n "$SUB_DOMAIN" ] && SUB_PORT=2096 || SUB_PORT=$(find_free_port "$(shuf -i 20000-50000 -n 1)")
     fi
+    # 先停旧服务再查端口（避免自己的旧进程被误判为占用）
+    systemctl stop argox-sub 2>/dev/null; rc-service argox-sub stop 2>/dev/null; sleep 1
     port_in_use "$SUB_PORT" && SUB_PORT=$(find_free_port "$SUB_PORT")
     [ -z "$SUB_TOKEN" ] && SUB_TOKEN=$(openssl rand -hex 8 2>/dev/null || printf '%08x%08x' $RANDOM $RANDOM)
     [ -z "$SUB_PATH" ] && SUB_PATH="/${SUB_TOKEN}"
