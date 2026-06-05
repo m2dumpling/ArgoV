@@ -574,7 +574,16 @@ EOF
         else
             cat > "${WORK_DIR}/argox-tunnel.sh" << EOF
 #!/bin/sh
-exec ${WORK_DIR}/argo tunnel --url http://localhost:${ARGO_PORT} --no-autoupdate --edge-ip-version auto >> ${TUNNEL_LOG} 2>&1
+# 等待网络就绪
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    ping -c1 -W1 1.1.1.1 >/dev/null 2>&1 && break
+    sleep 3
+done
+# 重试循环（崩溃自动恢复）
+while true; do
+    ${WORK_DIR}/argo tunnel --url http://localhost:${ARGO_PORT} --no-autoupdate --edge-ip-version auto >> ${TUNNEL_LOG} 2>&1
+    sleep 10
+done
 EOF
             chmod +x "${WORK_DIR}/argox-tunnel.sh"
             cat > /etc/init.d/argox-tunnel << EOF
