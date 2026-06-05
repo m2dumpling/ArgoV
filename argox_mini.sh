@@ -278,15 +278,14 @@ class H(BaseHTTPRequestHandler):
     def log_message(s,*a): pass
 import ssl, os
 CERT='${WORK_DIR}/sub_cert.pem'; KEY='${WORK_DIR}/sub_key.pem'
+socketserver.TCPServer.allow_reuse_address=True
 if os.path.exists(CERT) and os.path.exists(KEY):
     ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(CERT,KEY)
-    socketserver.TCPServer.allow_reuse_address=True
-httpd=HTTPServer(('0.0.0.0',PORT),H)
+    httpd=HTTPServer(('0.0.0.0',PORT),H)
     httpd.socket=ctx.wrap_socket(httpd.socket,server_side=True)
 else:
-    socketserver.TCPServer.allow_reuse_address=True
-httpd=HTTPServer(('0.0.0.0',PORT),H)
+    httpd=HTTPServer(('0.0.0.0',PORT),H)
 httpd.serve_forever()
 PYEOF
 
