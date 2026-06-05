@@ -767,7 +767,11 @@ interactive_install() {
         fi
         echo -e "  → ${green}https://${SUB_DOMAIN}:${SUB_PORT}/sub?token=(自动生成)${re}"
     else
-        echo -e "  → ${yellow}将使用 http://IP:端口 格式${re}"
+        local sp_def; sp_def=$(find_free_port "$(shuf -i 20000-50000 -n 1)")
+        [ "$SUB_PORT" != "0" ] && sp_def="$SUB_PORT"
+        echo -ne "  ${cyan}HTTP 端口 [${sp_def}]: ${re}"; read sp_in
+        [ -n "$sp_in" ] && is_port "$sp_in" && SUB_PORT="$sp_in" || SUB_PORT="${sp_def}"
+        echo -e "  → ${green}http://IP:${SUB_PORT}/TOKEN${re}"
     fi
     echo ""
 
