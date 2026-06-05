@@ -660,7 +660,7 @@ select_protocols() {
                 echo ""
                 echo -ne "  ${yellow}开始安装? (y/n/0=返回) [y]: ${re}"
                 read cf
-                [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "已取消。"; exit 0; }
+                [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "已取消。"; return 1; }
                 [ "$cf" = "0" ] && continue
                 save_conf; return
                 ;;
@@ -718,7 +718,7 @@ interactive_install() {
     echo ""
 
     echo -e " ${white}━━━ ⑧ 额外协议（可选）━━━${re}"
-    select_protocols
+    select_protocols || { yellow_msg "安装已取消。"; return; }
     save_conf; do_install
 }
 
