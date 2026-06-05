@@ -662,7 +662,7 @@ select_protocols() {
                 read cf
                 [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "已取消。"; return 1; }
                 [ "$cf" = "0" ] && continue
-                save_conf; return
+                mkdir -p /etc/xray 2>/dev/null; save_conf; return
                 ;;
             *) red_msg "无效"; sleep 1; continue ;;
         esac
