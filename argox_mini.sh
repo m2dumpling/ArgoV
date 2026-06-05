@@ -264,8 +264,21 @@ start_sub_server() {
 
     cat > "${WORK_DIR}/sub.py" << PYEOF
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import subprocess, os, socketserver
+from socketserver import ThreadingMixIn
+import subprocess, os, socketserver, threading, time
 SUB_FILE='/etc/xray/sub.txt'; PORT=${SUB_PORT}
+CACHE=b''; CACHE_LOCK=threading.Lock()
+
+def refresh_cache():
+    global CACHE
+    try:
+        subprocess.run(['${WORK_DIR}/sub_gen.sh'],timeout=15)
+        with open(SUB_FILE,'rb') as f: CACHE=f.read()
+    except: pass
+
+class ThreadedServer(ThreadingMixIn, HTTPServer):
+    allow_reuse_address=True; daemon_threads=True
+
 class H(BaseHTTPRequestHandler):
     def do_GET(s):
         import urllib.parse as up
@@ -274,24 +287,29 @@ class H(BaseHTTPRequestHandler):
         ok=(s.path=='${SUB_PATH}' or tok=='${SUB_TOKEN}')
         if ok:
             try:
-                subprocess.run(['${WORK_DIR}/sub_gen.sh'],timeout=10)
-            except: pass
-            try:
-                with open(SUB_FILE,'rb') as f: data=f.read()
-                s.send_response(200); s.send_header('Content-Type','text/plain'); s.end_headers(); s.wfile.write(data)
+                with CACHE_LOCK:
+                    s.send_response(200); s.send_header('Content-Type','text/plain'); s.end_headers(); s.wfile.write(CACHE)
             except: s.send_response(500); s.end_headers()
         else: s.send_response(404); s.end_headers()
     def log_message(s,*a): pass
+
+# 后台定时刷新（首次+每60秒）
+refresh_cache()
+def bg_refresh():
+    while True:
+        time.sleep(60); refresh_cache()
+threading.Thread(target=bg_refresh,daemon=True).start()
+
 import ssl, os
 CERT='${WORK_DIR}/sub_cert.pem'; KEY='${WORK_DIR}/sub_key.pem'
 socketserver.TCPServer.allow_reuse_address=True
 if os.path.exists(CERT) and os.path.exists(KEY):
     ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(CERT,KEY)
-    httpd=HTTPServer(('0.0.0.0',PORT),H)
+    httpd=ThreadedServer(('0.0.0.0',PORT),H)
     httpd.socket=ctx.wrap_socket(httpd.socket,server_side=True)
 else:
-    httpd=HTTPServer(('0.0.0.0',PORT),H)
+    httpd=ThreadedServer(('0.0.0.0',PORT),H)
 httpd.serve_forever()
 PYEOF
 
