@@ -315,7 +315,11 @@ b64() { printf '%s' "$1" | base64 -w0 2>/dev/null || printf '%s' "$1" | base64 |
 uuid=$($JQ -r '.inbounds[0].settings.clients[0].id//empty' "$CFG")
 cdn=$($JQ -r '.current_cdn//"cdn.31514926.xyz"' "$CFG")
 cp=$($JQ -r '.current_cdn_port//443' "$CFG")
-hd=$(get_domain); ip=$(curl -s --max-time 2 ipv4.ip.sb 2>/dev/null)
+hd=$(get_domain)
+ip=""; for s in ifconfig.me icanhazip.com checkip.amazonaws.com api.ipify.org; do
+    ip=$(curl -s --max-time 3 "$s" 2>/dev/null || wget -qO- -T3 "$s" 2>/dev/null)
+    echo "$ip" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' && break || ip=""
+done
 [ "$MODE" = "fixed-token" ] && hd="$FIXED"
 links=""
 if [ -n "$hd" ]; then
