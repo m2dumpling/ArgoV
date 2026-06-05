@@ -244,6 +244,7 @@ start_sub_server() {
     if [ "$SUB_PORT" = "0" ]; then
         [ -n "$SUB_DOMAIN" ] && SUB_PORT=2096 || SUB_PORT=$(find_free_port "$(shuf -i 20000-50000 -n 1)")
     fi
+    port_in_use "$SUB_PORT" && SUB_PORT=$(find_free_port "$SUB_PORT")
     [ -z "$SUB_TOKEN" ] && SUB_TOKEN=$(openssl rand -hex 8 2>/dev/null || printf '%08x%08x' $RANDOM $RANDOM)
     [ -z "$SUB_PATH" ] && SUB_PATH="/${SUB_TOKEN}"
     save_conf; bash "${WORK_DIR}/sub_gen.sh" 2>/dev/null
@@ -356,8 +357,7 @@ WantedBy=multi-user.target
 EOF
         systemctl daemon-reload 2>/dev/null || true
         systemctl enable argox-sub 2>/dev/null || true
-        systemctl stop argox-sub 2>/dev/null; fuser -k ${SUB_PORT}/tcp 2>/dev/null; sleep 1
-        systemctl start argox-sub 2>/dev/null || true
+        systemctl restart argox-sub 2>/dev/null || true
     fi
 }
 
@@ -710,7 +710,21 @@ interactive_install() {
     read -p "  域名 [回车跳过]: " sd
     [ -n "$sd" ] && SUB_DOMAIN="$sd"
     if [ -n "$SUB_DOMAIN" ]; then
-        [ "$SUB_PORT" = "0" ] && SUB_PORT=2096
+        echo ""
+        echo -e "  ${yellow}选择 CF 支持的 HTTPS 端口:${re}"
+        echo -e "  ${cyan}1${re}. 2096 (默认)  ${cyan}2${re}. 8443  ${cyan}3${re}. 2053  ${cyan}4${re}. 2083  ${cyan}5${re}. 2087  ${cyan}6${re}. 443  ${cyan}c${re}. 自定义"
+        read -p "  [1]: " pc
+        case "${pc:-1}" in
+            2) SUB_PORT=8443 ;; 3) SUB_PORT=2053 ;; 4) SUB_PORT=2083 ;;
+            5) SUB_PORT=2087 ;; 6) SUB_PORT=443 ;;
+            c|C) read -p "  端口: " SUB_PORT ;;
+            *) SUB_PORT=2096 ;;
+        esac
+        if port_in_use "$SUB_PORT"; then
+            red_msg "端口 ${SUB_PORT} 被占用！"
+            SUB_PORT=$(find_free_port 2096)
+            yellow_msg "  自动切换为 ${SUB_PORT}"
+        fi
         echo -e "  → ${green}https://${SUB_DOMAIN}:${SUB_PORT}/sub?token=(自动生成)${re}"
     else
         echo -e "  → ${yellow}将使用 http://IP:端口 格式${re}"
