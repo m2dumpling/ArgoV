@@ -232,11 +232,10 @@ install_qrencode() {
 # 订阅服务器（极简：Bash 生成内容 → 文件 → Python serve 文件）
 #==============================================================================
 get_sub_url() {
-    local ip; ip=$(get_ip 2>/dev/null || echo "127.0.0.1")
     if [ -n "$SUB_DOMAIN" ]; then
         echo "https://${SUB_DOMAIN}:${SUB_PORT}/sub?token=${SUB_TOKEN}"
-    else
-        echo "$(get_sub_url)"
+    elif [ -n "$SUB_PORT" ] && [ "$SUB_PORT" != "0" ] && [ -n "$SUB_PATH" ]; then
+        echo "http://${1:-127.0.0.1}:${SUB_PORT}${SUB_PATH}"
     fi
 }
 
@@ -416,7 +415,7 @@ show_node() {
         echo ""
         echo -e "  ${yellow}① VLESS${re}  ${green}$(gen_vless_link "$uuid" "$hd" "$cd" "$cp")${re}\n"
         echo -e "  ${yellow}② VMess${re}  ${green}$(gen_vmess_link "$uuid" "$hd" "$cd" "$cp")${re}\n"
-        load_conf 2>/dev/null; local su; su=$(get_sub_url 2>/dev/null)
+        load_conf 2>/dev/null; local su; su=$(get_sub_url "$ip" 2>/dev/null)
         show_qr "${su:-$(gen_vless_link "$uuid" "$hd" "$cd" "$cp")}"
     fi
 
@@ -445,8 +444,7 @@ show_node() {
     fi
 
     echo -e "  ${yellow}💡${re} 复制链接 → 客户端导入    菜单 2 换线路 | 菜单 3 改配置"
-    load_conf 2>/dev/null
-    load_conf 2>/dev/null; local su; su=$(get_sub_url 2>/dev/null)
+    local su; su=$(get_sub_url "$ip" 2>/dev/null)
     [ -n "$su" ] && { echo ""; echo -e "  ${purple}━━━ 📡 订阅链接 ━━━${re}"; echo -e "  ${white}${su}${re}"; echo -e "  ${yellow}💡 客户端填入 → 更新订阅 → 全部节点一键导入，重启自动刷新域名${re}"; }
 }
 
@@ -854,7 +852,7 @@ ARGOWRAP
         echo -e "  ${white}── Argo (无需开放端口) ──${re}\n"
         echo -e "  ${yellow}VLESS${re} ${green}$(gen_vless_link "$UUID" "$hd" "$CDN_DOMAIN" "$CDN_PORT")${re}\n"
         echo -e "  ${yellow}VMess${re} ${green}$(gen_vmess_link "$UUID" "$hd" "$CDN_DOMAIN" "$CDN_PORT")${re}\n"
-        local su=""; [ -n "$SUB_PORT" ] && [ "$SUB_PORT" != "0" ] && [ -n "$ip" ] && su="$(get_sub_url)"
+        local su=""; [ -n "$SUB_PORT" ] && [ "$SUB_PORT" != "0" ] && [ -n "$ip" ] && su="$(get_sub_url "$ip")"
         show_qr "${su:-$(gen_vless_link "$UUID" "$hd" "$CDN_DOMAIN" "$CDN_PORT")}"
     fi
     if [ "$ENABLE_REALITY" = 1 ] && [ -n "$ip" ]; then
@@ -866,7 +864,7 @@ ARGOWRAP
         echo -e "  ${green}$(gen_ss_link "$SS_METHOD" "$SS_PASS" "$ip" "$SS_PORT" "${NODE_NAME}-SS")${re}\n"
     fi
     if [ -n "$ip" ] && [ "$SUB_PORT" != "0" ] && [ -n "$SUB_PATH" ]; then
-        echo -e "  ${cyan}📡 订阅${re}: ${green}$(get_sub_url)${re}"
+        echo -e "  ${cyan}📡 订阅${re}: ${green}$(get_sub_url "$ip")${re}"
         echo -e "  ${yellow}💡${re} 客户端填入订阅URL → 更新 → 所有协议自动导入"
     fi
     echo -e "  ${yellow}📋${re} argov    ${yellow}💡${re} 复制链接 → 客户端导入"
