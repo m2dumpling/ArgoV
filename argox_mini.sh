@@ -407,10 +407,13 @@ stop_sub_server() {
 # 状态 & 摘要
 #==============================================================================
 get_status() {
-    if systemctl is-active xray 2>/dev/null; then XRAY_ST="${green}● 运行中${re}"; XRAY_RAW="running"
-    else XRAY_ST="${red}○ 已停止${re}"; XRAY_RAW="stopped"; fi
-    if systemctl is-active argox-tunnel 2>/dev/null; then TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"
-    else TUNNEL_ST="${red}○ 已停止${re}"; TUNNEL_RAW="stopped"; fi
+    if [ "$IS_ALPINE" = 1 ]; then
+        (rc-service xray status 2>/dev/null | grep -qE "started|crashed" || pgrep -x xray &>/dev/null) && { XRAY_ST="${green}● 运行中${re}"; XRAY_RAW="running"; } || { XRAY_ST="${red}○ 已停止${re}"; XRAY_RAW="stopped"; }
+        (rc-service argox-tunnel status 2>/dev/null | grep -qE "started|crashed" || pgrep -f 'argo.*tunnel' &>/dev/null) && { TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"; } || { TUNNEL_ST="${red}○ 已停止${re}"; TUNNEL_RAW="stopped"; }
+    else
+        systemctl is-active xray 2>/dev/null && { XRAY_ST="${green}● 运行中${re}"; XRAY_RAW="running"; } || { XRAY_ST="${red}○ 已停止${re}"; XRAY_RAW="stopped"; }
+        systemctl is-active argox-tunnel 2>/dev/null && { TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"; } || { TUNNEL_ST="${red}○ 已停止${re}"; TUNNEL_RAW="stopped"; }
+    fi
 }
 get_proto_summary() {
     local s="VL-Argo VM-Argo"
