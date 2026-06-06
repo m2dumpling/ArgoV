@@ -41,7 +41,7 @@ require(
     "interactive install must call select_protocols before do_install",
 )
 require(
-    r"ENABLE_REALITY.*gen_reality_shortid",
+    r"ENABLE_REALITY[\s\S]*gen_reality_shortid",
     "Reality install path must generate REALITY_SHORTID",
 )
 require(
@@ -69,10 +69,11 @@ require(
     "WARP routing must stop when SOCKS installation fails",
 )
 require(
-    r"节点与线路",
-    "main menu should expose a clearer node/route group",
+    r"节点管理.*服务控制.*系统维护",
+    "main menu must have three clearly separated groups: nodes, services, maintenance",
+    flags=re.DOTALL,
 )
 require(
-    r"基础配置",
-    "change_config menu should be narrowed to base configuration",
+    r"节点配置修改",
+    "change_config menu must exist with a clear purpose label",
 )

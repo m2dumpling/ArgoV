@@ -1,0 +1,18 @@
+# AI tool artifacts
+.claude/
+.spec-workflow/
+.mcp/
+.gemini/
+.copilot/
+.cursor/
+.windsurf/
+
+# System
+.DS_Store
+Thumbs.db
+*.swp
+*.bak
+
+# IDE
+.vscode/
+.idea/
