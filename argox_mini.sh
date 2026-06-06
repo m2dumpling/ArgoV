@@ -1509,7 +1509,7 @@ view_delete_custom_links() {
                 ;;
             da|DA)
                 echo -ne "  ${red}⚠ 确认清空全部 ${count} 个链接? (y/n): ${re}"; read cf
-                [ "$cf" = "y" ] || [ "$cf" = "Y" ] && { > "${WORK_DIR}/custom_links.txt"; green_msg "已清空。"; bash "${WORK_DIR}/sub_gen.sh" 2>/dev/null &; sleep 1; }
+                [ "$cf" = "y" ] || [ "$cf" = "Y" ] && { > "${WORK_DIR}/custom_links.txt"; green_msg "已清空。"; bash "${WORK_DIR}/sub_gen.sh" 2>/dev/null & sleep 1; }
                 ;;
             *) red_msg "无效"; sleep 1 ;;
         esac
