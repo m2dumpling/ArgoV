@@ -2015,6 +2015,8 @@ main_menu() {
         [ "$ARGO_MODE" = "fixed-token" ] && hd="$ARGO_FIXED_DOMAIN"
 
         logo
+        echo -e "  ${yellow}▶${re} 命令行输入 ${green}argov${re} 可随时启动本面板"
+        echo ""
         echo -e " ${purple}╔══════════════════════════════════════════════════╗${re}"
         echo -e " ${purple}║${re}     ${white}ArgoX-Mini  纯净版隧道管理面板${re}              ${purple}║${re}"
         echo -e " ${purple}║${re}     ${cyan}$(get_proto_summary)${re}"
