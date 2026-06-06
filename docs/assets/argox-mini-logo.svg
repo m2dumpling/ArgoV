@@ -17,17 +17,17 @@
     <path d="M 27 35 C 34 52, 46 52, 53 35" fill="none" stroke="#F9A8D4" stroke-width="2.5" stroke-linecap="round" opacity="0.8"/>
   </g>
 
-  <!-- ArgoX-Mini text with per-letter coloring -->
+  <!-- ArgoX-Mini text -->
   <text font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="34" font-weight="800">
     <tspan x="88" y="48" fill="#93C5FD">A</tspan>
-    <tspan fill="#86EFAC">r</tspan>
-    <tspan fill="#F9A8D4">g</tspan>
+    <tspan fill="#93C5FD">r</tspan>
+    <tspan fill="#93C5FD">g</tspan>
     <tspan fill="#93C5FD">o</tspan>
-    <tspan fill="#86EFAC">X</tspan>
-    <tspan fill="#F9A8D4" font-weight="300">-</tspan>
-    <tspan fill="#93C5FD" font-weight="600">M</tspan>
-    <tspan fill="#86EFAC" font-weight="600">i</tspan>
+    <tspan fill="#93C5FD">X</tspan>
+    <tspan fill="#FDE68A" font-weight="300">-</tspan>
+    <tspan fill="#F9A8D4" font-weight="600">M</tspan>
+    <tspan fill="#F9A8D4" font-weight="600">i</tspan>
     <tspan fill="#F9A8D4" font-weight="600">n</tspan>
-    <tspan fill="#93C5FD" font-weight="600">i</tspan>
+    <tspan fill="#F9A8D4" font-weight="600">i</tspan>
   </text>
 </svg>
