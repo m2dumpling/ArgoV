@@ -366,6 +366,12 @@ if $JQ -e '.inbounds[]|select(.tag=="reality")' "$CFG" >/dev/null 2>&1 && [ -n "
     [ -n "$rsid" ] && rsid="&sid=${rsid}" || rsid=""
     [ -n "$rport" ] && links+="vless://${uuid}@${ip}:${rport}?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=${rs}&pbk=${rpub}&fp=chrome${rsid}#${NODE_NAME}-Reality"$'\n'
 fi
+# 自定义链接（用户自添加）
+if [ -f /etc/xray/custom_links.txt ]; then
+    while IFS= read -r cl; do
+        [ -n "$cl" ] && links+="${cl}"$'\n'
+    done < /etc/xray/custom_links.txt
+fi
 { printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n'; } > /etc/xray/sub.txt
 SUBEOF
     chmod +x "${WORK_DIR}/sub_gen.sh"
@@ -1012,6 +1018,15 @@ manage_protocols() {
         if [ "$has_reality" = 0 ]; then aa=$((aa+1)); echo -e "  ${cyan}a${aa}${re}. VLESS Reality"; fi
         if [ "$has_ss" = 0 ]; then aa=$((aa+1)); echo -e "  ${cyan}a${aa}${re}. Shadowsocks"; fi
 
+        # 自定义节点
+        echo ""; echo -e "  ${white}── 自定义节点 (自添加) ──${re}"; echo ""
+        local custom_count=0
+        [ -f "${WORK_DIR}/custom_links.txt" ] && custom_count=$(grep -c '[^[:space:]]' "${WORK_DIR}/custom_links.txt" 2>/dev/null || echo 0)
+        [ -z "$custom_count" ] && custom_count=0
+        echo -e "  已有 ${cyan}${custom_count}${re} 个自定义链接"
+        echo ""
+        echo -e "  ${cyan}c1${re}. 添加自定义链接    ${cyan}c2${re}. 查看/删除自定义链接"
+
         [ "$has_reality" = 1 ] || [ "$has_ss" = 1 ] && echo "" && echo -e "  ${red}d${re}. 删除可选节点"
         echo ""; echo -e "  ${red}0${re}. 返回"
         echo -e " ${purple}────────────────────────────────────────${re}"
@@ -1025,6 +1040,8 @@ manage_protocols() {
             e4) [ "$has_ss" = 1 ] && [ "$has_reality" = 1 ] && edit_protocol "ss" "Shadowsocks" ;;
             a1) [ "$has_reality" = 0 ] && add_single_protocol "reality" ;;
             a2) [ "$has_ss" = 0 ] && add_single_protocol "ss" ;;
+            c1) add_custom_link ;;
+            c2) view_delete_custom_links ;;
             d|D) delete_protocol ;;
             *) red_msg "无效"; sleep 1; continue ;;
         esac
@@ -1398,6 +1415,105 @@ delete_protocol() {
     [ "$del_tag" = "ss" ] && ENABLE_SS=0
     save_conf; systemctl restart xray 2>/dev/null; sleep 1; green_msg "已删除。"
     echo ""; read -p "  按回车返回..." -r
+}
+
+#==============================================================================
+#==============================================================================
+# 自定义节点链接（用户自行粘贴任意协议链接，加入订阅输出）
+#==============================================================================
+add_custom_link() {
+    clear
+    echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
+    echo -e " ${purple}║${re}     ${white}添加自定义节点链接${re}                  ${purple}║${re}"
+    echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
+    echo ""
+    echo -e "  ${yellow}粘贴任意协议节点链接，如 Hysteria2、Trojan、TUIC 等${re}"
+    echo -e "  ${yellow}支持格式: hy2://, trojan://, vless://, vmess://, ss://, tuic:// 等${re}"
+    echo -e "  ${yellow}链接会自动加入订阅 base64，每次更新订阅都能获取${re}"
+    echo ""
+    echo -e "  ${cyan}示例: hy2://password@1.2.3.4:443?sni=xxx.com&insecure=0#Name${re}"
+    echo ""
+    read -p "  链接: " link
+    [ -z "$link" ] && { yellow_msg "已取消。"; sleep 1; return; }
+    # 防粘连：每次只能粘贴一个链接
+    local url_count; url_count=$(echo "$link" | grep -o '://' | wc -l)
+    if [ "$url_count" -gt 1 ]; then
+        red_msg "每次只能粘贴一个链接！检测到 ${url_count} 个链接，请分开粘贴。"
+        sleep 2; return
+    fi
+    # 基础校验：必须以 protocol:// 开头
+    if ! echo "$link" | grep -qE '^[a-z][a-z0-9+.-]*://'; then
+        red_msg "无效链接格式，必须以 protocol:// 开头（如 hy2://, trojan:// 等）"
+        sleep 2; return
+    fi
+    mkdir -p "$WORK_DIR" 2>/dev/null
+    # 一次性迁移：旧版 sub_gen.sh 不含 custom_links 支持，调用 start_sub_server 更新
+    if ! grep -qF 'custom_links.txt' "${WORK_DIR}/sub_gen.sh" 2>/dev/null; then
+        yellow_msg "正在更新订阅脚本以支持自定义节点..."
+        start_sub_server
+    fi
+    echo "$link" >> "${WORK_DIR}/custom_links.txt"
+    green_msg "已添加！订阅将包含此节点。"
+    bash "${WORK_DIR}/sub_gen.sh" 2>/dev/null &
+    sleep 1
+}
+
+view_delete_custom_links() {
+    while true; do
+        [ ! -f "${WORK_DIR}/custom_links.txt" ] || [ ! -s "${WORK_DIR}/custom_links.txt" ] && { yellow_msg "暂无自定义链接。"; sleep 1; return; }
+        clear
+        echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
+        echo -e " ${purple}║${re}     ${white}查看/删除自定义链接${re}                  ${purple}║${re}"
+        echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
+        echo ""
+
+        # 读取并显示
+        local count=0
+        local links=()
+        while IFS= read -r line; do
+            [ -z "$(echo "$line" | tr -d '[:space:]')" ] && continue
+            count=$((count+1))
+            links+=("$line")
+            local display="$line"
+            [ ${#display} -gt 78 ] && display="${display:0:75}..."
+            echo -e "  ${green}${count}${re}. ${cyan}${display}${re}"
+        done < "${WORK_DIR}/custom_links.txt"
+
+        [ "$count" = 0 ] && { yellow_msg "暂无有效链接。"; sleep 1; return; }
+
+        echo ""
+        echo -e "  ${red}d${re}. 删除指定序号    ${red}da${re}. 清空全部    ${cyan}0${re}. 返回"
+        echo -e " ${purple}────────────────────────────────────────${re}"
+        read -p "  请选择: " c
+        case "$c" in
+            0) return ;;
+            d|D)
+                read -p "  删除序号 (多个用逗号分隔，如 1,3): " nums
+                [ -z "$nums" ] && { yellow_msg "已取消。"; continue; }
+                IFS=',' read -ra indices <<< "$nums"
+                # 重建文件
+                local new_links=() idx=0
+                while IFS= read -r line; do
+                    [ -z "$(echo "$line" | tr -d '[:space:]')" ] && continue
+                    idx=$((idx+1))
+                    local keep=1
+                    for n in "${indices[@]}"; do
+                        n=$(echo "$n" | xargs)
+                        [ "$n" = "$idx" ] && { keep=0; break; }
+                    done
+                    [ "$keep" = 1 ] && new_links+=("$line")
+                done < "${WORK_DIR}/custom_links.txt"
+                printf '%s\n' "${new_links[@]}" > "${WORK_DIR}/custom_links.txt"
+                green_msg "已删除。"; bash "${WORK_DIR}/sub_gen.sh" 2>/dev/null &
+                sleep 1
+                ;;
+            da|DA)
+                echo -ne "  ${red}⚠ 确认清空全部 ${count} 个链接? (y/n): ${re}"; read cf
+                [ "$cf" = "y" ] || [ "$cf" = "Y" ] && { > "${WORK_DIR}/custom_links.txt"; green_msg "已清空。"; bash "${WORK_DIR}/sub_gen.sh" 2>/dev/null &; sleep 1; }
+                ;;
+            *) red_msg "无效"; sleep 1 ;;
+        esac
+    done
 }
 
 #==============================================================================
