@@ -1,4 +1,4 @@
-# 🚇 ArgoV — Cloudflare Argo 隧道管理面板
+# 🌐 ArgoV — Cloudflare Argo 隧道管理面板
 
 <p align="center">
   <img src="docs/assets/argov-logo.svg?v=3" alt="ArgoV" width="440">

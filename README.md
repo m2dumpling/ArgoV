@@ -1,4 +1,4 @@
-# 🚇 ArgoV — Cloudflare Argo Tunnel Manager
+# 🌐 ArgoV — Cloudflare Argo Tunnel Manager
 
 <p align="center">
   <img src="docs/assets/argov-logo.svg?v=3" alt="ArgoV" width="440">
