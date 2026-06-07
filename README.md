@@ -16,9 +16,9 @@
 
 ---
 
-**ArgoX-Mini** is a zero-public-port proxy management panel powered by Cloudflare Argo Tunnel. It wraps VLESS / VMess traffic inside Cloudflare's edge network — no open firewall ports, no domain required. Optional Reality and Shadowsocks for direct connections. Built-in subscription server with auto domain refresh after VPS reboot.
+**ArgoX-Mini** is a zero-public-port proxy management panel powered by Cloudflare Argo Tunnel. It wraps VLESS / VMess traffic inside Cloudflare's edge network — no open firewall ports, no domain required. Optional Reality and Shadowsocks for direct connections. Built-in subscription server with auto domain refresh after VPS reboot. Server-side landing relay for clean IP egress — transparent to all clients.
 
-[Quick Start](#quick-start) · [Features](#features) · [Install](#install-wizard) · [Subscription](#subscription-server) · [WARP](#warp-domain-routing) · [Architecture](#architecture) · [Clients](#client-config) · [中文版](README_CN.md)
+[Quick Start](#quick-start) · [Features](#features) · [Subscription](#subscription-server) · [Relay](#landing-relay) · [WARP](#warp-domain-routing) · [Architecture](#architecture) · [Clients](#client-config) · [中文版](README_CN.md)
 
 ---
 
@@ -47,6 +47,7 @@ NODE_NAME=Tokyo CDN_DOMAIN=skk.moe bash <(curl -Ls https://raw.githubusercontent
 | **Install Wizard** | 8-step interactive setup with sensible defaults and auto system detection |
 | **Subscription Server** | Python3 HTTP server with ThreadingMixIn + 10s auto-refresh. Token auth. Survives VPS reboot with fresh Argo domain |
 | **Custom Links** | Paste any protocol link (Hysteria2, Trojan, TUIC, etc.) — auto-merged into the subscription for all clients |
+| **Landing Relay** | Server-side proxy chaining to a clean-IP landing VPS. DNS resolved on landing (zero leak). Supports SS/VLESS/VMess/Trojan exit |
 | **WARP Routing** | One-click fscarmen WARP with Smart Split: Google → IPv6, YouTube → SOCKS5, rest → direct |
 | **Node Management** | Add / edit / delete Reality and Shadowsocks nodes without full reinstall |
 | **System Support** | Debian / Ubuntu / CentOS / Alpine Linux. systemd + openrc service management |
@@ -150,6 +151,33 @@ Press `w` for WARP management. Three routing modes:
 - Custom domain routing or Google / YouTube defaults
 - Python3 safe JSON rewrite with validation and auto-rollback
 
+## Landing Relay
+
+Press `r` to configure server-side proxy chaining. Route traffic through a **landing VPS** with a clean IP — all clients get the clean IP automatically, no client-side chain proxy configuration needed.
+
+```
+╔══════════════════════════════════════════╗
+║       Landing Relay                      ║
+╚══════════════════════════════════════════╝
+
+  ● Enabled → ss → 1.2.3.4:28175  Mode: all
+
+  r1. Set landing node    r2. Toggle mode    r3. Manage domains
+  r4. Apply & restart     r5. Disable
+```
+
+| Mode | Behavior |
+|------|----------|
+| **All** (default) | All traffic exits through landing VPS |
+| **Split** | Only specified domains relay; rest → direct or WARP |
+
+- Paste any `ss://` / `vless://` / `vmess://` / `trojan://` link as the exit node
+- **No DNS leak** — domains forwarded as-is to landing (`domainStrategy: AsIs`), landing resolves DNS
+- Landing VPS only needs one SS server (SS-Rust: `chacha20-ietf-poly1305`, 1 command)
+- Auto-prompt to apply after mode/domain changes — no forgotten `r4`
+- Coexists with WARP — relay rules never touch `warp-out` / `v6-direct`
+- Survives reboot and reinstall
+
 ## Architecture
 
 ```
@@ -160,6 +188,8 @@ Client → CF Edge (TLS) → Argo Tunnel → localhost:8080 Xray fallback
 Direct (optional):  VLESS+Reality (public port)  ·  Shadowsocks (public port)
 
 WARP routing:  Xray rules → warp-out (SOCKS5 :40000) / v6-direct (IPv6)
+
+Relay routing:  Xray rules → relay-out (SS/VLESS/VMess/Trojan) → Landing VPS → Internet
 
 Subscription:  sub_gen.sh → sub.txt → base64 → Python HTTP → Client
                                   ↑
