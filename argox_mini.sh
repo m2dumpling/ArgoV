@@ -1045,8 +1045,9 @@ manage_protocols() {
             e3) if [ "$has_reality" = 1 ]; then edit_protocol "reality" "VLESS Reality"
                 elif [ "$has_ss" = 1 ]; then edit_protocol "ss" "Shadowsocks"; fi ;;
             e4) [ "$has_ss" = 1 ] && [ "$has_reality" = 1 ] && edit_protocol "ss" "Shadowsocks" ;;
-            a1) [ "$has_reality" = 0 ] && add_single_protocol "reality" ;;
-            a2) [ "$has_ss" = 0 ] && add_single_protocol "ss" ;;
+            a1) if [ "$has_reality" = 0 ]; then add_single_protocol "reality"
+                elif [ "$has_ss" = 0 ]; then add_single_protocol "ss"; fi ;;
+            a2) [ "$has_ss" = 0 ] && [ "$has_reality" = 0 ] && add_single_protocol "ss" ;;
             c1) add_custom_link ;;
             c2) view_delete_custom_links ;;
             d|D) delete_protocol ;;
