@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT="${1:-argox_mini.sh}"
+SCRIPT="${1:-argov.sh}"
 
 if [ ! -f "$SCRIPT" ]; then
   echo "missing script: $SCRIPT" >&2
@@ -14,7 +14,7 @@ if [ -z "$PYTHON_BIN" ]; then
   echo "python3 or python is required for static tests" >&2
   exit 1
 fi
-"$PYTHON_BIN" tests/argox_static_tests.py "$SCRIPT"
+"$PYTHON_BIN" tests/argov_static_tests.py "$SCRIPT"
 
 if ! grep -q 'StandardOutput=append:${TUNNEL_LOG}' "$SCRIPT"; then
   echo "systemd temp tunnel service must append stdout to TUNNEL_LOG" >&2
@@ -26,4 +26,4 @@ if ! grep -q 'StandardError=append:${TUNNEL_LOG}' "$SCRIPT"; then
   exit 1
 fi
 
-echo "argox static tests passed"
+echo "argov static tests passed"

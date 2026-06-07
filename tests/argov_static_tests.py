@@ -30,7 +30,7 @@ require(
 require(r"save_var\(\)", "save_conf must use a shell-escaping save_var helper")
 require(
     r"save_var NODE_NAME \"\$NODE_NAME\"",
-    "NODE_NAME must be persisted through save_var so quotes cannot break argox.conf",
+    "NODE_NAME must be persisted through save_var so quotes cannot break argov.conf",
 )
 require(
     r"get_cdn\(\)[\s\S]*\[\s+-n \"\$v\"\s+\].*\[\s+\"\$v\"\s+!= \"null\"\s+\]",

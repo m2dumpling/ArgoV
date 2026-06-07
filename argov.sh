@@ -1010,7 +1010,7 @@ ARGOWRAP
     echo ""; echo -e " ${purple}╔══════════════════════════════════════════════════╗${re}"
     echo -e " ${purple}║${re}       ${white}🎉 部署成功 · ${NODE_NAME}${re}"
     echo -e " ${purple}╚══════════════════════════════════════════════════╝${re}"
-    echo ""; echo -e "  ${cyan}管理${re}: ${green}argov${re}    ${cyan}名称${re}: ${white}${NODE_NAME}${re}    ${cyan}UUID${re}: ${purple}${UUID}${re}"; echo ""
+    echo ""; echo -e "  ${cyan}管理${re}: ${green}ag${re}    ${cyan}名称${re}: ${white}${NODE_NAME}${re}    ${cyan}UUID${re}: ${purple}${UUID}${re}"; echo ""
 
     if [ -n "$hd" ]; then
         echo -e "  ${white}── Argo (无需开放端口) ──${re}\n"
@@ -1031,7 +1031,7 @@ ARGOWRAP
         echo -e "  ${cyan}📡 订阅${re}: ${green}$(get_sub_url "$ip")${re}"
         echo -e "  ${yellow}💡${re} 客户端填入订阅URL → 更新 → 所有协议自动导入"
     fi
-    echo -e "  ${yellow}📋${re} ag    ${yellow}💡${re} 复制链接 → 客户端导入"
+    echo -e "  ${yellow}📋${re} ag       ${yellow}💡${re} 复制链接 → 客户端导入"
 }
 
 #==============================================================================
@@ -2510,7 +2510,7 @@ main_menu() {
         [ "$ARGO_MODE" = "fixed-token" ] && hd="$ARGO_FIXED_DOMAIN"
 
         logo
-        echo -e "  ${yellow}▶${re} 命令行输入 ${green}argov${re} 可随时启动本面板"
+        echo -e "  ${yellow}▶${re} 命令行输入 ${green}ag${re} 可随时启动本面板"
         echo ""
         echo -e " ${purple}╔══════════════════════════════════════════════════╗${re}"
         echo -e " ${purple}║${re}     ${white}ArgoV  纯净版隧道管理面板${re}              ${purple}║${re}"
