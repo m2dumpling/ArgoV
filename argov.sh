@@ -526,8 +526,8 @@ get_status() {
 }
 get_proto_summary() {
     local s="VL-Argo VM-Argo"
-    grep -q '"shadowsocks"' "$CONFIG_FILE" 2>/dev/null && s="$s SS"
-    grep -qE '"tag"[[:space:]]*:[[:space:]]*"reality"' "$CONFIG_FILE" 2>/dev/null && s="$s Reality"
+    jq -e '.inbounds[]|select(.protocol=="shadowsocks")' "$CONFIG_FILE" >/dev/null 2>&1 && s="$s SS"
+    jq -e '.inbounds[]|select(.tag=="reality")' "$CONFIG_FILE" >/dev/null 2>&1 && s="$s Reality"
     echo "$s"
 }
 
@@ -561,7 +561,7 @@ show_node() {
         show_qr "${su:-$(gen_vless_link "$uuid" "$hd" "$cd" "$cp")}"
     fi
 
-    if grep -qE '"tag"[[:space:]]*:[[:space:]]*"reality"' "$CONFIG_FILE" 2>/dev/null && [ -n "$ip" ]; then
+    if jq -e '.inbounds[]|select(.tag=="reality")' "$CONFIG_FILE" >/dev/null 2>&1 && [ -n "$ip" ]; then
         local rport rsni rp
         rport=$(jq -r '.inbounds[]|select(.tag=="reality")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
         rsni=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames[0]//empty' "$CONFIG_FILE" 2>/dev/null)
@@ -574,7 +574,7 @@ show_node() {
         echo ""
     fi
 
-    if grep -q '"shadowsocks"' "$CONFIG_FILE" 2>/dev/null && [ -n "$ip" ]; then
+    if jq -e '.inbounds[]|select(.protocol=="shadowsocks")' "$CONFIG_FILE" >/dev/null 2>&1 && [ -n "$ip" ]; then
         local sport sm sp
         sport=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
         sm=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.settings.method//empty' "$CONFIG_FILE" 2>/dev/null)
