@@ -253,10 +253,75 @@ install_qrencode() {
 #==============================================================================
 get_sub_url() {
     if [ -n "$SUB_DOMAIN" ]; then
-        echo "https://${SUB_DOMAIN}:${SUB_PORT}/sub?token=${SUB_TOKEN}"
+        echo "https://${SUB_DOMAIN}:${SUB_PORT}/sub?token=${SUB_TOKEN}#${NODE_NAME}"
     elif [ -n "$SUB_PORT" ] && [ "$SUB_PORT" != "0" ] && [ -n "$SUB_PATH" ]; then
-        echo "http://${1:-127.0.0.1}:${SUB_PORT}${SUB_PATH}"
+        echo "http://${1:-127.0.0.1}:${SUB_PORT}${SUB_PATH}#${NODE_NAME}"
     fi
+}
+
+edit_subscription() {
+    while true; do
+        clear; load_conf
+        echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
+        echo -e " ${purple}║${re}       ${white}订阅配置编辑${re}                      ${purple}║${re}"
+        echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
+        echo ""
+        local cur_url; cur_url=$(get_sub_url 2>/dev/null || echo "未配置")
+        echo -e "  ${yellow}当前:${re} ${cyan}${cur_url}${re}"
+        echo ""
+        if [ -n "$SUB_DOMAIN" ]; then
+            echo -e "  ${green}1${re}. 修改域名 — ${cyan}${SUB_DOMAIN}${re}"
+            echo -e "  ${green}2${re}. 修改端口 — ${cyan}${SUB_PORT}${re}"
+            echo -e "  ${green}3${re}. 切换为 HTTP 模式"
+        else
+            echo -e "  ${green}1${re}. 添加域名 (HTTP → HTTPS)"
+            echo -e "  ${green}2${re}. 修改端口 — ${cyan}${SUB_PORT}${re}"
+        fi
+        echo -e "  ${green}4${re}. 重新生成 Token"
+        echo -e "  ${cyan}5${re}. 查看完整订阅链接"
+        echo ""; echo -e "  ${red}0${re}. 返回"
+        echo -e " ${purple}────────────────────────────────────────${re}"
+        read -p "  请选择: " c
+        case "$c" in
+            1)
+                if [ -n "$SUB_DOMAIN" ]; then
+                    read -p "  新域名 [${SUB_DOMAIN}]: " nd
+                    [ -n "$nd" ] && SUB_DOMAIN="$nd"
+                else
+                    echo -e "  ${yellow}输入已指向本机 IP 的域名，将切换到 HTTPS:${re}"
+                    read -p "  域名: " nd
+                    [ -z "$nd" ] && { yellow_msg "已取消。"; sleep 1; continue; }
+                    SUB_DOMAIN="$nd"
+                    [ "$SUB_PORT" = "0" ] && SUB_PORT=2096
+                fi
+                save_conf; green_msg "已更新。"; sleep 1
+                ;;
+            2)
+                read -p "  新端口 [${SUB_PORT}]: " np
+                [ -n "$np" ] && is_port "$np" && SUB_PORT="$np"
+                save_conf; green_msg "端口: ${SUB_PORT}"; sleep 1
+                ;;
+            3)
+                if [ -n "$SUB_DOMAIN" ]; then
+                    echo -ne "  ${yellow}确认切换为 HTTP? (y/n): ${re}"; read cf
+                    [ "$cf" != "y" ] && [ "$cf" != "Y" ] && { yellow_msg "已取消。"; sleep 1; continue; }
+                    SUB_DOMAIN=""
+                    [ "$SUB_PORT" = "2096" ] && SUB_PORT=$(find_free_port "$(shuf -i 20000-50000 -n 1)")
+                else
+                    red_msg "已是 HTTP 模式"; sleep 1
+                fi
+                save_conf; green_msg "已切换。"; sleep 1
+                ;;
+            4)
+                SUB_TOKEN=$(openssl rand -hex 8 2>/dev/null || printf '%08x%08x' $RANDOM $RANDOM)
+                SUB_PATH="/${SUB_TOKEN}"; save_conf
+                green_msg "新 Token: ${SUB_TOKEN}"; sleep 1
+                ;;
+            5) echo ""; echo -e "  ${green}$(get_sub_url 2>/dev/null)${re}"; echo ""; read -p "  按回车继续..." -r ;;
+            0) return ;;
+            *) red_msg "无效"; sleep 1 ;;
+        esac
+    done
 }
 
 start_sub_server() {
@@ -304,7 +369,12 @@ class H(BaseHTTPRequestHandler):
         if ok:
             try:
                 with CACHE_LOCK:
-                    s.send_response(200); s.send_header('Content-Type','text/plain'); s.end_headers(); s.wfile.write(CACHE)
+                    s.send_response(200)
+                    s.send_header('Content-Type','text/plain; charset=utf-8')
+                    s.send_header('Profile-Update-Interval','24')
+                    s.send_header('Profile-Title','${NODE_NAME}')
+                    s.send_header('Content-Disposition','inline; filename="${NODE_NAME}"')
+                    s.end_headers(); s.wfile.write(CACHE)
             except: s.send_response(500); s.end_headers()
         else: s.send_response(404); s.end_headers()
     def log_message(s,*a): pass
@@ -567,6 +637,7 @@ change_config() {
         echo -e "  ${green}6${re}. 增删协议 (需重装)"
         echo -e "  ${green}7${re}. 查看节点链接"
         echo -e "  ${green}8${re}. 刷新 Argo 域名"
+        echo -e "  ${green}9${re}. 订阅配置"
         echo -e "  ${red}0${re}. 返回"
         echo -e " ${purple}────────────────────────────────────────${re}"
         read -p "  请选择: " c
@@ -583,7 +654,7 @@ change_config() {
                read -p "  选择 [默认 www.amazon.com]: " rs; [ -n "$rs" ] && REALITY_SNI="${REALITY_SNIS[$((rs-1))]:-$REALITY_SNI}"
                save_conf; green_msg "Reality SNI: ${REALITY_SNI}" ;;
             6) do_install; break ;;
-            7) show_node ;; 8) restart_services ;; 0) return ;; *) red_msg "无效" ;;
+            7) show_node ;; 8) restart_services ;; 9) edit_subscription ;; 0) return ;; *) red_msg "无效" ;;
         esac; read -p "  按回车继续..." -r
     done
 }
