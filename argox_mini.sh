@@ -1599,11 +1599,18 @@ relay_menu() {
                     RELAY_MODE="all"
                 fi
                 save_conf; green_msg "模式: $([ "$RELAY_MODE" = "all" ] && echo "全部流量中继" || echo "分流模式")"
-                sleep 1
+                if [ "$RELAY_ENABLED" = "1" ] && [ -n "$RELAY_LINK" ]; then
+                    echo -ne "  ${yellow}立即应用新路由规则? (y/n) [y]: ${re}"; read cf
+                    [ "$cf" != "n" ] && [ "$cf" != "N" ] && { RELAY_ENABLED=1; relay_apply; echo ""; read -p "  按回车返回..." -r; } || yellow_msg "已保存，别忘了按 r4 应用！"
+                fi
                 ;;
             r3|R3)
                 if [ "$RELAY_MODE" != "split" ]; then red_msg "请先切换到分流模式"; sleep 1; continue; fi
                 relay_manage_domains
+                if [ "$RELAY_ENABLED" = "1" ] && [ -n "$RELAY_LINK" ]; then
+                    echo -ne "  ${yellow}域名已更新，立即应用路由规则? (y/n) [y]: ${re}"; read cf
+                    [ "$cf" != "n" ] && [ "$cf" != "N" ] && { RELAY_ENABLED=1; relay_apply; echo ""; read -p "  按回车返回..." -r; }
+                fi
                 ;;
             r4|R4)
                 if [ -z "$RELAY_LINK" ]; then red_msg "请先设置落地节点 (r1)"; sleep 1; continue; fi
