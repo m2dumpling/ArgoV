@@ -1,7 +1,7 @@
-# 🚇 ArgoX-Mini — Cloudflare Argo 隧道管理面板
+# 🚇 ArgoV — Cloudflare Argo 隧道管理面板
 
 <p align="center">
-  <img src="docs/assets/argox-mini-logo.svg" alt="ArgoX-Mini" width="440">
+  <img src="docs/assets/argov-mini-logo.svg" alt="ArgoV" width="440">
 </p>
 
 <p align="center">
@@ -16,7 +16,7 @@
 
 ---
 
-**ArgoX-Mini** 是基于 Cloudflare Argo 隧道的零公网端口代理管理面板。将 VLESS / VMess 流量封装在 CF 边缘网络内 — 无需开放防火墙端口，无需自有域名。可选 Reality 和 Shadowsocks 直连协议。内置订阅服务器，VPS 重启后自动获取新隧道域名、订阅链接无需更新。服务端落地中继 — 干净 IP 出站，全部客户端无感知。
+**ArgoV** 是基于 Cloudflare Argo 隧道的零公网端口代理管理面板。将 VLESS / VMess 流量封装在 CF 边缘网络内 — 无需开放防火墙端口，无需自有域名。可选 Reality 和 Shadowsocks 直连协议。内置订阅服务器，VPS 重启后自动获取新隧道域名、订阅链接无需更新。服务端落地中继 — 干净 IP 出站，全部客户端无感知。
 
 [快速开始](#快速开始) · [功能](#功能特性) · [订阅](#订阅服务器) · [中继](#落地中继) · [WARP](#warp-域名分流) · [架构](#架构) · [客户端](#客户端配置) · [English](README.md)
 
@@ -25,7 +25,7 @@
 ## 快速开始
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoX-Mini/main/argox_mini.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
 ```
 
 首次运行自动进入交互式安装向导，全程回车使用默认值。
@@ -35,7 +35,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoX-Mini/main/arg
 非交互模式（环境变量）：
 
 ```bash
-NODE_NAME=东京 CDN_DOMAIN=skk.moe bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoX-Mini/main/argox_mini.sh)
+NODE_NAME=东京 CDN_DOMAIN=skk.moe bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
 ```
 
 ## 功能特性
@@ -51,7 +51,7 @@ NODE_NAME=东京 CDN_DOMAIN=skk.moe bash <(curl -Ls https://raw.githubuserconten
 | **WARP 分流** | 一键 fscarmen WARP，智能分流：Google → IPv6，YouTube → SOCKS5，其余直连 |
 | **节点管理** | 增删改 Reality / Shadowsocks 节点，无需全量重装 |
 | **系统兼容** | Debian / Ubuntu / CentOS / Alpine Linux，systemd + openrc 服务管理 |
-| **服务隔离** | `argox-tunnel` 独立服务，不与已有隧道冲突 |
+| **服务隔离** | `argov-tunnel` 独立服务，不与已有隧道冲突 |
 
 ## 安装向导
 
@@ -74,7 +74,7 @@ argov
 
 ```
 ╔══════════════════════════════════════════════════╗
-║     ArgoX-Mini  纯净版隧道管理面板              ║
+║     ArgoV  纯净版隧道管理面板              ║
 ║     VL-Argo VM-Argo SS Reality                  ║
 ╚══════════════════════════════════════════════════╝
 
