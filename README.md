@@ -1,7 +1,7 @@
 # 🚇 ArgoV — Cloudflare Argo Tunnel Manager
 
 <p align="center">
-  <img src="docs/assets/argov-mini-logo.svg" alt="ArgoV" width="440">
+  <img src="docs/assets/argov-logo.svg" alt="ArgoV" width="440">
 </p>
 
 <p align="center">
