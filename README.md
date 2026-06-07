@@ -1,7 +1,7 @@
-# 🚇 ArgoX-Mini — Cloudflare Argo Tunnel Manager
+# 🚇 ArgoV — Cloudflare Argo Tunnel Manager
 
 <p align="center">
-  <img src="docs/assets/argox-mini-logo.svg" alt="ArgoX-Mini" width="440">
+  <img src="docs/assets/argov-mini-logo.svg" alt="ArgoV" width="440">
 </p>
 
 <p align="center">
@@ -16,7 +16,7 @@
 
 ---
 
-**ArgoX-Mini** is a zero-public-port proxy management panel powered by Cloudflare Argo Tunnel. It wraps VLESS / VMess traffic inside Cloudflare's edge network — no open firewall ports, no domain required. Optional Reality and Shadowsocks for direct connections. Built-in subscription server with auto domain refresh after VPS reboot. Server-side landing relay for clean IP egress — transparent to all clients.
+**ArgoV** is a zero-public-port proxy management panel powered by Cloudflare Argo Tunnel. It wraps VLESS / VMess traffic inside Cloudflare's edge network — no open firewall ports, no domain required. Optional Reality and Shadowsocks for direct connections. Built-in subscription server with auto domain refresh after VPS reboot. Server-side landing relay for clean IP egress — transparent to all clients.
 
 [Quick Start](#quick-start) · [Features](#features) · [Subscription](#subscription-server) · [Relay](#landing-relay) · [WARP](#warp-domain-routing) · [Architecture](#architecture) · [Clients](#client-config) · [中文版](README_CN.md)
 
@@ -25,7 +25,7 @@
 ## Quick Start
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoX-Mini/main/argox_mini.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
 ```
 
 First run auto-launches the interactive install wizard. Press Enter through each step for sensible defaults.
@@ -35,7 +35,7 @@ After install, type `argov` to open the management panel.
 Non-interactive (env vars):
 
 ```bash
-NODE_NAME=Tokyo CDN_DOMAIN=skk.moe bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoX-Mini/main/argox_mini.sh)
+NODE_NAME=Tokyo CDN_DOMAIN=skk.moe bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
 ```
 
 ## Features
@@ -51,7 +51,7 @@ NODE_NAME=Tokyo CDN_DOMAIN=skk.moe bash <(curl -Ls https://raw.githubusercontent
 | **WARP Routing** | One-click fscarmen WARP with Smart Split: Google → IPv6, YouTube → SOCKS5, rest → direct |
 | **Node Management** | Add / edit / delete Reality and Shadowsocks nodes without full reinstall |
 | **System Support** | Debian / Ubuntu / CentOS / Alpine Linux. systemd + openrc service management |
-| **Service Isolation** | `argox-tunnel` runs as an independent service — no conflict with existing tunnels |
+| **Service Isolation** | `argov-tunnel` runs as an independent service — no conflict with existing tunnels |
 
 ## Install Wizard
 
@@ -74,7 +74,7 @@ argov
 
 ```
 ╔══════════════════════════════════════════════════╗
-║     ArgoX-Mini  Management Panel                ║
+║     ArgoV  Management Panel                ║
 ║     VL-Argo VM-Argo SS Reality                  ║
 ╚══════════════════════════════════════════════════╝
 
