@@ -290,9 +290,20 @@ edit_subscription() {
                     [ -n "$nd" ] && SUB_DOMAIN="$nd"
                 else
                     echo -e "  ${yellow}输入已指向本机 IP 的域名，将切换到 HTTPS:${re}"
+                    echo -e "  ${yellow}⚠ CF 代理仅支持以下端口:${re}"
+                    echo -e "  ${cyan}  2096  8443  2053  2083  2087  443${re}"
                     read -p "  域名: " nd
                     [ -z "$nd" ] && { yellow_msg "已取消。"; sleep 1; continue; }
-                    SUB_DOMAIN="$nd"; [ "$SUB_PORT" = "0" ] && SUB_PORT=2096
+                    SUB_DOMAIN="$nd"
+                    if [ "$SUB_PORT" = "0" ]; then
+                        echo ""; echo -e "  ${yellow}选择端口:${re}"
+                        echo -e "  ${cyan}1${re}. 2096 (默认)  ${cyan}2${re}. 8443  ${cyan}3${re}. 2053  ${cyan}4${re}. 2083  ${cyan}5${re}. 2087  ${cyan}6${re}. 443"
+                        read -p "  [1]: " pc
+                        case "${pc:-1}" in
+                            2) SUB_PORT=8443 ;; 3) SUB_PORT=2053 ;; 4) SUB_PORT=2083 ;;
+                            5) SUB_PORT=2087 ;; 6) SUB_PORT=443 ;; *) SUB_PORT=2096 ;;
+                        esac
+                    fi
                 fi
                 # 域名变了 → 删旧证书让 start_sub_server 重新生成
                 [ -n "$old_domain" ] && [ "$old_domain" != "$SUB_DOMAIN" ] && rm -f "${WORK_DIR}/sub_cert.pem" "${WORK_DIR}/sub_key.pem"
@@ -308,7 +319,10 @@ edit_subscription() {
                     echo -ne "  ${yellow}确认切换为 HTTP? (y/n): ${re}"; read cf
                     [ "$cf" != "y" ] && [ "$cf" != "Y" ] && { yellow_msg "已取消。"; sleep 1; continue; }
                     SUB_DOMAIN=""
-                    [ "$SUB_PORT" = "2096" ] && SUB_PORT=$(find_free_port "$(shuf -i 20000-50000 -n 1)")
+                    # HTTPS 端口通常不是 HTTP 端口，自动分配一个
+                    SUB_PORT=$(find_free_port "$(shuf -i 20000-50000 -n 1)")
+                    # 删掉 TLS 证书，防止 Python 仍启用 HTTPS
+                    rm -f "${WORK_DIR}/sub_cert.pem" "${WORK_DIR}/sub_key.pem"
                 else
                     red_msg "已是 HTTP 模式"; sleep 1
                 fi
