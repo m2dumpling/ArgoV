@@ -1714,7 +1714,7 @@ relay_manage_domains() {
             echo -e "  ${yellow}列表为空${re}"
         fi
         echo ""
-        echo -e "  ${green}1${re}. 添加域名    ${red}2${re}. 删除/清空    ${cyan}0${re}. 返回"
+        echo -e "  ${green}1${re}. 添加域名    ${red}2${re}. 删除序号    ${red}da${re}. 清空全部    ${cyan}0${re}. 返回"
         echo -e " ${purple}────────────────────────────────────────${re}"
         read -p "  请选择: " c
         case "$c" in
@@ -1726,8 +1726,26 @@ relay_manage_domains() {
                    d=$(echo "$d" | xargs); [ -z "$d" ] && continue
                    grep -qxF "$d" "$RELAY_DOMAIN_FILE" || echo "$d" >> "$RELAY_DOMAIN_FILE"
                done
-               green_msg "已更新。"; sleep 1 ;;
-            2) echo ""; echo -ne "  ${red}清空全部? (y/n): ${re}"; read cf
+               green_msg "已更新。"; sleep 1
+               ;;
+            2) echo ""; echo -e "  ${yellow}输入要删除的序号，空格分隔 (如 5 6 8):${re}"
+               read -p "  > " input
+               [ -z "$input" ] && { yellow_msg "已取消。"; sleep 1; continue; }
+               # 重建文件
+               local new_doms=() idx=0
+               while IFS= read -r line; do
+                   [ -z "$(echo "$line" | tr -d '[:space:]')" ] && continue
+                   idx=$((idx+1))
+                   local keep=1
+                   for n in $input; do
+                       [ "$n" = "$idx" ] && { keep=0; break; }
+                   done
+                   [ "$keep" = 1 ] && new_doms+=("$line")
+               done < "$RELAY_DOMAIN_FILE"
+               printf '%s\n' "${new_doms[@]}" > "$RELAY_DOMAIN_FILE"
+               green_msg "已删除。"; sleep 1
+               ;;
+            da|DA) echo ""; echo -ne "  ${red}⚠ 清空全部? (y/n): ${re}"; read cf
                [ "$cf" = "y" ] || [ "$cf" = "Y" ] && { > "$RELAY_DOMAIN_FILE"; green_msg "已清空。"; sleep 1; } ;;
             0) return ;;
             *) red_msg "无效"; sleep 1 ;;
