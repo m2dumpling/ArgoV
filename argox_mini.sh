@@ -194,6 +194,8 @@ load_conf() {
     ENABLE_REALITY="${ENABLE_REALITY:-0}"; ENABLE_SS="${ENABLE_SS:-0}"
     REALITY_PRIV="${REALITY_PRIV:-}"; REALITY_PUB="${REALITY_PUB:-}"
     REALITY_SHORTID="${REALITY_SHORTID:-}"
+    RELAY_ENABLED="${RELAY_ENABLED:-0}"; RELAY_LINK="${RELAY_LINK:-}"
+    RELAY_MODE="${RELAY_MODE:-all}"
 }
 save_conf() {
     {
@@ -208,6 +210,7 @@ save_conf() {
         save_var ENABLE_REALITY "$ENABLE_REALITY"; save_var ENABLE_SS "$ENABLE_SS"
         save_var REALITY_PRIV "$REALITY_PRIV"; save_var REALITY_PUB "$REALITY_PUB"
         save_var REALITY_SHORTID "$REALITY_SHORTID"; save_var LAST_ARGO_DOMAIN "$LAST_ARGO_DOMAIN"
+        save_var RELAY_ENABLED "$RELAY_ENABLED"; save_var RELAY_LINK "$RELAY_LINK"; save_var RELAY_MODE "$RELAY_MODE"
     } > "$USER_CONF"
 }
 
@@ -908,6 +911,10 @@ ARGOWRAP
     local hd ip; [ "$ARGO_MODE" = "fixed-token" ] && hd="$ARGO_FIXED_DOMAIN" || hd=$(get_argo_domain)
     [ -z "$hd" ] && [ "$ARGO_MODE" != "fixed-token" ] && { sleep 3; hd=$(get_argo_domain); }
     [ -n "$hd" ] && LAST_ARGO_DOMAIN="$hd" && save_conf; ip=$(get_ip)
+    # 恢复 relay / WARP (重装后重建 outbound + routing)
+    [ "$RELAY_ENABLED" = "1" ] && relay_apply "restore"
+    [ -f "$WARP_DOMAIN_FILE" ] && [ -s "$WARP_DOMAIN_FILE" ] && warp_apply_routing "restore"
+
     start_sub_server
 
     echo ""; echo -e " ${purple}╔══════════════════════════════════════════════════╗${re}"
@@ -1517,6 +1524,353 @@ view_delete_custom_links() {
 }
 
 #==============================================================================
+# 落地中继 (Relay) — Xray outbound 链式代理到干净落地 VPS
+#==============================================================================
+RELAY_DOMAIN_FILE="/etc/xray/relay_domains.txt"
+
+echo_relay_status() {
+    if [ "$RELAY_ENABLED" = "1" ] && [ -n "$RELAY_LINK" ]; then
+        local proto addr; proto=$(echo "$RELAY_LINK" | sed -n 's|^\([a-z0-9+.-]*\)://.*|\1|p')
+        addr=$(echo "$RELAY_LINK" | sed -n 's|.*://[^@]*@\([^:/?#]*\).*|\1|p')
+        [ -z "$addr" ] && addr=$(echo "$RELAY_LINK" | sed -n 's|.*://\([^:/?#]*\).*|\1|p')
+        echo -e "  ${green}● 已启用${re} → ${purple}${proto}${re} → ${cyan}${addr}${re}  模式: ${yellow}$([ "$RELAY_MODE" = "all" ] && echo "全部" || echo "分流")${re}"
+    else
+        echo -e "  ${yellow}○ 未启用${re}"
+    fi
+}
+
+relay_menu() {
+    load_conf
+    while true; do
+        clear
+        echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
+        echo -e " ${purple}║${re}       ${white}落地中继 (Landing Relay)${re}            ${purple}║${re}"
+        echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
+        echo ""
+        echo_relay_status
+        if [ "$RELAY_MODE" = "split" ] && [ -f "$RELAY_DOMAIN_FILE" ]; then
+            local dc; dc=$(grep -c '[^[:space:]]' "$RELAY_DOMAIN_FILE" 2>/dev/null || echo 0)
+            echo -e "  ${cyan}分流域名: ${dc} 个${re}"
+        fi
+        echo ""
+        echo -e "  ${green}r1${re}. 设置落地节点 (粘贴 ss:// / vless:// / trojan:// 链接)"
+        echo -e "  ${green}r2${re}. 切换模式 (当前: $([ "$RELAY_MODE" = "all" ] && echo "全部" || echo "分流"))"
+        if [ "$RELAY_MODE" = "split" ]; then
+            echo -e "  ${green}r3${re}. 管理分流域名"
+        fi
+        echo -e "  ${green}r4${re}. 应用并重启 Xray"
+        if [ "$RELAY_ENABLED" = "1" ]; then
+            echo -e "  ${red}r5${re}. 关闭中继"
+        fi
+        echo ""; echo -e "  ${cyan}0${re}. 返回"
+        echo -e " ${purple}────────────────────────────────────────${re}"
+        read -p "  请选择: " c
+        case "$c" in
+            r1|R1)
+                echo ""; echo -e "  ${yellow}粘贴落地 VPS 代理链接:${re}"
+                echo -e "  ${cyan}支持: ss://  vless://  vmess://  trojan://${re}"
+                echo -e "  ${cyan}落地加密勿选 2022 系列！选 chacha20-ietf-poly1305${re}"
+                echo ""
+                read -p "  链接: " link
+                [ -z "$link" ] && { yellow_msg "已取消。"; sleep 1; continue; }
+                # 基础校验
+                if ! echo "$link" | grep -qE '^(ss|vless|vmess|trojan)://'; then
+                    red_msg "不支持的协议，仅支持 ss:// vless:// vmess:// trojan://"
+                    sleep 2; continue
+                fi
+                RELAY_LINK="$link"; RELAY_ENABLED=0; save_conf
+                green_msg "落地节点已保存！按 r4 应用生效。"
+                sleep 1
+                ;;
+            r2|R2)
+                if [ "$RELAY_MODE" = "all" ]; then
+                    RELAY_MODE="split"; touch "$RELAY_DOMAIN_FILE" 2>/dev/null
+                else
+                    RELAY_MODE="all"
+                fi
+                save_conf; green_msg "模式: $([ "$RELAY_MODE" = "all" ] && echo "全部流量中继" || echo "分流模式")"
+                sleep 1
+                ;;
+            r3|R3)
+                if [ "$RELAY_MODE" != "split" ]; then red_msg "请先切换到分流模式"; sleep 1; continue; fi
+                relay_manage_domains
+                ;;
+            r4|R4)
+                if [ -z "$RELAY_LINK" ]; then red_msg "请先设置落地节点 (r1)"; sleep 1; continue; fi
+                RELAY_ENABLED=1; save_conf; relay_apply; echo ""; read -p "  按回车返回..." -r
+                ;;
+            r5|R5)
+                [ "$RELAY_ENABLED" != "1" ] && { yellow_msg "中继未启用。"; sleep 1; continue; }
+                echo -ne "  ${red}确认关闭? (y/n): ${re}"; read cf
+                [ "$cf" != "y" ] && [ "$cf" != "Y" ] && { yellow_msg "已取消。"; sleep 1; continue; }
+                relay_clear; echo ""; read -p "  按回车返回..." -r
+                ;;
+            0) return ;;
+            *) red_msg "无效"; sleep 1 ;;
+        esac
+    done
+}
+
+relay_manage_domains() {
+    while true; do
+        clear
+        echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
+        echo -e " ${purple}║${re}       ${white}管理中继分流域名${re}                  ${purple}║${re}"
+        echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
+        echo ""
+        if [ -f "$RELAY_DOMAIN_FILE" ] && [ -s "$RELAY_DOMAIN_FILE" ]; then
+            nl -w2 -s'. ' "$RELAY_DOMAIN_FILE"
+            echo ""; echo -e "  ${green}共 $(wc -l < "$RELAY_DOMAIN_FILE") 个域名${re}"
+        else
+            echo -e "  ${yellow}列表为空${re}"
+        fi
+        echo ""
+        echo -e "  ${green}1${re}. 添加域名    ${red}2${re}. 删除/清空    ${cyan}0${re}. 返回"
+        echo -e " ${purple}────────────────────────────────────────${re}"
+        read -p "  请选择: " c
+        case "$c" in
+            1) echo ""; echo -e "  ${yellow}多个用逗号分隔:${re}"; read -p "  > " input
+               [ -z "$input" ] && continue
+               touch "$RELAY_DOMAIN_FILE"
+               IFS=',' read -ra DOMS <<< "$input"
+               for d in "${DOMS[@]}"; do
+                   d=$(echo "$d" | xargs); [ -z "$d" ] && continue
+                   grep -qxF "$d" "$RELAY_DOMAIN_FILE" || echo "$d" >> "$RELAY_DOMAIN_FILE"
+               done
+               green_msg "已更新。"; sleep 1 ;;
+            2) echo ""; echo -ne "  ${red}清空全部? (y/n): ${re}"; read cf
+               [ "$cf" = "y" ] || [ "$cf" = "Y" ] && { > "$RELAY_DOMAIN_FILE"; green_msg "已清空。"; sleep 1; } ;;
+            0) return ;;
+            *) red_msg "无效"; sleep 1 ;;
+        esac
+    done
+}
+
+relay_apply() {
+    local mode="${1:-apply}"  # apply | restore
+    load_conf
+    [ -z "$RELAY_LINK" ] && { red_msg "未设置落地节点。"; return 1; }
+
+    # Python3 依赖检查
+    if ! command -v python3 &>/dev/null; then
+        yellow_msg "安装 Python3..."
+        if [ "$IS_ALPINE" = 1 ]; then apk add --no-cache python3 2>/dev/null
+        elif command -v apt &>/dev/null; then DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 2>/dev/null
+        elif command -v yum &>/dev/null; then yum install -y -q python3 2>/dev/null; fi
+    fi
+    ! command -v python3 &>/dev/null && { red_msg "Python3 不可用。"; return 1; }
+
+    local domains_json='[]'
+    if [ "$RELAY_MODE" = "split" ] && [ -f "$RELAY_DOMAIN_FILE" ] && [ -s "$RELAY_DOMAIN_FILE" ]; then
+        domains_json=$(json_array_from_file "$RELAY_DOMAIN_FILE")
+    fi
+
+    [ "$mode" != "restore" ] && yellow_msg "正在应用落地中继..."
+    cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
+
+    python3 << PYEOF
+import json, base64, re
+from urllib.parse import urlparse, parse_qs, unquote
+
+CONFIG = '${CONFIG_FILE}'
+RELAY_LINK = '${RELAY_LINK}'
+RELAY_MODE = '${RELAY_MODE}'
+DOMAINS = ${domains_json}
+
+def decode_b64(s):
+    """安全 base64 解码，补齐 padding"""
+    s = s + '=' * (-len(s) % 4)
+    s = s.replace('-', '+').replace('_', '/')
+    return base64.b64decode(s).decode('utf-8', errors='replace')
+
+# --- 解析链接 ---
+proto = addr = port = ''
+out = {}  # Xray outbound
+
+if RELAY_LINK.startswith('ss://'):
+    # ss://base64@IP:PORT  or  ss://base64
+    proto = 'shadowsocks'
+    rest = RELAY_LINK[5:]
+    # Split at @ or #
+    userinfo = addr_part = ''
+    m = re.search(r'(.+?)@([^#]+)', rest)
+    if m:
+        userinfo, addr_part = m.group(1), m.group(2)
+    else:
+        # no @, just base64
+        userinfo = rest.split('#')[0].split('?')[0]
+        addr = ''; port = 0
+    if addr_part:
+        addr = addr_part.split(':')[0]
+        p = re.search(r':(\d+)', addr_part)
+        port = int(p.group(1)) if p else 443
+    # Decode userinfo
+    if userinfo:
+        raw = decode_b64(userinfo)
+        parts = raw.split(':', 1)
+        method = parts[0] if len(parts) >= 1 else 'aes-256-gcm'
+        password = parts[1] if len(parts) >= 2 else ''
+    out = {
+        "tag": "relay-out",
+        "protocol": "shadowsocks",
+        "domainStrategy": "AsIs",
+        "settings": {"servers": [{"address": addr, "port": port, "method": method, "password": password}]}
+    }
+
+elif RELAY_LINK.startswith('vless://'):
+    proto = 'vless'
+    # vless://UUID@IP:PORT?params#name
+    m = re.search(r'vless://([^@]+)@([^:]+):(\d+)(\?.*?)?(#.*)?$', RELAY_LINK)
+    if m:
+        uuid = m.group(1)
+        addr = m.group(2)
+        port = int(m.group(3))
+        qs = parse_qs(unquote(m.group(4) or ''))
+        flow = qs.get('flow', [''])[0]
+        security = qs.get('security', ['none'])[0]
+        sni = qs.get('sni', [''])[0]
+        pbk = qs.get('pbk', [''])[0]
+        sid = qs.get('sid', [''])[0]
+        fp = qs.get('fp', ['chrome'])[0]
+        out = {
+            "tag": "relay-out",
+            "protocol": "vless",
+            "domainStrategy": "AsIs",
+            "settings": {
+                "vnext": [{"address": addr, "port": port, "users": [{"id": uuid, "encryption": "none", "flow": flow}]}]
+            }
+        }
+        if security == 'reality':
+            out["streamSettings"] = {
+                "network": "tcp",
+                "security": "reality",
+                "realitySettings": {
+                    "serverName": sni,
+                    "publicKey": pbk,
+                    "shortId": sid,
+                    "fingerprint": fp
+                }
+            }
+        elif security == 'tls' and sni:
+            out["streamSettings"] = {
+                "network": "ws",
+                "security": "tls",
+                "tlsSettings": {"serverName": sni}
+            }
+    else:
+        raise ValueError(f'Invalid vless link')
+
+elif RELAY_LINK.startswith('vmess://'):
+    proto = 'vmess'
+    b64 = RELAY_LINK[8:]
+    raw = decode_b64(b64)
+    vm = json.loads(raw)
+    addr = vm.get('add', '')
+    port = int(vm.get('port', 443))
+    uuid = vm.get('id', '')
+    sni = vm.get('sni', addr)
+    out = {
+        "tag": "relay-out",
+        "protocol": "vmess",
+        "domainStrategy": "AsIs",
+        "settings": {"vnext": [{"address": addr, "port": port, "users": [{"id": uuid, "alterId": 0}]}]}
+    }
+    if vm.get('tls') == 'tls':
+        out["streamSettings"] = {"network": "ws", "security": "tls", "tlsSettings": {"serverName": sni}}
+
+elif RELAY_LINK.startswith('trojan://'):
+    proto = 'trojan'
+    # trojan://PASSWORD@IP:PORT?params#name
+    m = re.search(r'trojan://([^@]+)@([^:]+):(\d+)(\?.*?)?(#.*)?$', RELAY_LINK)
+    if m:
+        password = m.group(1)
+        addr = m.group(2)
+        port = int(m.group(3))
+        qs = parse_qs(unquote(m.group(4) or ''))
+        sni = qs.get('sni', [''])[0]
+        out = {
+            "tag": "relay-out",
+            "protocol": "trojan",
+            "domainStrategy": "AsIs",
+            "settings": {"servers": [{"address": addr, "port": port, "password": password}]}
+        }
+        if sni:
+            out["streamSettings"] = {"network": "tcp", "security": "tls", "tlsSettings": {"serverName": sni}}
+    else:
+        raise ValueError(f'Invalid trojan link')
+
+else:
+    raise ValueError(f'Unsupported protocol: {proto}')
+
+# --- 注入 config.json ---
+with open(CONFIG, 'r') as f:
+    config = json.load(f)
+
+# 清理旧 relay-out (只清 relay，不动 warp)
+config['outbounds'] = [o for o in config['outbounds'] if o.get('tag') != 'relay-out']
+config.setdefault('routing', {}).setdefault('rules', [])
+config['routing']['rules'] = [r for r in config['routing']['rules'] if r.get('outboundTag') != 'relay-out']
+
+# 注入 relay-out
+config['outbounds'].append(out)
+
+# 构造 routing rule
+if RELAY_MODE == 'all':
+    relay_rule = {"type": "field", "network": "tcp,udp", "outboundTag": "relay-out"}
+else:
+    if not DOMAINS:
+        raise ValueError('分流模式但无分流域名')
+    relay_rule = {"type": "field", "domain": DOMAINS, "outboundTag": "relay-out"}
+
+config['routing']['rules'].insert(0, relay_rule)
+
+# 写回
+with open(CONFIG, 'w') as f:
+    json.dump(config, f, indent=2, ensure_ascii=False)
+
+print(f'RELAY_OK|{proto}|{addr}:{port}')
+PYEOF
+
+    local result=$?
+    # 校验 JSON + 重启
+    if python3 -c "import json; json.load(open('${CONFIG_FILE}'))" 2>/dev/null && [ "$result" = 0 ]; then
+        systemctl restart xray 2>/dev/null; sleep 2
+        if systemctl is-active xray 2>/dev/null; then
+            [ "$mode" != "restore" ] && green_msg "落地中继已生效！"
+        else
+            red_msg "Xray 启动失败！自动回滚备份。"
+            cp "${CONFIG_FILE}.bak" "$CONFIG_FILE"
+            systemctl restart xray 2>/dev/null; sleep 2
+        fi
+    else
+        red_msg "JSON 写入不合法！自动回滚备份。"
+        cp "${CONFIG_FILE}.bak" "$CONFIG_FILE"
+    fi
+}
+
+relay_clear() {
+    if [ -f "$CONFIG_FILE" ]; then
+        cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
+        python3 << PYEOF
+import json
+with open('${CONFIG_FILE}', 'r') as f:
+    config = json.load(f)
+config['outbounds'] = [o for o in config['outbounds'] if o.get('tag') != 'relay-out']
+config.setdefault('routing', {}).setdefault('rules', [])
+config['routing']['rules'] = [r for r in config['routing']['rules'] if r.get('outboundTag') != 'relay-out']
+with open('${CONFIG_FILE}', 'w') as f:
+    json.dump(config, f, indent=2, ensure_ascii=False)
+PYEOF
+        if python3 -c "import json; json.load(open('${CONFIG_FILE}'))" 2>/dev/null; then
+            RELAY_ENABLED=0; save_conf
+            systemctl restart xray 2>/dev/null; sleep 2; get_status; green_msg "中继已关闭。"
+        else
+            cp "${CONFIG_FILE}.bak" "$CONFIG_FILE"; red_msg "回滚失败。"
+        fi
+    fi
+}
+
+#==============================================================================
 # WARP SOCKS/IPv6 域名分流模块（基于 fscarmen/warp + Python3 JSON 安全改写）
 #==============================================================================
 WARP_DOMAIN_FILE="/etc/xray/warp_domains.txt"
@@ -2037,9 +2391,9 @@ main_menu() {
         echo -e " ${purple}───────────────── 系统维护 ─────────────────${re}"
         echo -e "  ${yellow}7${re}. 重新安装 (保留配置)    ${cyan}8${re}. 更新    ${red}9${re}. 卸载"
         echo ""
-        echo -e "  ${cyan}0${re}. 退出   ${purple}w${re}. WARP分流 (SOCKS5 / IPv6 切换)"
+        echo -e "  ${cyan}0${re}. 退出   ${purple}w${re}. WARP分流   ${purple}r${re}. 落地中继"
         echo -e " ${purple}────────────────────────────────────────────${re}"
-        read -p "  请输入 (0-9 / a / w): " c
+        read -p "  请输入 (0-9 / a / w / r): " c
         case "$c" in
             1) show_node; read -p "  按回车返回..." -r ;;
             2) edit_cdn; read -p "  按回车返回..." -r ;;
@@ -2059,8 +2413,9 @@ main_menu() {
                    rm -rf "$WORK_DIR"; rm -f /etc/systemd/system/xray.service /etc/systemd/system/argox-tunnel.service /etc/systemd/system/argox-sub.service /etc/init.d/xray /etc/init.d/argox-tunnel "$SCRIPT_PATH" "${WORK_DIR}/argox-tunnel.sh"
                    systemctl daemon-reload; green_msg "卸载完成。"; fi ;;
             w|W) warp_menu ;;
+            r|R) relay_menu ;;
             0) clear; break ;;
-            *) red_msg "无效 (0-9 / a / w)"; sleep 1 ;;
+            *) red_msg "无效 (0-9 / a / w / r)"; sleep 1 ;;
         esac
     done
 }
