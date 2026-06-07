@@ -1567,11 +1567,21 @@ relay_menu() {
         read -p "  请选择: " c
         case "$c" in
             r1|R1)
-                echo ""; echo -e "  ${yellow}粘贴落地 VPS 代理链接:${re}"
-                echo -e "  ${cyan}支持: ss://  vless://  vmess://  trojan://${re}"
-                echo -e "  ${cyan}落地加密勿选 2022 系列！选 chacha20-ietf-poly1305${re}"
+                echo ""; echo -e " ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
+                echo -e " ${white}📌 落地 VPS 部署指南${re}"
+                echo -e " ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
                 echo ""
-                read -p "  链接: " link
+                echo -e "  ${yellow}在落地 VPS 上运行以下命令，然后粘贴生成的链接:${re}"
+                echo ""
+                echo -e "  ${green}bash <(curl -Ls https://raw.githubusercontent.com/xOS/Shadowsocks-Rust/master/ss-rust.sh)${re}"
+                echo ""
+                echo -e "  ${yellow}⚠ 加密务必选: ${cyan}chacha20-ietf-poly1305${re}"
+                echo -e "  ${yellow}⚠ 不要选 2022 系列 (Xray 不支持)${re}"
+                echo ""
+                echo -e "  ${cyan}也支持: vless://  vmess://  trojan://${re}"
+                echo -e " ${purple}────────────────────────────────────────${re}"
+                echo ""
+                read -p "  粘贴链接: " link
                 [ -z "$link" ] && { yellow_msg "已取消。"; sleep 1; continue; }
                 # 基础校验
                 if ! echo "$link" | grep -qE '^(ss|vless|vmess|trojan)://'; then
