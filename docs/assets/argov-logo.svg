@@ -1,28 +1,85 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 80" width="500" height="80">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 100" width="500" height="100">
   <defs>
-    <linearGradient id="tunnel" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#93C5FD"/>
-      <stop offset="50%" stop-color="#86EFAC"/>
-      <stop offset="100%" stop-color="#F9A8D4"/>
+    <!-- Gradients -->
+    <linearGradient id="v-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4F46E5"/> <!-- Indigo 600 -->
+      <stop offset="50%" stop-color="#7C3AED"/> <!-- Violet 600 -->
+      <stop offset="100%" stop-color="#EC4899"/> <!-- Pink 500 -->
     </linearGradient>
+    
+    <linearGradient id="v-text-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#EC4899"/> <!-- Pink 500 -->
+      <stop offset="100%" stop-color="#F43F5E"/> <!-- Rose 500 -->
+    </linearGradient>
+
+    <linearGradient id="circle-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4F46E5" stop-opacity="0.7"/>
+      <stop offset="100%" stop-color="#EC4899" stop-opacity="0.7"/>
+    </linearGradient>
+
+    <linearGradient id="beam-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#3B82F6"/> <!-- Blue 500 -->
+      <stop offset="50%" stop-color="#10B981"/> <!-- Emerald 500 -->
+      <stop offset="100%" stop-color="#F43F5E"/> <!-- Rose 500 -->
+    </linearGradient>
+
+    <!-- Glowing Filter -->
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2.5" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
   </defs>
 
-  <!-- Tunnel icon -->
-  <g transform="translate(10, 5)">
-    <circle cx="22" cy="35" r="5" fill="url(#tunnel)"/>
-    <circle cx="22" cy="35" r="9" fill="none" stroke="#93C5FD" stroke-width="1.2" opacity="0.5"/>
-    <circle cx="58" cy="35" r="5" fill="url(#tunnel)"/>
-    <circle cx="58" cy="35" r="9" fill="none" stroke="#86EFAC" stroke-width="1.2" opacity="0.5"/>
-    <path d="M 27 35 C 34 18, 46 18, 53 35" fill="none" stroke="#93C5FD" stroke-width="2.5" stroke-linecap="round" opacity="0.8"/>
-    <path d="M 27 35 C 34 52, 46 52, 53 35" fill="none" stroke="#F9A8D4" stroke-width="2.5" stroke-linecap="round" opacity="0.8"/>
-  </g>
+  <style>
+    .text-title {
+      fill: #0F172A;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      transition: fill 0.3s;
+    }
+    .text-subtitle {
+      fill: #475569;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      letter-spacing: 0.22em;
+      transition: fill 0.3s;
+    }
+    @media (prefers-color-scheme: dark) {
+      .text-title {
+        fill: #F8FAFC;
+      }
+      .text-subtitle {
+        fill: #94A3B8;
+      }
+    }
+  </style>
 
-  <!-- ArgoV text -->
-  <text font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="34" font-weight="800">
-    <tspan x="88" y="48" fill="#93C5FD">A</tspan>
-    <tspan fill="#93C5FD">r</tspan>
-    <tspan fill="#93C5FD">g</tspan>
-    <tspan fill="#93C5FD">o</tspan>
-    <tspan fill="#F9A8D4" font-weight="800">V</tspan>
+  <!-- BACKGROUND SHIELD DECORATION -->
+  <circle cx="179" cy="50" r="38" fill="#4F46E5" fill-opacity="0.03" />
+
+  <!-- OUTER DASHED ORBIT -->
+  <circle cx="179" cy="50" r="34" stroke="url(#circle-grad)" stroke-width="1" stroke-dasharray="3 3" fill="none" opacity="0.4" />
+
+  <!-- OUTER GLOWING RING -->
+  <circle cx="179" cy="50" r="28" stroke="url(#circle-grad)" stroke-width="1.5" fill="none" opacity="0.8" />
+
+  <!-- GLOWING TUNNEL BEAM (PASSES THROUGH) -->
+  <path d="M 149 50 C 164 32, 194 68, 209 50" fill="none" stroke="url(#beam-grad)" stroke-width="3" stroke-linecap="round" filter="url(#glow)" opacity="0.9" />
+
+  <!-- INNER STYLIZED V (THE TUNNEL GATEWAY) -->
+  <path d="M 164 36 L 179 62 L 194 36" fill="none" stroke="url(#v-grad)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" />
+
+  <!-- ENTRY/EXIT NODES -->
+  <circle cx="149" cy="50" r="3" fill="#3B82F6" filter="url(#glow)" />
+  <circle cx="209" cy="50" r="3" fill="#F43F5E" filter="url(#glow)" />
+
+  <!-- ArgoV TYPOGRAPHY -->
+  <text font-size="34" font-weight="800" letter-spacing="-0.02em">
+    <tspan x="231" y="54" class="text-title">Argo</tspan>
+    <tspan fill="url(#v-text-grad)">V</tspan>
   </text>
+
+  <!-- SUBTITLE -->
+  <text x="232" y="74" font-size="10" font-weight="700" class="text-subtitle">TUNNEL MANAGER</text>
 </svg>
