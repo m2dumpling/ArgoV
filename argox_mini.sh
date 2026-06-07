@@ -285,21 +285,23 @@ edit_subscription() {
         case "$c" in
             1)
                 if [ -n "$SUB_DOMAIN" ]; then
+                    local old_domain="$SUB_DOMAIN"
                     read -p "  新域名 [${SUB_DOMAIN}]: " nd
                     [ -n "$nd" ] && SUB_DOMAIN="$nd"
                 else
                     echo -e "  ${yellow}输入已指向本机 IP 的域名，将切换到 HTTPS:${re}"
                     read -p "  域名: " nd
                     [ -z "$nd" ] && { yellow_msg "已取消。"; sleep 1; continue; }
-                    SUB_DOMAIN="$nd"
-                    [ "$SUB_PORT" = "0" ] && SUB_PORT=2096
+                    SUB_DOMAIN="$nd"; [ "$SUB_PORT" = "0" ] && SUB_PORT=2096
                 fi
-                save_conf; green_msg "已更新。"; sleep 1
+                # 域名变了 → 删旧证书让 start_sub_server 重新生成
+                [ -n "$old_domain" ] && [ "$old_domain" != "$SUB_DOMAIN" ] && rm -f "${WORK_DIR}/sub_cert.pem" "${WORK_DIR}/sub_key.pem"
+                save_conf; start_sub_server; green_msg "已更新。"; sleep 1
                 ;;
             2)
                 read -p "  新端口 [${SUB_PORT}]: " np
                 [ -n "$np" ] && is_port "$np" && SUB_PORT="$np"
-                save_conf; green_msg "端口: ${SUB_PORT}"; sleep 1
+                save_conf; start_sub_server; green_msg "端口: ${SUB_PORT}"; sleep 1
                 ;;
             3)
                 if [ -n "$SUB_DOMAIN" ]; then
@@ -310,12 +312,12 @@ edit_subscription() {
                 else
                     red_msg "已是 HTTP 模式"; sleep 1
                 fi
-                save_conf; green_msg "已切换。"; sleep 1
+                save_conf; start_sub_server; green_msg "已切换。"; sleep 1
                 ;;
             4)
                 SUB_TOKEN=$(openssl rand -hex 8 2>/dev/null || printf '%08x%08x' $RANDOM $RANDOM)
                 SUB_PATH="/${SUB_TOKEN}"; save_conf
-                green_msg "新 Token: ${SUB_TOKEN}"; sleep 1
+                start_sub_server; green_msg "新 Token: ${SUB_TOKEN}"; sleep 1
                 ;;
             5) echo ""; echo -e "  ${green}$(get_sub_url 2>/dev/null)${re}"; echo ""; read -p "  按回车继续..." -r ;;
             0) return ;;
@@ -335,9 +337,12 @@ start_sub_server() {
     [ -z "$SUB_PATH" ] && SUB_PATH="/${SUB_TOKEN}"
     save_conf; bash "${WORK_DIR}/sub_gen.sh" 2>/dev/null
 
-    # 自签证书（CF Full 模式需要）
-    if [ -n "$SUB_DOMAIN" ] && [ ! -f "${WORK_DIR}/sub_cert.pem" ]; then
-        openssl req -x509 -newkey rsa:2048 -keyout "${WORK_DIR}/sub_key.pem" -out "${WORK_DIR}/sub_cert.pem" -days 3650 -nodes -subj "/CN=${SUB_DOMAIN}" 2>/dev/null
+    # 自签证书（CF Full 模式需要），域名变更时重新生成
+    if [ -n "$SUB_DOMAIN" ]; then
+        local cert_cn; cert_cn=$(openssl x509 -in "${WORK_DIR}/sub_cert.pem" -noout -subject 2>/dev/null | sed 's/.*CN\s*=\s*//')
+        if [ "$cert_cn" != "$SUB_DOMAIN" ]; then
+            openssl req -x509 -newkey rsa:2048 -keyout "${WORK_DIR}/sub_key.pem" -out "${WORK_DIR}/sub_cert.pem" -days 3650 -nodes -subj "/CN=${SUB_DOMAIN}" 2>/dev/null
+        fi
     fi
 
     local py; py=$(command -v python3 || command -v python || true)
