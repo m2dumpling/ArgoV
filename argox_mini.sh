@@ -1678,9 +1678,10 @@ relay_apply() {
     [ "$mode" != "restore" ] && yellow_msg "正在应用落地中继..."
     cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
 
-    python3 << PYEOF
-import json, base64, re
-from urllib.parse import urlparse, parse_qs, unquote
+    local py_err; py_err=$(mktemp /tmp/relay_err.XXXXXX)
+    python3 2>"$py_err" << PYEOF
+import json, base64, re, sys
+from urllib.parse import parse_qs, unquote
 
 CONFIG = '${CONFIG_FILE}'
 RELAY_LINK = '${RELAY_LINK}'
@@ -1698,28 +1699,35 @@ proto = addr = port = ''
 out = {}  # Xray outbound
 
 if RELAY_LINK.startswith('ss://'):
-    # ss://base64@IP:PORT  or  ss://base64
+    # 支持两种格式:
+    #   SIP002: ss://base64(method:pass)@IP:PORT#Name
+    #   Legacy:  ss://base64(method:pass@IP:PORT)#Name
     proto = 'shadowsocks'
     rest = RELAY_LINK[5:]
-    # Split at @ or #
-    userinfo = addr_part = ''
-    m = re.search(r'(.+?)@([^#]+)', rest)
-    if m:
-        userinfo, addr_part = m.group(1), m.group(2)
-    else:
-        # no @, just base64
-        userinfo = rest.split('#')[0].split('?')[0]
-        addr = ''; port = 0
-    if addr_part:
+    # 去掉 fragment / query
+    if '#' in rest:
+        rest = rest.split('#')[0]
+    if '?' in rest and '@' not in rest.split('?')[0]:
+        rest = rest.split('?')[0]
+    method = 'aes-256-gcm'; password = ''; addr = ''; port = 0
+    if '@' in rest:
+        # SIP002: userinfo@addr:port
+        userinfo, addr_part = rest.split('@', 1)
         addr = addr_part.split(':')[0]
         p = re.search(r':(\d+)', addr_part)
         port = int(p.group(1)) if p else 443
-    # Decode userinfo
-    if userinfo:
         raw = decode_b64(userinfo)
         parts = raw.split(':', 1)
-        method = parts[0] if len(parts) >= 1 else 'aes-256-gcm'
-        password = parts[1] if len(parts) >= 2 else ''
+        method = parts[0] if parts[0] else method
+        password = parts[1] if len(parts) > 1 else ''
+    else:
+        # Legacy: 整个字符串是一个 base64
+        raw = decode_b64(rest)
+        m2 = re.search(r'^([^:]+):(.+?)@([^:]+):(\d+)', raw)
+        if m2:
+            method, password, addr, port = m2.group(1), m2.group(2), m2.group(3), int(m2.group(4))
+        else:
+            raise ValueError(f'Cannot parse SS link format: {rest[:40]}...')
     out = {
         "tag": "relay-out",
         "protocol": "shadowsocks",
@@ -1812,6 +1820,10 @@ elif RELAY_LINK.startswith('trojan://'):
 else:
     raise ValueError(f'Unsupported protocol: {proto}')
 
+# 防御校验：addr/port 不能为空
+if not addr or not port or port <= 0:
+    raise ValueError(f'Parsed invalid address: "{addr}:{port}". Check the link format.')
+
 # --- 注入 config.json ---
 with open(CONFIG, 'r') as f:
     config = json.load(f)
@@ -1853,9 +1865,12 @@ PYEOF
             systemctl restart xray 2>/dev/null; sleep 2
         fi
     else
-        red_msg "JSON 写入不合法！自动回滚备份。"
+        red_msg "中继配置失败！"
+        local emsg; emsg=$(head -3 "$py_err" 2>/dev/null)
+        [ -n "$emsg" ] && echo -e "  ${yellow}${emsg}${re}"
         cp "${CONFIG_FILE}.bak" "$CONFIG_FILE"
     fi
+    rm -f "$py_err"
 }
 
 relay_clear() {
