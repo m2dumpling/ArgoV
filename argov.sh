@@ -244,7 +244,7 @@ show_qr() {
 install_qrencode() {
     local qr="${WORK_DIR}/qrencode"; [ -f "$qr" ] && return 0
     local a; case "$(uname -m)" in x86_64) a="amd64" ;; aarch64|arm64) a="arm64" ;; *) return 1 ;; esac
-    curl -sLo "$qr" "https://github.com/eooce/test/releases/download/${a}/qrencode-linux-${a}" 2>/dev/null; chmod +x "$qr" 2>/dev/null
+    curl -sLfo "$qr" "https://github.com/eooce/test/releases/download/${a}/qrencode-linux-${a}" 2>/dev/null; chmod +x "$qr" 2>/dev/null
 }
 
 #==============================================================================
@@ -1049,8 +1049,9 @@ do_install() {
     [ -z "$ARCH_ARG" ] && { red_msg "不支持 CPU: $(uname -m)"; exit 1; }
 
     yellow_msg "[3/6] 下载..."
-    curl -sLo "${WORK_DIR}/xray.zip" "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${ARCH_ARG}.zip"
-    curl -sLo "${WORK_DIR}/argo" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_ARCH}"
+    curl -sLfo "${WORK_DIR}/xray.zip" "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${ARCH_ARG}.zip"
+    curl -sLfo "${WORK_DIR}/argo.tmp" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_ARCH}"
+    [ -s "${WORK_DIR}/argo.tmp" ] && mv -f "${WORK_DIR}/argo.tmp" "${WORK_DIR}/argo"
     unzip -o "${WORK_DIR}/xray.zip" -d "$WORK_DIR">/dev/null 2>&1; chmod +x "${WORK_DIR}/xray" "${WORK_DIR}/argo"; rm -f "${WORK_DIR}/xray.zip"
     install_qrencode; green_msg "  完成"
 
@@ -1137,7 +1138,7 @@ EOF
     cat > "$SCRIPT_PATH" << 'ARGOWRAP'
 #!/usr/bin/env bash
 T=$(mktemp /tmp/argov.XXXXXX)
-curl -sLo "$T" https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh
+curl -sLfo "$T" https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh
 bash "$T"; rm -f "$T"
 ARGOWRAP
     chmod +x "$SCRIPT_PATH"; save_conf
@@ -2652,7 +2653,7 @@ update_xray_core() {
     [ -z "$ARCH_ARG" ] && { red_msg "不支持 CPU: $(uname -m)"; sleep 2; return; }
     
     local utmp="/tmp/xray_update.zip"
-    curl -sLo "$utmp" "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${ARCH_ARG}.zip"
+    curl -sLfo "$utmp" "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${ARCH_ARG}.zip"
     if [ -s "$utmp" ]; then
         systemctl stop xray 2>/dev/null
         unzip -o "$utmp" -d "$WORK_DIR" >/dev/null 2>&1
@@ -2715,7 +2716,7 @@ main_menu() {
                [ "$cf" = "y" ] || [ "$cf" = "Y" ] && { load_conf; do_install; }; read -p "  按回车返回..." -r ;;
             8) yellow_msg "拉取最新版..."
                local utmp; utmp=$(mktemp /tmp/argov.XXXXXX)
-               curl -sLo "$utmp" https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh && bash "$utmp" && rm -f "$utmp"
+               curl -sLfo "$utmp" https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh && bash "$utmp" && rm -f "$utmp"
                clear; continue ;;
             x|X) update_xray_core ;;
             9) echo -ne "  ${red}⚠ 确定卸载? (y/n): ${re}"; read cf
@@ -2754,7 +2755,7 @@ migrate_argox_to_argov() {
         cat > "$SCRIPT_PATH" << 'ARGOWRAP'
 #!/usr/bin/env bash
 T="/tmp/argov.sh"
-curl -sLo "$T" https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh
+curl -sLfo "$T" https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh
 [ -s "$T" ] && bash "$T" "$@"
 ARGOWRAP
         chmod +x "$SCRIPT_PATH"
