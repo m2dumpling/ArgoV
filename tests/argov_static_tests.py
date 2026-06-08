@@ -193,6 +193,58 @@ require(
     "initial Reality inbound must include a Reality fingerprint",
 )
 require(
+    r'HY2_PORT="\$\{HY2_PORT:-0\}"',
+    "Hysteria2 must have a persisted editable port",
+)
+require(
+    r'ENABLE_HY2=0',
+    "Hysteria2 must be selectable as a built-in optional protocol",
+)
+require(
+    r'gen_hy2_link\(\)',
+    "built-in Hysteria2 must generate hysteria2:// subscription links",
+)
+require(
+    r'elif tag == "hy2":[\s\S]*"auth": u\["uuid"\][\s\S]*"email": u\["email"\]',
+    "Hysteria2 user sync must use per-user auth and email for stats/quota",
+)
+require(
+    r'"protocol":"hysteria","tag":"hy2"[\s\S]*"settings":\{"version":2,"users":\[\{"auth":"\'"\$\{uuid\}"\'","level":0,"email":"argov-default"\}\]\}',
+    "initial Hysteria2 inbound must use Xray hysteria v2 users with email",
+)
+require(
+    r'"streamSettings":\{"network":"hysteria","security":"tls"[\s\S]*"hysteriaSettings":\{"version":2',
+    "initial Hysteria2 inbound must use the official hysteria transport with TLS",
+)
+require(
+    r'"tlsSettings":\{"alpn":\["h3"\]',
+    "built-in Hysteria2 must expose h3 ALPN for clients",
+)
+require(
+    r'tag=="hy2"',
+    "Hysteria2 must be managed by tag hy2",
+)
+require(
+    r'hysteria2://\$\{uuid\}@\$\{ip\}:\$\{hport\}\?sni=\$\{hsni\}&insecure=1&alpn=h3#\$\{NODE_NAME\}-Hy2',
+    "subscription generator must include built-in Hysteria2 links for local controllable users",
+)
+require(
+    r'select\(\.tag=="reality" or \.tag=="ss" or \.tag=="hy2"\)',
+    "reinstall keep-data path must preserve built-in Hysteria2 inbounds",
+)
+require(
+    r"add_hy2_protocol\(\)",
+    "Hysteria2 add flow must have a dedicated implementation instead of falling through unknown protocol handling",
+)
+require(
+    r'a2\)\s+\[ "\$has_hy2" = 0 \] && add_hy2_protocol',
+    "manage node menu must call the built-in Hysteria2 add flow",
+)
+require(
+    r'delete_protocol\(\)[\s\S]*tag=="hy2"[\s\S]*ENABLE_HY2=0',
+    "delete flow must remove Hysteria2 inbounds and persist ENABLE_HY2=0",
+)
+require(
     r"json_array_from_file\(\)",
     "WARP domain lists must be converted with json_array_from_file",
 )

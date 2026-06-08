@@ -19,7 +19,7 @@
 
 **ArgoV** is a sleek, hardcore, and highly professional zero-trust proxy management panel. Built on top of Cloudflare Argo Tunnel, it encapsulates VLESS and VMess traffic deep inside Cloudflare's edge network—requiring absolutely no domains and keeping your server's firewall completely locked down.
 
-Beyond basic tunneling, ArgoV is supercharged with native **VLESS Reality** and **Shadowsocks** protocols, alongside unprecedented routing capabilities: **Server-Side Landing Relay**, **Smart WARP Split-routing**, **Dynamic Subscriptions**, and **Seamless Protocol Aggregation** for external nodes. All powered by a highly-optimized, dependency-free Bash architecture.
+Beyond basic tunneling, ArgoV is supercharged with native **VLESS Reality**, **Hysteria2**, and **Shadowsocks** protocols, alongside unprecedented routing capabilities: **Server-Side Landing Relay**, **Smart WARP Split-routing**, **Dynamic Subscriptions**, and **Seamless Protocol Aggregation** for external nodes. All powered by a highly-optimized, dependency-free Bash architecture.
 
 [Quick Start](#quick-start) · [Features](#core-features) · [Dynamic Subscriptions](#dynamic-subscription-server) · [User Quotas](#multi-user-traffic-quotas) · [Landing Relay](#landing-relay-server-side-proxy-chaining) · [Panel UI](#management-panel) · [中文版](README_CN.md)
 
@@ -43,9 +43,9 @@ NODE_NAME=Tokyo CDN_DOMAIN=skk.moe bash <(curl -Ls https://raw.githubusercontent
 | Dimension | Technical Detail |
 |-----------|------------------|
 | **Zero Public Exposure** | VLESS/VMess traffic is isolated inside WS + TLS tunnels. Xray listens solely on `127.0.0.1`, completely hiding the server's real IP and immunizing it against active probing. |
-| **Direct Protocols** | Native support for `VLESS-Reality` (XTLS Vision) and `Shadowsocks` (SS2022 & AEAD). Equipped with advanced QUIC/TLS deep sniffing. |
+| **Direct Protocols** | Native support for `VLESS-Reality` (XTLS Vision), Xray-native `Hysteria2`, and `Shadowsocks` (SS2022 & AEAD). Equipped with advanced QUIC/TLS deep sniffing. |
 | **Dynamic Sub** | Built-in lightweight Python3 HTTP server. Automatically updates tunnel domains after VPS reboot and dispatches client-specific subscriptions: base64 node lists for v2rayN-style clients, Clash YAML profiles for Mihomo/Clash Verge. |
-| **User Quotas** | Create isolated friend accounts with independent subscription tokens, UUIDs, enable/disable state, and bidirectional traffic quotas such as `200G`. Limited-user subscriptions only expose local controllable nodes: VLESS Argo, VMess Argo, and Reality. |
+| **User Quotas** | Create isolated friend accounts with independent subscription tokens, UUIDs, enable/disable state, and bidirectional traffic quotas such as `200G`. Limited-user subscriptions only expose local controllable nodes: VLESS Argo, VMess Argo, Reality, and built-in Hysteria2. |
 | **Node Aggregation** | Import external node links (`vless://`, `vmess://`, `ss://`, `trojan://`, `hysteria2://`). ArgoV acts as a centralized gateway to push all supported nodes into a unified client subscription. |
 | **Chain Proxy (Relay)** | **Landing Relay Engine**. Transparently encrypts and routes server traffic to an overseas residential/clean VPS. Clients enjoy native IPs with zero configuration. |
 | **Smart WARP Routing** | One-click WARP IPv6 / SOCKS5 mount. DNS-level outbound splitting: e.g., Google via IPv6, YouTube via SOCKS5, avoiding captchas and throttles. |
@@ -107,8 +107,8 @@ Press `u` in the panel to create independent limited users for friends. Each use
 - **Default subscription compatibility**: existing default links such as `/random-token` remain valid for the owner.
 - **Friend subscriptions**: limited users use `/sub?token=...` so ArgoV can identify the exact account and quota.
 - **Quota scope**: usage is counted as upload plus download from Xray per-user stats.
-- **Safe sharing**: limited users receive only VLESS Argo, VMess Argo, and Reality. External aggregated nodes remain available only to the default owner subscription.
-- **Upgrade path**: existing installations should run `8. Update script`, then `7. Reinstall (Keep data)` once, so the new Xray StatsService config and `argov-stats` daemon are generated.
+- **Safe sharing**: limited users receive only VLESS Argo, VMess Argo, Reality, and built-in Hysteria2. External aggregated nodes remain available only to the default owner subscription.
+- **Upgrade path**: existing installations should run `8. Update script`, then `7. Reinstall (Keep data)` once, so the new Xray StatsService config, `argov-stats` daemon, and Xray-native Hysteria2 inbound are generated.
 
 ## Advanced Node Matrix
 
@@ -121,14 +121,15 @@ Press `a` to enter the **Protocol Matrix**. ArgoV can serve as the ultimate "Gat
 
   ── Optional Direct ──
   e3. VLESS Reality   amazon.com   :43210
-  e4. Shadowsocks     aes-256-gcm  :8388
+  e4. Hysteria2       www.bing.com :44333
+  e5. Shadowsocks     aes-256-gcm  :8388
 
   ── Custom Nodes (Aggregated) ──
   2 custom links
   c1. Add    c2. View / delete
 ```
 
-> 💡 **Hysteria2 Best Practice**: For bleeding-edge UDP performance, we recommend deploying Hysteria2 via a dedicated script, then pasting its `hysteria2://` share link into ArgoV via `c1`. ArgoV will merge it into the unified subscription and convert it into Mihomo-compatible Clash YAML when requested by Clash clients.
+> **Built-in Hysteria2**: ArgoV now creates Xray-native Hysteria2 inbounds directly from the `a` node menu. Built-in Hysteria2 uses per-user auth values, participates in Xray user traffic stats, and is included in limited friend subscriptions. External `hysteria2://` links pasted through `c1` are still supported for owner-only aggregation. Automatic port hopping is not configured yet; Xray requires one listening port plus firewall forwarding rules for that mode.
 
 ## Landing Relay (Server-Side Proxy Chaining)
 
@@ -148,7 +149,7 @@ Client → CF Edge (TLS) → Argo Tunnel → localhost:8080 Xray fallback
                                            ├── /vless-argo → VLESS+WS :8081
                                            └── /vmess-argo → VMess+WS :8082
 
-Direct (Optional) : VLESS+Reality (Stealth)  ·  Shadowsocks (Stream Cipher)
+Direct (Optional) : VLESS+Reality (Stealth)  ·  Hysteria2 (QUIC)  ·  Shadowsocks (Stream Cipher)
 
 WARP Stack : Xray routing rules → warp-out (SOCKS5 :40000) / v6-direct (IPv6)
 

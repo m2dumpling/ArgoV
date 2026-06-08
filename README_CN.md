@@ -19,7 +19,7 @@
 
 **ArgoV** 是一款极简、硬核且高度专业化的零公网端口代理管理面板。基于 Cloudflare Argo 隧道，它将 VLESS 和 VMess 流量深度伪装在 Cloudflare 的边缘网络内，无需任何域名，无需开放任何防火墙端口。
 
-除了隧道基础能力，ArgoV 还内建了原生 **VLESS Reality** 和 **Shadowsocks** 协议支持，并提供了前所未有的灵活路由策略：包括强大的**落地中继 (Chain Proxy)**、**WARP 智能分流**、**订阅动态下发**，以及对第三方节点的**无缝订阅聚合**。一切均由高度优化的 Bash 架构驱动，轻量级、无依赖、秒级响应。
+除了隧道基础能力，ArgoV 还内建了原生 **VLESS Reality**、**Hysteria2** 和 **Shadowsocks** 协议支持，并提供了前所未有的灵活路由策略：包括强大的**落地中继 (Chain Proxy)**、**WARP 智能分流**、**订阅动态下发**，以及对第三方节点的**无缝订阅聚合**。一切均由高度优化的 Bash 架构驱动，轻量级、无依赖、秒级响应。
 
 [快速开始](#快速开始) · [核心特性](#核心特性) · [动态订阅](#动态订阅服务器) · [用户限额](#多用户流量限额) · [落地中继](#落地中继-server-side-relay) · [面板展示](#极客化管理面板) · [English](README.md)
 
@@ -43,9 +43,9 @@ NODE_NAME=Tokyo CDN_DOMAIN=skk.moe bash <(curl -Ls https://raw.githubusercontent
 | 特性维度 | 深度解析 |
 |----------|---------|
 | **零公网暴露 (Argo)** | VLESS / VMess 流量封装于 WS + TLS 隧道内，Xray 仅监听 `127.0.0.1`，彻底隐匿服务器真实 IP，免疫所有主动探测。 |
-| **极致直连 (Reality)**| 原生支持 `VLESS-Reality` (XTLS Vision) 及 `Shadowsocks` (涵盖 SS2022 与 AEAD 加密)。支持 QUIC/TLS 深度嗅探。 |
+| **极致直连 (Reality/Hy2)**| 原生支持 `VLESS-Reality` (XTLS Vision)、Xray 内置 `Hysteria2` 及 `Shadowsocks` (涵盖 SS2022 与 AEAD 加密)。支持 QUIC/TLS 深度嗅探。 |
 | **一键订阅 (Sub)** | 内置轻量 Python3 HTTP 订阅服务器，VPS 重启后自动更新隧道节点域名并实时下发客户端；v2rayN 类客户端获取 base64 节点订阅，Clash/Mihomo/Clash Verge 获取完整 YAML 配置。 |
-| **用户限额 (Quota)** | 支持为朋友创建独立用户，每个用户拥有单独订阅 Token、UUID、启停状态和双向流量限额，例如 `200G`。限额用户订阅只下发本机可控节点：VLESS Argo、VMess Argo、Reality。 |
+| **用户限额 (Quota)** | 支持为朋友创建独立用户，每个用户拥有单独订阅 Token、UUID、启停状态和双向流量限额，例如 `200G`。限额用户订阅只下发本机可控节点：VLESS Argo、VMess Argo、Reality、内置 Hysteria2。 |
 | **协议聚合 (Custom)**| 支持一键导入第三方节点链接（`vless://`、`vmess://`、`ss://`、`trojan://`、`hysteria2://`），通过 ArgoV 的订阅服务实现**跨生态节点聚合**。 |
 | **链式代理 (Relay)** | **落地中继**引擎。服务端直接将流量加密路由至海外原生 IP (解锁 VPS)，客户端零配置即享原生纯净出口 IP。 |
 | **智能分流 (WARP)** | 一键挂载 WARP IPv6 / SOCKS5。精准的 DNS 级出站路由：Google 走 IPv6，YouTube 走 SOCKS5，规避封控与限流。 |
@@ -107,8 +107,8 @@ ag
 - **默认订阅兼容**：已有的默认订阅路径，例如 `/随机token`，仍然可以继续作为站长自用订阅。
 - **朋友订阅**：限额用户使用 `/sub?token=...`，用于精确识别用户和统计配额。
 - **流量口径**：配额按 Xray 用户级统计的上传 + 下载合计计算。
-- **分享隔离**：限额用户只收到 VLESS Argo、VMess Argo、Reality；外部聚合节点只保留在默认订阅里。
-- **老用户升级**：已安装机器请先执行 `8. 更新管理脚本`，再执行一次 `7. 重新安装 (保留数据)`，这样会生成新的 Xray StatsService 配置和 `argov-stats` 统计守护服务。
+- **分享隔离**：限额用户只收到 VLESS Argo、VMess Argo、Reality、内置 Hysteria2；外部聚合节点只保留在默认订阅里。
+- **老用户升级**：已安装机器请先执行 `8. 更新管理脚本`，再执行一次 `7. 重新安装 (保留数据)`，这样会生成新的 Xray StatsService 配置、`argov-stats` 统计守护服务和 Xray 原生 Hysteria2 入站。
 
 ## 高级协议管理
 
@@ -121,14 +121,15 @@ ag
 
   ── 可选直连协议 ──
   e3. VLESS Reality   amazon.com   :43210
-  e4. Shadowsocks     aes-256-gcm  :8388
+  e4. Hysteria2       www.bing.com :44333
+  e5. Shadowsocks     aes-256-gcm  :8388
 
   ── 自定义节点 (聚合下发) ──
   已有 2 个自定义链接
   c1. 添加    c2. 查看/删除
 ```
 
-> 💡 **Hysteria2 最佳实践**：鉴于内核适配策略，对于需要极致 UDP 性能的 Hysteria2，我们建议使用专用脚本搭建后，将 `hysteria2://` 分享链接通过 `c1` 粘贴至此。ArgoV 会自动将其与现有隧道整合，并在 Clash 客户端请求订阅时转换为 Mihomo 兼容 YAML。
+> **内置 Hysteria2**：现在可直接在 `a` 节点管理菜单创建 Xray 原生 Hysteria2 入站。内置 Hy2 使用每个用户独立的认证值，会进入 Xray 用户级流量统计和限额，也会下发给限额朋友订阅。通过 `c1` 粘贴的外部 `hysteria2://` 链接仍支持聚合，但只保留在默认站长订阅中。端口跳跃暂不自动配置；Xray 的端口跳跃需要单监听端口配合防火墙转发规则。
 
 ## 落地中继 (Server-Side Relay)
 
@@ -148,7 +149,7 @@ Client → CF Edge (TLS) → Argo Tunnel → localhost:8080 Xray fallback
                                            ├── /vless-argo → VLESS+WS :8081
                                            └── /vmess-argo → VMess+WS :8082
 
-Direct (可选) : VLESS+Reality (端口隐匿)  ·  Shadowsocks (流加密)
+Direct (可选) : VLESS+Reality (端口隐匿)  ·  Hysteria2 (QUIC)  ·  Shadowsocks (流加密)
 
 WARP 分流栈 : Xray 路由规则 → warp-out (SOCKS5 :40000) / v6-direct (IPv6)
 

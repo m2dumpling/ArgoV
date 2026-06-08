@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #==============================================================================
 # ArgoV — Cloudflare Argo Tunnel 多协议交互式管理脚本
-# VLESS + VMess (Argo)  |  Shadowsocks  |  VLESS Reality
+# VLESS + VMess (Argo)  |  Shadowsocks  |  VLESS Reality  |  Hysteria2
 # 零公网暴露(Argo模式) · 无 Caddy/Nginx
 #==============================================================================
 
@@ -40,6 +40,7 @@ VLESS_WS_PORT="${VLESS_WS_PORT:-8081}"
 VMESS_WS_PORT="${VMESS_WS_PORT:-8082}"
 CDN_PORT="${CDN_PORT:-443}"
 REALITY_PORT="${REALITY_PORT:-0}"
+HY2_PORT="${HY2_PORT:-0}"
 SS_PORT="${SS_PORT:-0}"
 SUB_PORT="${SUB_PORT:-0}"
 SUB_PATH="${SUB_PATH:-}"
@@ -53,6 +54,7 @@ NODE_NAME="${NODE_NAME:-ArgoV}"
 ENABLE_VLESS_ARGO=1
 ENABLE_VMESS_ARGO=1
 ENABLE_REALITY=0
+ENABLE_HY2=0
 ENABLE_SS=0
 
 # --- SS 加密 ---
@@ -64,6 +66,9 @@ SS_METHOD="${SS_METHOD:-aes-256-gcm}"
 REALITY_SNIS=("www.amazon.com" "www.ebay.com" "www.paypal.com" "www.cloudflare.com"
               "dash.cloudflare.com" "aws.amazon.com" "addons.mozilla.org" "www.microsoft.com")
 REALITY_SNI="${REALITY_SNI:-www.amazon.com}"
+HY2_SNI="${HY2_SNI:-www.bing.com}"
+HY2_CERT_FILE="${HY2_CERT_FILE:-/etc/xray/argov-hy2.crt}"
+HY2_KEY_FILE="${HY2_KEY_FILE:-/etc/xray/argov-hy2.key}"
 
 # --- CDN 池 ---
 declare -A CDN_DOMAINS
@@ -307,6 +312,9 @@ def vless_clients(flow=False):
 def vmess_clients():
     return [{"id": u["uuid"], "alterId": 0, "email": u["email"]} for u in users]
 
+def hy2_users():
+    return [{"auth": u["uuid"], "level": 0, "email": u["email"]} for u in users]
+
 for inbound in cfg.get("inbounds", []):
     tag = inbound.get("tag")
     if tag == "argo-in":
@@ -317,6 +325,10 @@ for inbound in cfg.get("inbounds", []):
         inbound.setdefault("settings", {})["clients"] = vmess_clients()
     elif tag == "reality":
         inbound.setdefault("settings", {})["clients"] = vless_clients(True)
+    elif tag == "hy2":
+        settings = inbound.setdefault("settings", {})
+        settings["version"] = 2
+        settings["users"] = hy2_users()
 
 if not any(i.get("tag") == "api-in" for i in cfg.get("inbounds", [])):
     cfg.setdefault("inbounds", []).append({"listen":"127.0.0.1","port":10085,"protocol":"dokodemo-door","tag":"api-in","settings":{"address":"127.0.0.1"}})
@@ -476,6 +488,14 @@ gen_reality_keys() {
 gen_reality_shortid() {
     REALITY_SHORTID=$(openssl rand -hex 4 2>/dev/null || printf '%08x' $((RANDOM*RANDOM)))
 }
+gen_hy2_cert() {
+    mkdir -p "$WORK_DIR" 2>/dev/null
+    [ -s "$HY2_CERT_FILE" ] && [ -s "$HY2_KEY_FILE" ] && return 0
+    openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3650 \
+        -subj "/CN=${HY2_SNI:-ArgoV-Hy2}" \
+        -keyout "$HY2_KEY_FILE" -out "$HY2_CERT_FILE" >/dev/null 2>&1
+    chmod 600 "$HY2_KEY_FILE" 2>/dev/null || true
+}
 gen_ss2022_pass() {
     local method="$1"
     [[ "$method" =~ 128 ]] && openssl rand -base64 16 || openssl rand -base64 32
@@ -490,11 +510,12 @@ load_conf() {
     CDN_PORT="${CDN_PORT:-443}"; CDN_DOMAIN="${CDN_DOMAIN:-$CDN_DEFAULT}"
     ARGO_MODE="${ARGO_MODE:-temp}"; ARGO_AUTH="${ARGO_AUTH:-}"
     ARGO_FIXED_DOMAIN="${ARGO_FIXED_DOMAIN:-}"; UUID_CUSTOM="${UUID_CUSTOM:-}"; LAST_ARGO_DOMAIN="${LAST_ARGO_DOMAIN:-}"
-    REALITY_PORT="${REALITY_PORT:-0}"; SS_PORT="${SS_PORT:-0}"
+    REALITY_PORT="${REALITY_PORT:-0}"; HY2_PORT="${HY2_PORT:-0}"; SS_PORT="${SS_PORT:-0}"
     SUB_PORT="${SUB_PORT:-0}"; SUB_PATH="${SUB_PATH:-}"
     SUB_DOMAIN="${SUB_DOMAIN:-}"; SUB_TOKEN="${SUB_TOKEN:-}"
-    REALITY_SNI="${REALITY_SNI:-www.amazon.com}"; SS_METHOD="${SS_METHOD:-aes-256-gcm}"
-    ENABLE_REALITY="${ENABLE_REALITY:-0}"; ENABLE_SS="${ENABLE_SS:-0}"
+    REALITY_SNI="${REALITY_SNI:-www.amazon.com}"; HY2_SNI="${HY2_SNI:-www.bing.com}"; SS_METHOD="${SS_METHOD:-aes-256-gcm}"
+    ENABLE_REALITY="${ENABLE_REALITY:-0}"; ENABLE_HY2="${ENABLE_HY2:-0}"; ENABLE_SS="${ENABLE_SS:-0}"
+    HY2_CERT_FILE="${HY2_CERT_FILE:-/etc/xray/argov-hy2.crt}"; HY2_KEY_FILE="${HY2_KEY_FILE:-/etc/xray/argov-hy2.key}"
     REALITY_PRIV="${REALITY_PRIV:-}"; REALITY_PUB="${REALITY_PUB:-}"
     REALITY_SHORTID="${REALITY_SHORTID:-}"
     RELAY_ENABLED="${RELAY_ENABLED:-0}"; RELAY_LINK="${RELAY_LINK:-}"
@@ -508,9 +529,10 @@ save_conf() {
         save_var VMESS_WS_PORT "$VMESS_WS_PORT"; save_var CDN_PORT "$CDN_PORT"
         save_var CDN_DOMAIN "$CDN_DOMAIN"; save_var ARGO_MODE "$ARGO_MODE"; save_var ARGO_AUTH "$ARGO_AUTH"
         save_var ARGO_FIXED_DOMAIN "$ARGO_FIXED_DOMAIN"; save_var UUID_CUSTOM "$UUID_CUSTOM"
-        save_var REALITY_PORT "$REALITY_PORT"; save_var SS_PORT "$SS_PORT"; save_var SUB_PORT "$SUB_PORT"; save_var SUB_PATH "$SUB_PATH"; save_var SUB_DOMAIN "$SUB_DOMAIN"; save_var SUB_TOKEN "$SUB_TOKEN"
-        save_var REALITY_SNI "$REALITY_SNI"; save_var SS_METHOD "$SS_METHOD"
-        save_var ENABLE_REALITY "$ENABLE_REALITY"; save_var ENABLE_SS "$ENABLE_SS"
+        save_var REALITY_PORT "$REALITY_PORT"; save_var HY2_PORT "$HY2_PORT"; save_var SS_PORT "$SS_PORT"; save_var SUB_PORT "$SUB_PORT"; save_var SUB_PATH "$SUB_PATH"; save_var SUB_DOMAIN "$SUB_DOMAIN"; save_var SUB_TOKEN "$SUB_TOKEN"
+        save_var REALITY_SNI "$REALITY_SNI"; save_var HY2_SNI "$HY2_SNI"; save_var SS_METHOD "$SS_METHOD"
+        save_var ENABLE_REALITY "$ENABLE_REALITY"; save_var ENABLE_HY2 "$ENABLE_HY2"; save_var ENABLE_SS "$ENABLE_SS"
+        save_var HY2_CERT_FILE "$HY2_CERT_FILE"; save_var HY2_KEY_FILE "$HY2_KEY_FILE"
         save_var REALITY_PRIV "$REALITY_PRIV"; save_var REALITY_PUB "$REALITY_PUB"
         save_var REALITY_SHORTID "$REALITY_SHORTID"; save_var LAST_ARGO_DOMAIN "$LAST_ARGO_DOMAIN"
         save_var RELAY_ENABLED "$RELAY_ENABLED"; save_var RELAY_LINK "$RELAY_LINK"; save_var RELAY_MODE "$RELAY_MODE"
@@ -536,6 +558,9 @@ gen_reality_link() {
     [ -n "$6" ] && sid="&sid=$6"
     local fp="$8"; [ -z "$fp" ] && fp="chrome"
     printf '%s' "vless://$1@$2:$3?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=$4&pbk=$5&fp=${fp}${sid}#${7:-${NODE_NAME}-Reality}"
+}
+gen_hy2_link() {
+    printf '%s' "hysteria2://$1@$2:$3?sni=$4&insecure=1&alpn=h3#${5:-${NODE_NAME}-Hy2}"
 }
 
 show_qr() {
@@ -1022,6 +1047,11 @@ if [ "$INCLUDE_CUSTOM" = "1" ] && [ -f /etc/xray/custom_links.txt ]; then
         [ -n "$cl" ] && links+="${cl}"$'\n'
     done < /etc/xray/custom_links.txt
 fi
+if $JQ -e '.inbounds[]|select(.tag=="hy2")' "$CFG" >/dev/null 2>&1 && [ -n "$ip" ]; then
+    hport=$($JQ -r '.inbounds[]|select(.tag=="hy2")|.port' "$CFG")
+    hsni=$($JQ -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.serverName//"www.bing.com"' "$CFG")
+    [ -n "$hport" ] && links+="hysteria2://${uuid}@${ip}:${hport}?sni=${hsni}&insecure=1&alpn=h3#${NODE_NAME}-Hy2"$'\n'
+fi
 out=$(printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n')
 [ "$IS_DEFAULT_USER" = "1" ] && printf '%s' "$out" > /etc/xray/sub.txt
 printf '%s' "$out"
@@ -1158,6 +1188,10 @@ def sync_config(users):
             inbound.setdefault("settings", {})["clients"] = [{"id": u["uuid"], "alterId": 0, "email": u["email"]} for u in enabled]
         elif tag == "reality":
             inbound.setdefault("settings", {})["clients"] = vless(True)
+        elif tag == "hy2":
+            settings = inbound.setdefault("settings", {})
+            settings["version"] = 2
+            settings["users"] = [{"auth": u["uuid"], "level": 0, "email": u["email"]} for u in enabled]
 
     if not any(i.get("tag") == "api-in" for i in cfg.get("inbounds", [])):
         cfg.setdefault("inbounds", []).append({"listen":"127.0.0.1","port":10085,"protocol":"dokodemo-door","tag":"api-in","settings":{"address":"127.0.0.1"}})
@@ -1275,6 +1309,7 @@ get_proto_summary() {
     local s="VL-Argo VM-Argo"
     jq -e '.inbounds[]|select(.protocol=="shadowsocks")' "$CONFIG_FILE" >/dev/null 2>&1 && s="$s SS"
     jq -e '.inbounds[]|select(.tag=="reality")' "$CONFIG_FILE" >/dev/null 2>&1 && s="$s Reality"
+    jq -e '.inbounds[]|select(.tag=="hy2")' "$CONFIG_FILE" >/dev/null 2>&1 && s="$s Hy2"
     echo "$s"
 }
 
@@ -1318,6 +1353,17 @@ show_node() {
         echo -e "  ${green}$(gen_reality_link "$uuid" "$ip" "$rport" "$rsni" "$rp" "$REALITY_SHORTID")${re}"
         echo -e "  ${cyan}SNI${re}: ${rsni}  Flow: xtls-rprx-vision"
         [ -n "$REALITY_SHORTID" ] && echo -e "  ${cyan}ShortId${re}: ${REALITY_SHORTID}"
+        echo ""
+    fi
+
+    if jq -e '.inbounds[]|select(.tag=="hy2")' "$CONFIG_FILE" >/dev/null 2>&1 && [ -n "$ip" ]; then
+        local hport hsni
+        hport=$(jq -r '.inbounds[]|select(.tag=="hy2")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
+        hsni=$(jq -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.serverName//"www.bing.com"' "$CONFIG_FILE" 2>/dev/null)
+        echo -e "  ${white}── Hysteria2 (端口 ${hport}) ──${re}"
+        echo ""
+        echo -e "  ${green}$(gen_hy2_link "$uuid" "$ip" "$hport" "$hsni" "${NODE_NAME}-Hy2")${re}"
+        echo -e "  ${cyan}SNI${re}: ${hsni}  ALPN: h3  TLS: self-signed/insecure"
         echo ""
     fi
 
@@ -1503,7 +1549,7 @@ manage_users() {
                     echo ""
                     green_msg "User added."
                     echo -e "  URL: ${green}$(get_user_sub_url "$ip" "$token")${re}"
-                    echo -e "  Limited users receive only: VLESS Argo, VMess Argo, Reality."
+                    echo -e "  Limited users receive only: VLESS Argo, VMess Argo, Reality, Hysteria2."
                 else
                     red_msg "User already exists or cannot be added."
                 fi
@@ -1650,6 +1696,7 @@ select_protocols() {
         clear
         local sum="VLESS-Argo + VMess-Argo"
         [ "$ENABLE_REALITY" = 1 ] && sum="$sum + Reality"
+        [ "$ENABLE_HY2" = 1 ] && sum="$sum + Hysteria2"
         [ "$ENABLE_SS" = 1 ] && sum="$sum + Shadowsocks"
         echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
         echo -e " ${purple}║${re}     ${white}选择额外协议（可选）${re}                    ${purple}║${re}"
@@ -1660,24 +1707,30 @@ select_protocols() {
         echo -e "  ${green}1${re}. VLESS Reality ${cyan}[$( [ "$ENABLE_REALITY" = 1 ] && echo "●● 已选" || echo "○○" )]${re}"
         echo -e "     XTLS Vision + Reality，需开放端口，抗封锁"
         echo ""
-        echo -e "  ${green}2${re}. Shadowsocks ${cyan}[$( [ "$ENABLE_SS" = 1 ] && echo "●● 已选" || echo "○○" )]${re}"
+        echo -e "  ${green}2${re}. Hysteria2 ${cyan}[$( [ "$ENABLE_HY2" = 1 ] && echo "●● 已选" || echo "○○" )]${re}"
+        echo -e "     Xray 原生 Hy2，UDP/QUIC，高速，进入用户统计和限额"
+        echo ""
+        echo -e "  ${green}3${re}. Shadowsocks ${cyan}[$( [ "$ENABLE_SS" = 1 ] && echo "●● 已选" || echo "○○" )]${re}"
         echo -e "     AEAD/2022 加密，需开放端口，轻量高速"
         echo ""
         echo -e "  ${yellow}📋 当前: ${green}${sum}${re}"
-        echo -e "  ${yellow}💡 输 1/2 切换勾选，输 0 进入端口配置${re}"
+        echo -e "  ${yellow}💡 输 1/2/3 切换勾选，输 0 进入端口配置${re}"
         echo -e " ${purple}────────────────────────────────────────${re}"
-        read -p "  (1/2=切换 / 0=下一步): " c
+        read -p "  (1/2/3=切换 / 0=下一步): " c
         case "$c" in
             1) ENABLE_REALITY=$((1-ENABLE_REALITY)); continue ;;
-            2) ENABLE_SS=$((1-ENABLE_SS)); continue ;;
+            2) ENABLE_HY2=$((1-ENABLE_HY2)); continue ;;
+            3) ENABLE_SS=$((1-ENABLE_SS)); continue ;;
             0)
                 echo ""
                 [ "$ENABLE_REALITY" = 1 ] && { local rp; rp=$(find_free_port "$(shuf -i 10000-60000 -n 1)"); echo -ne "  ${cyan}Reality 端口 [随机 ${rp}]: ${re}"; read ri; REALITY_PORT="${ri:-$rp}"; echo -e "  → ${green}${REALITY_PORT}${re}"; }
+                [ "$ENABLE_HY2" = 1 ] && { local hp; hp=$(find_free_port "$(shuf -i 10000-60000 -n 1)"); echo -ne "  ${cyan}Hysteria2 端口 [随机 ${hp}]: ${re}"; read hi; HY2_PORT="${hi:-$hp}"; echo -e "  → ${green}${HY2_PORT}${re}"; }
                 [ "$ENABLE_SS" = 1 ] && { local sp; sp=$(find_free_port "$(shuf -i 10000-60000 -n 1)"); echo -ne "  ${cyan}Shadowsocks 端口 [随机 ${sp}]: ${re}"; read si; SS_PORT="${si:-$sp}"; echo -e "  → ${green}${SS_PORT}${re}"; }
                 echo ""
                 echo -e "  ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
                 echo -e "  ${white}即将安装:${re}  Argo: VLESS+VMess"
                 [ "$ENABLE_REALITY" = 1 ] && echo -e "  Reality: 端口 ${green}${REALITY_PORT}${re}  (UUID/SNI/密钥 自动生成)"
+                [ "$ENABLE_HY2" = 1 ] && echo -e "  Hysteria2: 端口 ${green}${HY2_PORT}${re}  (UUID/证书 自动生成)"
                 [ "$ENABLE_SS" = 1 ] && echo -e "  Shadowsocks: 端口 ${green}${SS_PORT}${re}  (加密/密码 自动生成)"
                 echo -e "  ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
                 echo ""
@@ -1811,6 +1864,11 @@ do_install() {
         { [ -z "$REALITY_PRIV" ] || [ "$REALITY_PRIV" = "REPLACE_ME" ]; } && gen_reality_keys
         [ -z "$REALITY_SHORTID" ] && gen_reality_shortid
     fi
+    if [ "$ENABLE_HY2" = 1 ]; then
+        [ "$HY2_PORT" = "0" ] && HY2_PORT=$(shuf -i 10000-60000 -n 1)
+        port_in_use "$HY2_PORT" && HY2_PORT=$(find_free_port "$HY2_PORT")
+        gen_hy2_cert || { red_msg "Hy2 证书生成失败，请确认 openssl 可用。"; exit 1; }
+    fi
     if [ "$ENABLE_SS" = 1 ]; then [ "$SS_PORT" = "0" ] && SS_PORT=$(shuf -i 10000-60000 -n 1); port_in_use "$SS_PORT" && SS_PORT=$(find_free_port "$SS_PORT"); fi
 
     local UUID
@@ -1829,11 +1887,11 @@ do_install() {
     # 重装时保留已有 SS/Reality inbound（解耦 Argo 和可选协议）
     local saved_inbounds=""
     if [ -f "$CONFIG_FILE" ]; then
-        saved_inbounds=$(jq -c '[.inbounds[] | select(.tag=="reality" or .tag=="ss")]' "$CONFIG_FILE" 2>/dev/null)
+        saved_inbounds=$(jq -c '[.inbounds[] | select(.tag=="reality" or .tag=="ss" or .tag=="hy2")]' "$CONFIG_FILE" 2>/dev/null)
         [ "$saved_inbounds" = "[]" ] && saved_inbounds=""
     fi
     # 重装时关掉可选协议（下面会从保存的 merge 回来，避免重复）
-    [ -n "$saved_inbounds" ] && { ENABLE_REALITY=0; ENABLE_SS=0; }
+    [ -n "$saved_inbounds" ] && { ENABLE_REALITY=0; ENABLE_HY2=0; ENABLE_SS=0; }
     build_xray_config "$UUID" "$SS_PASS"
     # 合并回已保存的 inbound
     if [ -n "$saved_inbounds" ]; then
@@ -1846,6 +1904,7 @@ do_install() {
            "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
 
         echo "$saved_inbounds" | jq -e '.[] | select(.tag=="reality")' &>/dev/null && ENABLE_REALITY=1
+        echo "$saved_inbounds" | jq -e '.[] | select(.tag=="hy2")'      &>/dev/null && ENABLE_HY2=1
         echo "$saved_inbounds" | jq -e '.[] | select(.tag=="ss")'       &>/dev/null && ENABLE_SS=1
     fi
     sync_xray_users
@@ -1939,7 +1998,9 @@ build_xray_config() {
     inbounds+=',{"port":'"${VMESS_WS_PORT}"',"listen":"127.0.0.1","protocol":"vmess","tag":"vmess-ws","settings":{"clients":[{"id":"'"${uuid}"'","alterId":0,"email":"argov-default"}]},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vmess-argo"}}}'
     # 4. Reality (opt)
     [ "$ENABLE_REALITY" = 1 ] && inbounds+=',{"port":'"${REALITY_PORT}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision","email":"argov-default"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${REALITY_SNI}"':443","serverNames":["'"${REALITY_SNI}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":["'"${REALITY_SHORTID}"'"],"fingerprint":"chrome"}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
-    # 5. SS (opt)
+    # 5. Hysteria2 (opt)
+    [ "$ENABLE_HY2" = 1 ] && inbounds+=',{"port":'"${HY2_PORT}"',"listen":"0.0.0.0","protocol":"hysteria","tag":"hy2","settings":{"version":2,"users":[{"auth":"'"${uuid}"'","level":0,"email":"argov-default"}]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"alpn":["h3"],"serverName":"'"${HY2_SNI}"'","certificates":[{"certificateFile":"'"${HY2_CERT_FILE}"'","keyFile":"'"${HY2_KEY_FILE}"'"}]},"hysteriaSettings":{"version":2,"udpIdleTimeout":"60s"}}}'
+    # 6. SS (opt)
     [ "$ENABLE_SS" = 1 ] && inbounds+=',{"port":'"${SS_PORT}"',"listen":"0.0.0.0","protocol":"shadowsocks","tag":"ss","settings":{"method":"'"${SS_METHOD}"'","password":"'"${ss_pass}"'","network":"tcp,udp"}}'
     inbounds+=']'
 
@@ -1962,6 +2023,62 @@ XRAYCONF
 #==============================================================================
 # 管理节点 (添加/编辑/删除)
 #==============================================================================
+edit_hy2_protocol() {
+    local uuid ip cur_port cur_sni new_port new_sni
+    uuid=$(get_uuid)
+    ip=$(get_ip)
+    cur_port=$(jq -r '.inbounds[]|select(.tag=="hy2")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
+    cur_sni=$(jq -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.serverName//"www.bing.com"' "$CONFIG_FILE" 2>/dev/null)
+    new_port="$cur_port"
+    new_sni="$cur_sni"
+
+    clear
+    echo ""; echo -e " ${purple}┌────────────────────────────────────────┐${re}"
+    echo -e " ${purple}│${re}     ${white}编辑 Hysteria2${re}"
+    echo -e " ${purple}└────────────────────────────────────────┘${re}"
+    echo ""
+    echo -e " ${white}── SNI ──${re}"
+    echo -e "  ${yellow}当前: ${cyan}${cur_sni}${re}"
+    read -p "  新 SNI [回车保持]: " hs
+    [ -n "$hs" ] && new_sni="$hs"
+    echo -e "  → ${green}${new_sni}${re}\n"
+
+    echo -e " ${white}── 端口 ──${re}"
+    echo -e "  ${yellow}当前: ${cyan}${cur_port}${re} 公网端口"
+    read -p "  新端口 [回车保持]: " hp
+    if [ -n "$hp" ]; then
+        if is_port "$hp" && ! port_in_use "$hp"; then
+            new_port="$hp"
+        else
+            red_msg "端口无效或已占用，保持原端口"
+        fi
+    fi
+    echo -e "  → ${green}${new_port}${re}\n"
+
+    echo -e " ${white}确认修改:${re}"
+    echo -e "  SNI: ${cyan}${cur_sni}${re} → ${green}${new_sni}${re}"
+    echo -e "  端口: ${cyan}${cur_port}${re} → ${green}${new_port}${re}"
+    echo ""
+    echo -ne "  ${yellow}确认? (y/n) [y]: ${re}"
+    read cf
+    [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "已取消。"; return; }
+
+    jq --arg sni "$new_sni" --argjson pt "$new_port" \
+       '(.inbounds[]|select(.tag=="hy2")|.port)=$pt|(.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.serverName)=$sni' \
+       "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+    HY2_PORT="$new_port"
+    HY2_SNI="$new_sni"
+    save_conf
+    yellow_msg "重启 Xray..."
+    systemctl restart xray 2>/dev/null
+    rc-service xray restart 2>/dev/null || true
+    sleep 2
+    get_status
+    green_msg "完成"
+    [ -n "$ip" ] && echo -e "  ${green}$(gen_hy2_link "$uuid" "$ip" "$new_port" "$new_sni" "${NODE_NAME}-Hy2")${re}"
+    echo ""; read -p "  按回车继续..." -r
+}
+
 manage_protocols() {
     load_conf
     [ ! -f "$CONFIG_FILE" ] && { red_msg "请先安装！"; return; }
@@ -2098,6 +2215,10 @@ edit_protocol() {
             cur_port=$(jq -r '.inbounds[]|select(.tag=="reality")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
             cur_sni=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames[0]//empty' "$CONFIG_FILE" 2>/dev/null)
             REALITY_SNI="$cur_sni" ;;
+        hy2)
+            cur_port=$(jq -r '.inbounds[]|select(.tag=="hy2")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
+            cur_sni=$(jq -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.serverName//"www.bing.com"' "$CONFIG_FILE" 2>/dev/null)
+            HY2_SNI="$cur_sni" ;;
         ss)
             cur_port=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
             cur_method=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.settings.method//empty' "$CONFIG_FILE" 2>/dev/null)
@@ -3420,6 +3541,189 @@ update_xray_core() {
 #==============================================================================
 # 主菜单
 #==============================================================================
+add_hy2_protocol() {
+    local uuid ip h_port h_sni new_inbound
+    uuid=$(get_uuid)
+    ip=$(get_ip)
+    h_port=$(find_free_port "$(shuf -i 10000-60000 -n 1)")
+    h_sni="${HY2_SNI:-www.bing.com}"
+
+    clear
+    echo ""
+    echo -e " ${purple}Add Hysteria2${re}"
+    echo ""
+    echo -e "  Default SNI: ${cyan}${h_sni}${re}"
+    read -p "  SNI [enter keep]: " hs
+    [ -n "$hs" ] && h_sni="$hs"
+
+    echo -e "  Random port: ${cyan}${h_port}${re}"
+    read -p "  Port [enter keep]: " hp
+    if [ -n "$hp" ]; then
+        if is_port "$hp" && ! port_in_use "$hp"; then
+            h_port="$hp"
+        else
+            red_msg "Invalid or occupied port, keep random port."
+        fi
+    fi
+
+    echo ""
+    echo -e "  Hysteria2 SNI: ${green}${h_sni}${re}"
+    echo -e "  Hysteria2 port: ${green}${h_port}${re}"
+    echo -ne "  Confirm add? (y/n) [y]: "
+    read cf
+    [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "Canceled."; return; }
+
+    HY2_PORT="$h_port"
+    HY2_SNI="$h_sni"
+    gen_hy2_cert || { red_msg "Failed to generate Hysteria2 self-signed certificate."; return; }
+
+    new_inbound='{"port":'"${HY2_PORT}"',"listen":"0.0.0.0","protocol":"hysteria","tag":"hy2","settings":{"version":2,"users":[{"auth":"'"${uuid}"'","level":0,"email":"argov-default"}]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"alpn":["h3"],"serverName":"'"${HY2_SNI}"'","certificates":[{"certificateFile":"'"${HY2_CERT_FILE}"'","keyFile":"'"${HY2_KEY_FILE}"'"}]},"hysteriaSettings":{"version":2,"udpIdleTimeout":"60s"}}}'
+    jq --argjson i "$new_inbound" '.inbounds += [$i]' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+    ENABLE_HY2=1
+    sync_xray_users || return
+    save_conf
+    yellow_msg "Restarting Xray..."
+    systemctl restart xray 2>/dev/null || true
+    rc-service xray restart 2>/dev/null || true
+    sleep 2
+    get_status
+    green_msg "Hysteria2 added."
+    [ -n "$ip" ] && echo -e "  ${green}$(gen_hy2_link "$uuid" "$ip" "$HY2_PORT" "$HY2_SNI" "${NODE_NAME}-Hy2")${re}"
+    echo ""
+    read -p "  Press Enter to continue..." -r
+}
+
+delete_protocol() {
+    local has_reality=0 has_hy2=0 has_ss=0 choice tag label
+    jq -e '.inbounds[]|select(.tag=="reality")' "$CONFIG_FILE" >/dev/null 2>&1 && has_reality=1
+    jq -e '.inbounds[]|select(.tag=="hy2")' "$CONFIG_FILE" >/dev/null 2>&1 && has_hy2=1
+    jq -e '.inbounds[]|select(.tag=="ss" or .protocol=="shadowsocks")' "$CONFIG_FILE" >/dev/null 2>&1 && has_ss=1
+
+    clear
+    echo ""
+    echo -e " ${purple}Delete optional node${re}"
+    echo ""
+    [ "$has_reality" = 1 ] && echo -e "  ${green}1${re}. Reality"
+    [ "$has_hy2" = 1 ] && echo -e "  ${green}2${re}. Hysteria2"
+    [ "$has_ss" = 1 ] && echo -e "  ${green}3${re}. Shadowsocks"
+    echo -e "  ${red}0${re}. Back"
+    read -p "  Select: " choice
+
+    case "$choice" in
+        1) [ "$has_reality" = 1 ] || return; tag="reality"; label="Reality"; ENABLE_REALITY=0; REALITY_PORT=0 ;;
+        2) [ "$has_hy2" = 1 ] || return; tag="hy2"; label="Hysteria2"; ENABLE_HY2=0; HY2_PORT=0 ;;
+        3) [ "$has_ss" = 1 ] || return; tag="ss"; label="Shadowsocks"; ENABLE_SS=0; SS_PORT=0 ;;
+        0) return ;;
+        *) red_msg "Invalid."; sleep 1; return ;;
+    esac
+
+    echo -ne "  Delete ${label}? (y/n): "
+    read cf
+    [ "$cf" = "y" ] || [ "$cf" = "Y" ] || { yellow_msg "Canceled."; return; }
+
+    case "$tag" in
+        ss)
+            jq 'del(.inbounds[] | select(.tag=="ss" or .protocol=="shadowsocks"))' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+            ;;
+        *)
+            jq --arg tag "$tag" 'del(.inbounds[] | select(.tag==$tag))' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+            ;;
+    esac
+    save_conf
+    systemctl restart xray 2>/dev/null || true
+    rc-service xray restart 2>/dev/null || true
+    sleep 1
+    green_msg "Deleted."
+}
+
+manage_protocols() {
+    load_conf
+    [ ! -f "$CONFIG_FILE" ] && { red_msg "请先安装。"; return; }
+
+    while true; do
+        local has_reality=0 has_hy2=0 has_ss=0
+        grep -qE '"tag"[[:space:]]*:[[:space:]]*"reality"' "$CONFIG_FILE" 2>/dev/null && has_reality=1
+        grep -qE '"tag"[[:space:]]*:[[:space:]]*"hy2"' "$CONFIG_FILE" 2>/dev/null && has_hy2=1
+        grep -q '"shadowsocks"' "$CONFIG_FILE" 2>/dev/null && has_ss=1
+
+        clear
+        echo ""; echo -e " ${purple}┌────────────────────────────────────────┐${re}"
+        echo -e " ${purple}│${re}         ${white}管理节点${re}                          ${purple}│${re}"
+        echo -e " ${purple}└────────────────────────────────────────┘${re}"
+        echo ""
+
+        local vl_port vm_port
+        vl_port=$(jq -r '.inbounds[]|select(.tag=="vless-ws")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
+        vm_port=$(jq -r '.inbounds[]|select(.tag=="vmess-ws")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
+        echo -e "  ${white}── Argo 隧道 ──${re}"
+        echo ""
+        echo -e "  ${green}e1${re}. VLESS + Argo    端口 ${cyan}${vl_port}${re}  路径 ${cyan}/vless-argo${re}"
+        echo -e "  ${green}e2${re}. VMess + Argo    端口 ${cyan}${vm_port}${re}  路径 ${cyan}/vmess-argo${re}"
+        echo ""
+
+        if [ "$has_reality" = 1 ] || [ "$has_hy2" = 1 ] || [ "$has_ss" = 1 ]; then
+            echo -e "  ${white}── 可选协议 · 可编辑 ──${re}"
+            echo ""
+        fi
+        if [ "$has_reality" = 1 ]; then
+            local rp rs
+            rp=$(jq -r '.inbounds[]|select(.tag=="reality")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
+            rs=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames[0]//empty' "$CONFIG_FILE" 2>/dev/null)
+            echo -e "  ${green}e3${re}. VLESS Reality    ${cyan}${rs}${re}  端口 ${cyan}${rp}${re}"
+        fi
+        if [ "$has_hy2" = 1 ]; then
+            local hp hs
+            hp=$(jq -r '.inbounds[]|select(.tag=="hy2")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
+            hs=$(jq -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.serverName//"www.bing.com"' "$CONFIG_FILE" 2>/dev/null)
+            echo -e "  ${green}e4${re}. Hysteria2       ${cyan}${hs}${re}  端口 ${cyan}${hp}${re}"
+        fi
+        if [ "$has_ss" = 1 ]; then
+            local sp sm
+            sp=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
+            sm=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.settings.method//empty' "$CONFIG_FILE" 2>/dev/null)
+            echo -e "  ${green}e5${re}. Shadowsocks       ${cyan}${sm}${re}  端口 ${cyan}${sp}${re}"
+        fi
+
+        if [ "$has_reality" = 0 ] || [ "$has_hy2" = 0 ] || [ "$has_ss" = 0 ]; then
+            echo ""; echo -e "  ${white}── 可添加 ──${re}"; echo ""
+        fi
+        [ "$has_reality" = 0 ] && echo -e "  ${cyan}a1${re}. VLESS Reality"
+        [ "$has_hy2" = 0 ] && echo -e "  ${cyan}a2${re}. Hysteria2"
+        [ "$has_ss" = 0 ] && echo -e "  ${cyan}a3${re}. Shadowsocks"
+
+        echo ""; echo -e "  ${white}── 自定义节点(自添加) ──${re}"; echo ""
+        local custom_count=0
+        [ -f "${WORK_DIR}/custom_links.txt" ] && custom_count=$(grep -c '[^[:space:]]' "${WORK_DIR}/custom_links.txt" 2>/dev/null || echo 0)
+        [ -z "$custom_count" ] && custom_count=0
+        echo -e "  已有 ${cyan}${custom_count}${re} 个自定义链接"
+        echo ""
+        echo -e "  ${cyan}c1${re}. 添加自定义链接   ${cyan}c2${re}. 查看/删除自定义链接"
+        echo ""
+        echo -e "  ${purple}提示${re}: 内置 Hysteria2 会进入用户统计与限额；端口跳跃暂未自动配置。"
+
+        [ "$has_reality" = 1 ] || [ "$has_hy2" = 1 ] || [ "$has_ss" = 1 ] && echo "" && echo -e "  ${red}d${re}. 删除可选节点"
+        echo ""; echo -e "  ${red}0${re}. 返回"
+        echo -e " ${purple}────────────────────────────────────────${re}"
+        read -p "  请输入: " ac; [ "$ac" = "0" ] && return
+
+        case "$ac" in
+            e1) edit_protocol "vless-ws" "VLESS + Argo" ;;
+            e2) edit_protocol "vmess-ws" "VMess + Argo" ;;
+            e3) [ "$has_reality" = 1 ] && edit_protocol "reality" "VLESS Reality" ;;
+            e4) [ "$has_hy2" = 1 ] && edit_hy2_protocol ;;
+            e5) [ "$has_ss" = 1 ] && edit_protocol "ss" "Shadowsocks" ;;
+            a1) [ "$has_reality" = 0 ] && add_single_protocol "reality" ;;
+            a2) [ "$has_hy2" = 0 ] && add_hy2_protocol ;;
+            a3) [ "$has_ss" = 0 ] && add_single_protocol "ss" ;;
+            c1) add_custom_link ;;
+            c2) view_delete_custom_links ;;
+            d|D) delete_protocol ;;
+            *) red_msg "无效"; sleep 1; continue ;;
+        esac
+        load_conf
+    done
+}
+
 main_menu() {
     load_conf
     while true; do
