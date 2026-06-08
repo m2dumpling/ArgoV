@@ -1049,7 +1049,7 @@ build_xray_config() {
     # 3. VMess WS
     inbounds+=',{"port":'"${VMESS_WS_PORT}"',"listen":"127.0.0.1","protocol":"vmess","tag":"vmess-ws","settings":{"clients":[{"id":"'"${uuid}"'","alterId":0}]},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vmess-argo"}}}'
     # 4. Reality (opt)
-    [ "$ENABLE_REALITY" = 1 ] && inbounds+=',{"port":'"${REALITY_PORT}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${REALITY_SNI}"':443","serverNames":["'"${REALITY_SNI}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":["'"${REALITY_SHORTID}"'"],"fingerprint":"chrome"}},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":true}}'
+    [ "$ENABLE_REALITY" = 1 ] && inbounds+=',{"port":'"${REALITY_PORT}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${REALITY_SNI}"':443","serverNames":["'"${REALITY_SNI}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":["'"${REALITY_SHORTID}"'"],"fingerprint":"chrome"}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
     # 5. SS (opt)
     [ "$ENABLE_SS" = 1 ] && inbounds+=',{"port":'"${SS_PORT}"',"listen":"0.0.0.0","protocol":"shadowsocks","tag":"ss","settings":{"method":"'"${SS_METHOD}"'","password":"'"${ss_pass}"'","network":"tcp,udp"}}'
     inbounds+=']'
@@ -1475,7 +1475,7 @@ add_single_protocol() {
             [ -z "$REALITY_PRIV" ] || [ "$REALITY_PRIV" = "REPLACE_ME" ] && gen_reality_keys
             REALITY_SHORTID="$r_sid"
             local sid_val="\"$REALITY_SHORTID\""
-            new_inbound='{"port":'"${r_port}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${r_sni}"':443","serverNames":["'"${r_sni}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":['"${sid_val}"'],"fingerprint":"'"${r_fp}"'"}},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":true}}'
+            new_inbound='{"port":'"${r_port}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${r_sni}"':443","serverNames":["'"${r_sni}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":['"${sid_val}"'],"fingerprint":"'"${r_fp}"'"}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
             REALITY_PORT="$r_port"; REALITY_SNI="$r_sni"; ENABLE_REALITY=1 ;;
     esac
     jq --argjson i "$new_inbound" '.inbounds+=[$i]' "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
