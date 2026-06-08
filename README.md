@@ -73,10 +73,10 @@ Just type `ag` to take full control of your network topology:
   w. 🌐 WARP split         r. 🔀 Landing relay
 
  ──────────────── ✦ Operations ✦ ────────────────
-  4. ▶️  Start system       7. 🔄 Reinstall (Keep data)
-  5. ⏹️  Stop system        8. 🆙 Update script
-  6. 🔁 Restart Tunnel     x. 🚀 Update Xray core
-  9. 🗑️  Uninstall          0. 🚪 Exit
+  4. ▶️  Start system       5. ⏹️  Stop system
+  6. 🔁 Restart Tunnel     7. 🔄 Reinstall (Keep data)
+  8. 🆙 Update script      9. 🗑️  Uninstall
+  x. 🚀 Update Xray core   0. 🚪 Exit
  ───────────────────────────────────────────────
 ```
 

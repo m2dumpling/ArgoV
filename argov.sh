@@ -2700,10 +2700,10 @@ main_menu() {
         echo -e "  ${purple}w${re}. 🌐 独立 WARP 分流     ${purple}r${re}. 🔀 落地节点中继"
         echo ""
         echo -e " ${purple}──────────────── ✦ 状态运维 ✦ ────────────────${re}"
-        echo -e "  ${green}4${re}. ▶️  启动系统         ${yellow}7${re}. 🔄 重新安装 (保留数据)"
-        echo -e "  ${red}5${re}. ⏹️  停止系统         ${cyan}8${re}. 🆙 更新管理脚本"
-        echo -e "  ${yellow}6${re}. 🔁 重启 Argo 隧道    ${purple}x${re}. 🚀 更新 Xray 内核"
-        echo -e "  ${red}9${re}. 🗑️  彻底卸载系统     ${cyan}0${re}. 🚪 安全退出"
+        echo -e "  ${green}4${re}. ▶️  启动系统         ${red}5${re}. ⏹️  停止系统"
+        echo -e "  ${yellow}6${re}. 🔁 重启 Argo 隧道    ${yellow}7${re}. 🔄 重新安装 (保留数据)"
+        echo -e "  ${cyan}8${re}. 🆙 更新管理脚本      ${red}9${re}. 🗑️  彻底卸载系统"
+        echo -e "  ${purple}x${re}. 🚀 更新 Xray 内核    ${cyan}0${re}. 🚪 安全退出"
         echo -e " ${purple}───────────────────────────────────────────────${re}"
         read -p "  请输入 (0-9 / a / x / w / r): " c
         case "$c" in
