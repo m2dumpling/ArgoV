@@ -468,9 +468,9 @@ def build_clash(lines):
             {"name": "🛑 广告拦截", "type": "select", "proxies": ["REJECT", "DIRECT"]}
         ],
         "rule-providers": {
-            "reject": {"type": "http", "behavior": "domain", "url": "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/reject.txt", "path": "./ruleset/reject.yaml", "interval": 86400},
-            "proxy": {"type": "http", "behavior": "domain", "url": "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/proxy.txt", "path": "./ruleset/proxy.yaml", "interval": 86400},
-            "direct": {"type": "http", "behavior": "domain", "url": "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/direct.txt", "path": "./ruleset/direct.yaml", "interval": 86400}
+            "reject": {"type": "http", "behavior": "domain", "url": "https://ghproxy.net/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/reject.txt", "path": "./ruleset/reject.yaml", "interval": 86400},
+            "proxy": {"type": "http", "behavior": "domain", "url": "https://ghproxy.net/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/proxy.txt", "path": "./ruleset/proxy.yaml", "interval": 86400},
+            "direct": {"type": "http", "behavior": "domain", "url": "https://ghproxy.net/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/direct.txt", "path": "./ruleset/direct.yaml", "interval": 86400}
         },
         "rules": [
             "RULE-SET,reject,🛑 广告拦截",
