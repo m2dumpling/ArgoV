@@ -560,7 +560,7 @@ gen_reality_link() {
     printf '%s' "vless://$1@$2:$3?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=$4&pbk=$5&fp=${fp}${sid}#${7:-${NODE_NAME}-Reality}"
 }
 gen_hy2_link() {
-    printf '%s' "hysteria2://$1@$2:$3?sni=$4&insecure=1&alpn=h3#${5:-${NODE_NAME}-Hy2}"
+    printf '%s' "hysteria2://$1@$2:$3?sni=$4&insecure=1&allowInsecure=1&alpn=h3#${5:-${NODE_NAME}-Hy2}"
 }
 
 show_qr() {
@@ -1050,7 +1050,7 @@ fi
 if $JQ -e '.inbounds[]|select(.tag=="hy2")' "$CFG" >/dev/null 2>&1 && [ -n "$ip" ]; then
     hport=$($JQ -r '.inbounds[]|select(.tag=="hy2")|.port' "$CFG")
     hsni=$($JQ -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.serverName//"www.bing.com"' "$CFG")
-    [ -n "$hport" ] && links+="hysteria2://${uuid}@${ip}:${hport}?sni=${hsni}&insecure=1&alpn=h3#${NODE_NAME}-Hy2"$'\n'
+    [ -n "$hport" ] && links+="hysteria2://${uuid}@${ip}:${hport}?sni=${hsni}&insecure=1&allowInsecure=1&alpn=h3#${NODE_NAME}-Hy2"$'\n'
 fi
 out=$(printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n')
 [ "$IS_DEFAULT_USER" = "1" ] && printf '%s' "$out" > /etc/xray/sub.txt
