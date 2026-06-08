@@ -69,7 +69,7 @@ require(
     "WARP routing must stop when SOCKS installation fails",
 )
 require(
-    r"节点管理.*服务控制.*系统维护",
+    r"核心功能.*进阶路由.*状态运维",
     "main menu must have three clearly separated groups: nodes, services, maintenance",
     flags=re.DOTALL,
 )

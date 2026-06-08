@@ -653,7 +653,7 @@ change_config() {
         echo -e "  ${green}3${re}. 切换 Argo 隧道 (临时↔固定)"
         echo -e "  ${green}4${re}. SS 加密 — ${cyan}${SS_METHOD}${re}"
         echo -e "  ${green}5${re}. Reality 伪装域名 — ${cyan}${REALITY_SNI}${re}"
-        echo -e "  ${green}6${re}. 增删协议 (需重装)"
+        echo -e "  ${green}6${re}. 管理协议节点 (添加/删除)"
         echo -e "  ${green}7${re}. 查看节点链接"
         echo -e "  ${green}8${re}. 刷新 Argo 域名"
         echo -e "  ${green}9${re}. 订阅配置"
@@ -672,7 +672,7 @@ change_config() {
             5) echo ""; for i in "${!REALITY_SNIS[@]}"; do echo -e "  ${green}$((i+1))${re}. ${REALITY_SNIS[$i]}"; done; echo ""
                read -p "  选择 [默认 www.amazon.com]: " rs; [ -n "$rs" ] && REALITY_SNI="${REALITY_SNIS[$((rs-1))]:-$REALITY_SNI}"
                save_conf; green_msg "Reality SNI: ${REALITY_SNI}" ;;
-            6) do_install; break ;;
+            6) manage_protocols ;;
             7) show_node ;; 8) restart_services ;; 9) edit_subscription ;; 0) return ;; *) red_msg "无效" ;;
         esac; read -p "  按回车继续..." -r
     done
