@@ -167,9 +167,9 @@ is_port_range() {
 build_hy2_inbound() {
     local listen_port="$1" sni="$2" auth="$3" email="${4:-argov-default}" mport="$5"
     if [ -n "$mport" ]; then
-        printf '%s' '{"port":'"${listen_port}"',"listen":"0.0.0.0","protocol":"hysteria","tag":"hy2","settings":{"version":2,"users":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"alpn":["h3"],"serverName":"'"${sni}"'","certificates":[{"certificateFile":"'"${HY2_CERT_FILE}"'","keyFile":"'"${HY2_KEY_FILE}"'"}]},"hysteriaSettings":{"version":2,"udpIdleTimeout":60},"finalmask":{"quicParams":{"udpHop":{"ports":"'"${mport}"'","interval":30}}}}}'
+        printf '%s' '{"port":'"${listen_port}"',"listen":"0.0.0.0","protocol":"hysteria","tag":"hy2","settings":{"version":2,"users":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}],"clients":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"alpn":["h3"],"serverName":"'"${sni}"'","certificates":[{"certificateFile":"'"${HY2_CERT_FILE}"'","keyFile":"'"${HY2_KEY_FILE}"'"}]},"hysteriaSettings":{"version":2,"udpIdleTimeout":60},"finalmask":{"quicParams":{"udpHop":{"ports":"'"${mport}"'","interval":30}}}}}'
     else
-        printf '%s' '{"port":'"${listen_port}"',"listen":"0.0.0.0","protocol":"hysteria","tag":"hy2","settings":{"version":2,"users":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"alpn":["h3"],"serverName":"'"${sni}"'","certificates":[{"certificateFile":"'"${HY2_CERT_FILE}"'","keyFile":"'"${HY2_KEY_FILE}"'"}]},"hysteriaSettings":{"version":2,"udpIdleTimeout":60}}}'
+        printf '%s' '{"port":'"${listen_port}"',"listen":"0.0.0.0","protocol":"hysteria","tag":"hy2","settings":{"version":2,"users":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}],"clients":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"alpn":["h3"],"serverName":"'"${sni}"'","certificates":[{"certificateFile":"'"${HY2_CERT_FILE}"'","keyFile":"'"${HY2_KEY_FILE}"'"}]},"hysteriaSettings":{"version":2,"udpIdleTimeout":60}}}'
     fi
 }
 disable_hy2_hop_rules() {
@@ -412,7 +412,9 @@ for inbound in cfg.get("inbounds", []):
     elif tag == "hy2":
         settings = inbound.setdefault("settings", {})
         settings["version"] = 2
-        settings["users"] = hy2_users()
+        users = hy2_users()
+        settings["users"] = users
+        settings["clients"] = users
 
 if not any(i.get("tag") == "api-in" for i in cfg.get("inbounds", [])):
     cfg.setdefault("inbounds", []).append({"listen":"127.0.0.1","port":10085,"protocol":"dokodemo-door","tag":"api-in","settings":{"address":"127.0.0.1"}})
@@ -1285,7 +1287,9 @@ def sync_config(users):
         elif tag == "hy2":
             settings = inbound.setdefault("settings", {})
             settings["version"] = 2
-            settings["users"] = [{"auth": u["uuid"], "level": 0, "email": u["email"]} for u in enabled]
+            users = [{"auth": u["uuid"], "level": 0, "email": u["email"]} for u in enabled]
+            settings["users"] = users
+            settings["clients"] = users
 
     if not any(i.get("tag") == "api-in" for i in cfg.get("inbounds", [])):
         cfg.setdefault("inbounds", []).append({"listen":"127.0.0.1","port":10085,"protocol":"dokodemo-door","tag":"api-in","settings":{"address":"127.0.0.1"}})
