@@ -2497,6 +2497,26 @@ PYEOF
     fi
 }
 
+update_xray_core() {
+    yellow_msg "正在检测 Xray 内核版本并更新..."
+    local ARCH_ARG; ARCH_ARG=$(detect_arch)
+    [ -z "$ARCH_ARG" ] && { red_msg "不支持 CPU: $(uname -m)"; sleep 2; return; }
+    
+    local utmp="/tmp/xray_update.zip"
+    curl -sLo "$utmp" "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${ARCH_ARG}.zip"
+    if [ -s "$utmp" ]; then
+        systemctl stop xray 2>/dev/null
+        unzip -o "$utmp" -d "$WORK_DIR" >/dev/null 2>&1
+        chmod +x "${WORK_DIR}/xray"
+        rm -f "$utmp"
+        systemctl start xray 2>/dev/null
+        green_msg "Xray 内核更新完成！"
+    else
+        red_msg "下载 Xray 内核失败，请检查网络！"
+    fi
+    sleep 2
+}
+
 #==============================================================================
 # 主菜单
 #==============================================================================
@@ -2531,12 +2551,11 @@ main_menu() {
         echo ""
         echo -e " ${purple}──────────────── ✦ 状态运维 ✦ ────────────────${re}"
         echo -e "  ${green}4${re}. ▶️  启动系统         ${yellow}7${re}. 🔄 重新安装 (保留数据)"
-        echo -e "  ${red}5${re}. ⏹️  停止系统         ${cyan}8${re}. 🆙 检查并更新脚本"
-        echo -e "  ${yellow}6${re}. 🔁 重启 Argo 隧道    ${red}9${re}. 🗑️  彻底卸载系统"
-        echo ""
-        echo -e "  ${cyan}0${re}. 🚪 安全退出"
+        echo -e "  ${red}5${re}. ⏹️  停止系统         ${cyan}8${re}. 🆙 更新管理脚本"
+        echo -e "  ${yellow}6${re}. 🔁 重启 Argo 隧道    ${purple}x${re}. 🚀 更新 Xray 内核"
+        echo -e "  ${red}9${re}. 🗑️  彻底卸载系统     ${cyan}0${re}. 🚪 安全退出"
         echo -e " ${purple}───────────────────────────────────────────────${re}"
-        read -p "  请输入 (0-9 / a / w / r): " c
+        read -p "  请输入 (0-9 / a / x / w / r): " c
         case "$c" in
             1) show_node; read -p "  按回车返回..." -r ;;
             2) edit_cdn; read -p "  按回车返回..." -r ;;
@@ -2549,6 +2568,7 @@ main_menu() {
                local utmp; utmp=$(mktemp /tmp/argov.XXXXXX)
                curl -sLo "$utmp" https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh && bash "$utmp" && rm -f "$utmp"
                clear; continue ;;
+            x|X) update_xray_core ;;
             9) echo -ne "  ${red}⚠ 确定卸载? (y/n): ${re}"; read cf
                if [ "$cf" = "y" ] || [ "$cf" = "Y" ]; then
                    stop_sub_server 2>/dev/null
@@ -2558,7 +2578,7 @@ main_menu() {
             w|W) warp_menu ;;
             r|R) relay_menu ;;
             0) clear; break ;;
-            *) red_msg "无效 (0-9 / a / w / r)"; sleep 1 ;;
+            *) red_msg "无效 (0-9 / a / x / w / r)"; sleep 1 ;;
         esac
     done
 }
