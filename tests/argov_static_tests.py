@@ -40,6 +40,22 @@ require(
     r"interactive_install\(\)[\s\S]*select_protocols[\s\S]*do_install",
     "interactive install must call select_protocols before do_install",
 )
+forbid(
+    r'echo "https://\$\{SUB_DOMAIN\}:\$\{SUB_PORT\}/sub\?token=\$\{SUB_TOKEN\}#\$\{NODE_NAME\}"',
+    "subscription URLs must not append raw NODE_NAME fragments because strict clients can reject non-ASCII or spaces before sending the request",
+)
+forbid(
+    r'echo "http://\$\{1:-127\.0\.0\.1\}:\$\{SUB_PORT\}\$\{SUB_PATH\}#\$\{NODE_NAME\}"',
+    "HTTP subscription URLs must not append raw NODE_NAME fragments because strict clients can reject non-ASCII or spaces before sending the request",
+)
+require(
+    r"json\.dumps\(v,\s*ensure_ascii=False\)",
+    "Clash YAML strings must preserve UTF-8 instead of emitting surrogate escapes such as \\ud83d\\ude80",
+)
+require(
+    r"json\.dumps\(i,\s*ensure_ascii=False\)",
+    "Clash YAML list strings must preserve UTF-8 instead of emitting surrogate escapes such as \\ud83d\\ude80",
+)
 require(
     r"ENABLE_REALITY[\s\S]*gen_reality_shortid",
     "Reality install path must generate REALITY_SHORTID",
