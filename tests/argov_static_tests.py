@@ -233,6 +233,14 @@ require(
     "initial Hysteria2 inbound must use the official hysteria transport with TLS",
 )
 require(
+    r'build_hy2_inbound\(\)[\s\S]*"udpIdleTimeout":60',
+    "Xray Hysteria2 udpIdleTimeout must be numeric seconds, not a string duration",
+)
+forbid(
+    r'"udpIdleTimeout":"60s"',
+    "Xray 26.3.27 rejects string udpIdleTimeout values for Hysteria2",
+)
+require(
     r'"tlsSettings":\{"alpn":\["h3"\]',
     "built-in Hysteria2 must expose h3 ALPN for clients",
 )
