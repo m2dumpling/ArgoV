@@ -221,12 +221,12 @@ require(
     "built-in Hysteria2 must generate hysteria2:// subscription links",
 )
 require(
-    r'elif tag == "hy2":[\s\S]*"auth": u\["uuid"\][\s\S]*"email": u\["email"\]',
-    "Hysteria2 user sync must use per-user auth and email for stats/quota",
+    r'elif tag == "hy2":[\s\S]*settings\["users"\] = users[\s\S]*settings\["clients"\] = users',
+    "Hysteria2 user sync must write both users and clients for Xray version compatibility",
 )
 require(
-    r'build_hy2_inbound\(\)[\s\S]*"protocol":"hysteria","tag":"hy2"[\s\S]*"settings":\{"version":2,"users":\[\{"auth":"\'"\$\{auth\}"\'","level":0,"email":"\'"\$\{email\}"\'"\}\]\}',
-    "initial Hysteria2 inbound must use Xray hysteria v2 users with email",
+    r'build_hy2_inbound\(\)[\s\S]*"protocol":"hysteria","tag":"hy2"[\s\S]*"settings":\{"version":2,"users":\[\{"auth":"\'"\$\{auth\}"\'","level":0,"email":"\'"\$\{email\}"\'"\}\],"clients":\[\{"auth":"\'"\$\{auth\}"\'","level":0,"email":"\'"\$\{email\}"\'"\}\]\}',
+    "initial Hysteria2 inbound must write users and clients with per-user auth",
 )
 require(
     r'build_hy2_inbound\(\)[\s\S]*"streamSettings":\{"network":"hysteria","security":"tls"[\s\S]*"hysteriaSettings":\{"version":2',
