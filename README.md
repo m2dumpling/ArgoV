@@ -1,81 +1,63 @@
-# 🌐 ArgoV — Cloudflare Argo Tunnel Manager
+# 🌐 ArgoV — Next-Gen Proxy Management Panel
 
 <p align="center">
   <img src="docs/assets/argov-logo.svg?v=3" alt="ArgoV" width="440">
 </p>
 
 <p align="center">
-  <strong>One-click deploy. Zero public ports. Auto-recovery after reboot.</strong>
+  <strong>One-click deploy. Zero public ports. Dynamic routing. Built for geeks.</strong>
 </p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Platform-Debian|Ubuntu|CentOS|Alpine-lightgrey?style=flat-square" alt="Platform">
+  <img src="https://img.shields.io/badge/Core-Xray_v1.8+-0078D7?style=flat-square" alt="Core">
   <img src="https://img.shields.io/badge/Protocol-VLESS|VMess|SS|Reality-8B5CF6?style=flat-square" alt="Protocols">
 </p>
 
 ---
 
-**ArgoV** is a zero-public-port proxy management panel powered by Cloudflare Argo Tunnel. It wraps VLESS / VMess traffic inside Cloudflare's edge network — no open firewall ports, no domain required. Optional Reality and Shadowsocks for direct connections. Built-in subscription server with auto domain refresh after VPS reboot. Server-side landing relay for clean IP egress — transparent to all clients.
+**ArgoV** is a sleek, hardcore, and highly professional zero-trust proxy management panel. Built on top of Cloudflare Argo Tunnel, it encapsulates VLESS and VMess traffic deep inside Cloudflare's edge network—requiring absolutely no domains and keeping your server's firewall completely locked down.
 
-[Quick Start](#quick-start) · [Features](#features) · [Subscription](#subscription-server) · [Relay](#landing-relay) · [WARP](#warp-domain-routing) · [Architecture](#architecture) · [Clients](#client-config) · [中文版](README_CN.md)
+Beyond basic tunneling, ArgoV is supercharged with native **VLESS Reality** and **Shadowsocks** protocols, alongside unprecedented routing capabilities: **Server-Side Landing Relay**, **Smart WARP Split-routing**, **Dynamic Subscriptions**, and **Seamless Protocol Aggregation** for external nodes. All powered by a highly-optimized, dependency-free Bash architecture.
+
+[Quick Start](#🚀-quick-start) · [Features](#💎-core-features) · [Dynamic Subscriptions](#📡-dynamic-subscription-server) · [Landing Relay](#⛓️-landing-relay-server-side-proxy-chaining) · [Panel UI](#💻-management-panel) · [中文版](README_CN.md)
 
 ---
 
-## Quick Start
+## 🚀 Quick Start
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
 ```
 
-First run auto-launches the interactive install wizard. Press Enter through each step for sensible defaults.
+> **🔥 Pro Tip**: After installation, simply type `ag` or `argov` in your terminal to instantly launch the management panel.
 
-After install, type `argov` to open the management panel.
-
-Non-interactive (env vars):
-
+Non-interactive installation (for CI/CD pipelines):
 ```bash
 NODE_NAME=Tokyo CDN_DOMAIN=skk.moe bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
 ```
 
-## Features
+## 💎 Core Features
 
-| Category | Details |
-|----------|---------|
-| **Argo Tunnel** | VLESS + VMess dual protocol over WebSocket + TLS. Listens on `127.0.0.1` only — zero public exposure |
-| **Direct Protocols** | VLESS Reality (XTLS Vision) and Shadowsocks (7 ciphers: AEAD + SS2022) |
-| **Install Wizard** | 8-step interactive setup with sensible defaults and auto system detection |
-| **Subscription Server** | Python3 HTTP server with ThreadingMixIn + 10s auto-refresh. Token auth. Survives VPS reboot with fresh Argo domain |
-| **Custom Links** | Paste any protocol link (Hysteria2, Trojan, TUIC, etc.) — auto-merged into the subscription for all clients |
-| **Landing Relay** | Server-side proxy chaining to a clean-IP landing VPS. DNS resolved on landing (zero leak). Supports SS/VLESS/VMess/Trojan exit |
-| **WARP Routing** | One-click fscarmen WARP with Smart Split: Google → IPv6, YouTube → SOCKS5, rest → direct |
-| **Node Management** | Add / edit / delete Reality and Shadowsocks nodes without full reinstall |
-| **System Support** | Debian / Ubuntu / CentOS / Alpine Linux. systemd + openrc service management |
-| **Service Isolation** | `argov-tunnel` runs as an independent service — no conflict with existing tunnels |
+| Dimension | Technical Detail |
+|-----------|------------------|
+| **Zero Public Exposure** | VLESS/VMess traffic is isolated inside WS + TLS tunnels. Xray listens solely on `127.0.0.1`, completely hiding the server's real IP and immunizing it against active probing. |
+| **Direct Protocols** | Native support for `VLESS-Reality` (XTLS Vision) and `Shadowsocks` (SS2022 & AEAD). Equipped with advanced QUIC/TLS deep sniffing. |
+| **Dynamic Sub** | Built-in lightweight Python3 HTTP server. Automatically updates and dispatches fresh tunnel domains to clients upon VPS reboot. |
+| **Node Aggregation** | Import external node links (e.g., Hysteria2, Trojan, TUIC). ArgoV acts as a centralized gateway to push all nodes seamlessly into a unified client subscription. |
+| **Chain Proxy (Relay)** | **Landing Relay Engine**. Transparently encrypts and routes server traffic to an overseas residential/clean VPS. Clients enjoy native IPs with zero configuration. |
+| **Smart WARP Routing** | One-click WARP IPv6 / SOCKS5 mount. DNS-level outbound splitting: e.g., Google via IPv6, YouTube via SOCKS5, avoiding captchas and throttles. |
+| **Lightweight Daemon** | Full compatibility with Debian, Ubuntu, CentOS, and Alpine. Native support for both `systemd` and `openrc`. Extremely lightweight process isolation. |
 
-## Install Wizard
+## 💻 Management Panel
 
-```
-━━━ ① Node Name ━━━
-  ② CDN Preferred Address (default / list / custom)
-  ③ Client Port (CF edge, default 443)
-  ④ UUID (auto-generate or custom)
-  ⑤ Argo Tunnel Type (temp / fixed token)
-  ⑥ Internal Ports (127.0.0.1 only, auto)
-  ⑦ Subscription Domain (optional, CF port picker)
-  ⑧ Extra Protocols (Reality / Shadowsocks, port input)
-```
+Just type `ag` to take full control of your network topology:
 
-## Management Panel
-
-```bash
-argov
-```
-
-```
+```text
 ╔══════════════════════════════════════════════════╗
-║     ArgoV  Management Panel                ║
-║     VL-Argo VM-Argo SS Reality                  ║
+║     ArgoV  Management Panel                      ║
+║     VL-Argo VM-Argo SS Reality                   ║
 ╚══════════════════════════════════════════════════╝
 
   Name : Tokyo    Xray: ● up    Argo: ● up
@@ -91,135 +73,64 @@ argov
   0. Exit    w. WARP routing
 ```
 
-## Subscription Server
+## 📡 Dynamic Subscription Server
 
-After reboot, the Argo tunnel auto-recovers with a new domain. The subscription server returns fresh links on every request — **no SSH needed**.
+Never lose connection, even if Cloudflare resets your Argo domain or your VPS reboots.
+**No SSH required** to retrieve new links. The subscription server pushes the latest tunnel configurations in real-time.
 
-| Mode | URL | Setup |
-|------|-----|-------|
-| Domain (HTTPS) | `https://sub.yourdomain.com:2096/sub?token=xxx` | CF proxy ON, DNS → VPS IP |
-| IP (HTTP) | `http://VPS_IP:PORT/TOKEN` | Zero config |
+- **Hardware-Level Security**: 64-bit random cryptographically secure token auth.
+- **High Compatibility**: Supports Self-signed TLS (Cloudflare Full SSL compatible) or raw HTTP dispatch.
+- **Port Freedom**: Integrates with any Cloudflare proxy port (2096, 8443, 2053, 443, etc.).
 
-- 64-bit random token auth
-- Self-signed TLS cert (CF Full SSL compatible)
-- CF proxy ports: 2096 / 8443 / 2053 / 2083 / 2087 / 443 / custom
-- Threaded Python3 HTTP server, systemd / openrc managed
+## 🔗 Advanced Node Matrix
 
-## Node Management
+Press `a` to enter the **Protocol Matrix**. ArgoV can serve as the ultimate "Gateway Subscription Center" for your entire node ecosystem.
 
-Press `a` to manage nodes. Includes custom link support for external protocols:
-
-```
-╔══════════════════════════════════════════╗
-║         Manage Nodes                    ║
-╚══════════════════════════════════════════╝
-
+```text
   ── Argo Tunnel ──
   e1. VLESS + Argo    port 8081    /vless-argo
   e2. VMess + Argo    port 8082    /vmess-argo
 
-  ── Optional ──
+  ── Optional Direct ──
   e3. VLESS Reality   amazon.com   :43210
-  e4. Shadowsocks      aes-256-gcm  :8388
+  e4. Shadowsocks     aes-256-gcm  :8388
 
-  a1. Add Reality    a2. Add SS    d. Delete
-
-  ── Custom Links (User-Added) ──
+  ── Custom Nodes (Aggregated) ──
   2 custom links
   c1. Add    c2. View / delete
 ```
 
-Paste any protocol link (`hy2://`, `trojan://`, `tuic://`, etc.) via `c1` — it appears in the subscription alongside Argo nodes, persistent across reboots.
+> 💡 **Hysteria2 Best Practice**: For bleeding-edge UDP performance, we recommend deploying Hysteria2 via a dedicated script, then pasting its share link into ArgoV via `c1`. ArgoV will seamlessly merge it into your unified subscription.
 
-| Protocol | Editable |
-|----------|----------|
-| VLESS / VMess Argo | Port, WS path (auto-sync fallback routes) |
-| Shadowsocks | Cipher, password, port, network (tcp/udp) |
-| VLESS Reality | SNI, port, shortId, fingerprint, regenerate x25519 keys |
+## ⛓️ Landing Relay (Server-Side Proxy Chaining)
 
-## WARP Domain Routing
+Say goodbye to convoluted client-side chain configurations. ArgoV provides **Transparent Server-Side Relays**.
 
-Press `w` for WARP management. Three routing modes:
+*Press `r` in the panel to configure.*
 
-| Mode | Google / Search | YouTube | Other |
-|------|-----------------|---------|-------|
-| SOCKS5 | WARP IPv4 | WARP IPv4 | WARP IPv4 |
-| IPv6 | WARP IPv6 | WARP IPv6 | WARP IPv6 |
-| **Smart Split** (recommended) | WARP IPv6 | WARP SOCKS5 | Direct |
+- Paste any valid `ss://`, `vless://`, `vmess://`, or `trojan://` link to act as your exit node.
+- **Zero DNS Leak**: Uses `domainStrategy: AsIs`. DNS queries are securely encapsulated and resolved strictly on the landing node.
+- **Policy Routing**: Choose between "Global Relay" or "Split Relay" (routing only specific streaming domains through the landing node).
+- Coexists flawlessly with the WARP dual-routing engine.
 
-- fscarmen WARP auto-install (SOCKS5 :40000 / IPv6 WireGuard)
-- Custom domain routing or Google / YouTube defaults
-- Python3 safe JSON rewrite with validation and auto-rollback
+## 🗺️ Architecture Topology
 
-## Landing Relay
-
-Press `r` to configure server-side proxy chaining. Route traffic through a **landing VPS** with a clean IP — all clients get the clean IP automatically, no client-side chain proxy configuration needed.
-
-```
-╔══════════════════════════════════════════╗
-║       Landing Relay                      ║
-╚══════════════════════════════════════════╝
-
-  ● Enabled → ss → 1.2.3.4:28175  Mode: all
-
-  r1. Set landing node    r2. Toggle mode    r3. Manage domains
-  r4. Apply & restart     r5. Disable
-```
-
-| Mode | Behavior |
-|------|----------|
-| **All** (default) | All traffic exits through landing VPS |
-| **Split** | Only specified domains relay; rest → direct or WARP |
-
-- Paste any `ss://` / `vless://` / `vmess://` / `trojan://` link as the exit node
-- **No DNS leak** — domains forwarded as-is to landing (`domainStrategy: AsIs`), landing resolves DNS
-- Landing VPS only needs one SS server (SS-Rust: `chacha20-ietf-poly1305`, 1 command)
-- Auto-prompt to apply after mode/domain changes — no forgotten `r4`
-- Coexists with WARP — relay rules never touch `warp-out` / `v6-direct`
-- Survives reboot and reinstall
-
-## Architecture
-
-```
+```text
 Client → CF Edge (TLS) → Argo Tunnel → localhost:8080 Xray fallback
                                            ├── /vless-argo → VLESS+WS :8081
                                            └── /vmess-argo → VMess+WS :8082
 
-Direct (optional):  VLESS+Reality (public port)  ·  Shadowsocks (public port)
+Direct (Optional) : VLESS+Reality (Stealth)  ·  Shadowsocks (Stream Cipher)
 
-WARP routing:  Xray rules → warp-out (SOCKS5 :40000) / v6-direct (IPv6)
+WARP Stack : Xray routing rules → warp-out (SOCKS5 :40000) / v6-direct (IPv6)
 
-Relay routing:  Xray rules → relay-out (SS/VLESS/VMess/Trojan) → Landing VPS → Internet
-
-Subscription:  sub_gen.sh → sub.txt → base64 → Python HTTP → Client
-                                  ↑
-                    /etc/xray/custom_links.txt (user-added)
+Relay Chain: Xray routing rules → relay-out (SS/VL/VM/TJ) → Landing VPS (Clean IP) → Internet
 ```
 
-## Alpine Support
+## 📝 Client Compatibility
 
-| Feature | Debian / Ubuntu | Alpine |
-|---------|----------------|--------|
-| Service control | `systemctl` | `rc-service` |
-| Package manager | `apt` | `apk` |
-| Service files | `/etc/systemd/system/` | `/etc/init.d/` |
-| Tunnel recovery | `Restart=on-failure` | while-loop retry + 30s network wait |
-| Port detection | `netstat` → `ss` → `lsof` | same |
+ArgoV perfectly supports all modern Xray-core / Sing-box based clients:
+`v2rayN` · `Nekoray` · `Shadowrocket` · `Sing-box` · `Clash Meta` · `V2Box` · `Karing`
 
-## Client Config
-
-Copy links from the terminal → import to clipboard, or use the subscription URL for one-click import.
-
-| Protocol | Link Format |
-|----------|-------------|
-| VLESS Argo | `vless://UUID@CDN:443?encryption=none&security=tls&sni=...&type=ws&path=%2Fvless-argo#Name-VLESS` |
-| VMess Argo | `vmess://base64(...)` |
-| Shadowsocks | `ss://base64@IP:PORT#Name-SS` |
-| VLESS Reality | `vless://UUID@IP:PORT?...&security=reality&pbk=KEY#Name-Reality` |
-| Custom | Any `protocol://` link pasted via panel |
-
-Supported clients: v2rayN · Nekoray · Shadowrocket · Sing-box · Clash Meta · V2Box · Karing
-
-## License
-
-MIT License. Fork, modify, share freely.
+## ⚖️ License
+[MIT License](LICENSE).
