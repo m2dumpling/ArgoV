@@ -129,7 +129,7 @@ Press `a` to enter the **Protocol Matrix**. ArgoV can serve as the ultimate "Gat
   c1. Add    c2. View / delete
 ```
 
-> **Built-in Hysteria2**: ArgoV now creates Xray-native Hysteria2 inbounds directly from the `a` node menu. Built-in Hysteria2 uses per-user auth values, participates in Xray user traffic stats, and is included in limited friend subscriptions. External `hysteria2://` links pasted through `c1` are still supported for owner-only aggregation. Automatic port hopping is not configured yet; Xray requires one listening port plus firewall forwarding rules for that mode.
+> **Built-in Hysteria2**: ArgoV creates Xray-native Hysteria2 inbounds directly from the `a` node menu. Built-in Hysteria2 uses per-user auth values, participates in Xray user traffic stats, and is included in limited friend subscriptions. External `hysteria2://` links pasted through `c1` are still supported for owner-only aggregation. Port hopping is optional: Xray still listens on one UDP base port, while ArgoV installs a persisted UDP redirect service and adds `mport=START-END` to generated links; open both the base UDP port and the hopping UDP range in your VPS firewall/security group.
 
 ## Landing Relay (Server-Side Proxy Chaining)
 
