@@ -12,7 +12,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Platform-Debian|Ubuntu|CentOS|Alpine-lightgrey?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/Core-Xray_v1.8+-0078D7?style=flat-square" alt="Core">
-  <img src="https://img.shields.io/badge/Protocol-VLESS|VMess|SS|Reality-8B5CF6?style=flat-square" alt="Protocols">
+  <img src="https://img.shields.io/badge/Protocol-VLESS|VMess|SS|Reality|Hysteria2-8B5CF6?style=flat-square" alt="Protocols">
 </p>
 
 ---
@@ -44,8 +44,8 @@ NODE_NAME=Tokyo CDN_DOMAIN=skk.moe bash <(curl -Ls https://raw.githubusercontent
 |-----------|------------------|
 | **Zero Public Exposure** | VLESS/VMess traffic is isolated inside WS + TLS tunnels. Xray listens solely on `127.0.0.1`, completely hiding the server's real IP and immunizing it against active probing. |
 | **Direct Protocols** | Native support for `VLESS-Reality` (XTLS Vision) and `Shadowsocks` (SS2022 & AEAD). Equipped with advanced QUIC/TLS deep sniffing. |
-| **Dynamic Sub** | Built-in lightweight Python3 HTTP server. Automatically updates and dispatches fresh tunnel domains to clients upon VPS reboot. |
-| **Node Aggregation** | Import external node links (e.g., Hysteria2, Trojan, TUIC). ArgoV acts as a centralized gateway to push all nodes seamlessly into a unified client subscription. |
+| **Dynamic Sub** | Built-in lightweight Python3 HTTP server. Automatically updates tunnel domains after VPS reboot and dispatches client-specific subscriptions: base64 node lists for v2rayN-style clients, Clash YAML profiles for Mihomo/Clash Verge. |
+| **Node Aggregation** | Import external node links (`vless://`, `vmess://`, `ss://`, `trojan://`, `hysteria2://`). ArgoV acts as a centralized gateway to push all supported nodes into a unified client subscription. |
 | **Chain Proxy (Relay)** | **Landing Relay Engine**. Transparently encrypts and routes server traffic to an overseas residential/clean VPS. Clients enjoy native IPs with zero configuration. |
 | **Smart WARP Routing** | One-click WARP IPv6 / SOCKS5 mount. DNS-level outbound splitting: e.g., Google via IPv6, YouTube via SOCKS5, avoiding captchas and throttles. |
 | **Lightweight Daemon** | Full compatibility with Debian, Ubuntu, CentOS, and Alpine. Native support for both `systemd` and `openrc`. Extremely lightweight process isolation. |
@@ -88,6 +88,15 @@ Never lose connection, even if Cloudflare resets your Argo domain or your VPS re
 - **Hardware-Level Security**: 64-bit random cryptographically secure token auth.
 - **High Compatibility**: Supports Self-signed TLS (Cloudflare Full SSL compatible) or raw HTTP dispatch.
 - **Port Freedom**: Integrates with any Cloudflare proxy port (2096, 8443, 2053, 443, etc.).
+- **Client-Aware Output**: v2rayN-style clients receive standard base64 node subscriptions, while Clash/Mihomo/Clash Verge receive a complete YAML profile with DNS, proxy groups, rule providers, and protocol-specific fields for Reality and Hysteria2.
+
+For an existing installation, update the script and regenerate services from the panel:
+
+```text
+ag
+8. Update script
+7. Reinstall (Keep data)
+```
 
 ## Advanced Node Matrix
 
@@ -107,7 +116,7 @@ Press `a` to enter the **Protocol Matrix**. ArgoV can serve as the ultimate "Gat
   c1. Add    c2. View / delete
 ```
 
-> 💡 **Hysteria2 Best Practice**: For bleeding-edge UDP performance, we recommend deploying Hysteria2 via a dedicated script, then pasting its share link into ArgoV via `c1`. ArgoV will seamlessly merge it into your unified subscription.
+> 💡 **Hysteria2 Best Practice**: For bleeding-edge UDP performance, we recommend deploying Hysteria2 via a dedicated script, then pasting its `hysteria2://` share link into ArgoV via `c1`. ArgoV will merge it into the unified subscription and convert it into Mihomo-compatible Clash YAML when requested by Clash clients.
 
 ## Landing Relay (Server-Side Proxy Chaining)
 
@@ -137,7 +146,9 @@ Relay Chain: Xray routing rules → relay-out (SS/VL/VM/TJ) → Landing VPS (Cle
 ## Client Compatibility
 
 ArgoV perfectly supports all modern Xray-core / Sing-box based clients:
-`v2rayN` · `Nekoray` · `Shadowrocket` · `Sing-box` · `Clash Meta` · `V2Box` · `Karing`
+`v2rayN` · `Nekoray` · `Shadowrocket` · `Sing-box` · `Mihomo` · `Clash Verge` · `Clash Meta` · `V2Box` · `Karing`
+
+Clash YAML conversion currently supports `vless`, `vmess`, `ss`, `trojan`, and `hysteria2` share links. Other custom protocols can still be stored in the raw subscription list, but they are not converted into Clash YAML unless support is added explicitly.
 
 ## License
 [MIT License](LICENSE).
