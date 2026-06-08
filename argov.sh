@@ -1124,8 +1124,8 @@ manage_protocols() {
         echo ""
         echo -e "  ${cyan}c1${re}. 添加自定义链接    ${cyan}c2${re}. 查看/删除自定义链接"
         echo ""
-        echo -e "  ${purple}💡 友情推荐: Hysteria2 搭便车计划${re}"
-        echo -e "  由于内核适配原因，本机若想共存 Hysteria2，推荐使用独立脚本搭建。"
+        echo -e "  ${purple}💡 友情推荐: hi_hysteria 专属一键脚本${re}"
+        echo -e "  推荐使用独立脚本搭建 Hysteria2。"
         echo -e "  搭建后，将节点链接使用上方 ${cyan}c1${re} 选项贴入，即可实现订阅聚合下发！"
         echo -e "  ${white}安装命令: ${green}bash <(curl -fsSL https://raw.githubusercontent.com/m2dumpling/hi_hysteria/main/hi_hysteria.sh)${re}"
 
