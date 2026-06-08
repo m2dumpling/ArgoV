@@ -962,6 +962,13 @@ do_install() {
     # 合并回已保存的 inbound
     if [ -n "$saved_inbounds" ]; then
         jq --argjson saved "$saved_inbounds" '.inbounds += $saved' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+        # 强制同步 UUID 和升级老旧配置（如补齐 quic 嗅探），彻底修复老版本遗留的脱节问题
+        jq --arg u "$UUID" --arg sp "$SS_PASS" \
+           '(try (.inbounds[] | select(.tag=="reality") | .settings.clients[0].id) catch empty) = $u | 
+            (try (.inbounds[] | select(.tag=="ss") | .settings.password) catch empty) = $sp | 
+            (try (.inbounds[] | select(.tag=="reality") | .sniffing.destOverride) catch empty) = ["http","tls","quic"]' \
+           "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+
         echo "$saved_inbounds" | jq -e '.[] | select(.tag=="reality")' &>/dev/null && ENABLE_REALITY=1
         echo "$saved_inbounds" | jq -e '.[] | select(.tag=="ss")'       &>/dev/null && ENABLE_SS=1
     fi
