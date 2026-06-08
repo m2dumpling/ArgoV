@@ -1127,7 +1127,7 @@ manage_protocols() {
         echo -e "  ${purple}💡 Hysteria2 节点搭建建议${re}"
         echo -e "  鉴于 Xray 内核对 Hy2 支持尚不完善 (sing-box 适配更佳)，推荐使用以下专属脚本搭建。"
         echo -e "  搭建后，将节点链接使用上方 ${cyan}c1${re} 选项贴入，即可实现订阅聚合下发！"
-        echo -e "  ${white}安装命令: ${green}bash <(curl -fsSL https://raw.githubusercontent.com/m2dumpling/hi_hysteria/main/hi_hysteria.sh)${re}"
+        echo -e "  ${white}安装命令: ${green}bash <(curl -fsSL https://git.io/hysteria.sh)${re}"
 
         [ "$has_reality" = 1 ] || [ "$has_ss" = 1 ] && echo "" && echo -e "  ${red}d${re}. 删除可选节点"
         echo ""; echo -e "  ${red}0${re}. 返回"
