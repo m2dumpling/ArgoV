@@ -21,11 +21,11 @@
 
 Beyond basic tunneling, ArgoV is supercharged with native **VLESS Reality** and **Shadowsocks** protocols, alongside unprecedented routing capabilities: **Server-Side Landing Relay**, **Smart WARP Split-routing**, **Dynamic Subscriptions**, and **Seamless Protocol Aggregation** for external nodes. All powered by a highly-optimized, dependency-free Bash architecture.
 
-[Quick Start](#🚀-quick-start) · [Features](#💎-core-features) · [Dynamic Subscriptions](#📡-dynamic-subscription-server) · [Landing Relay](#⛓️-landing-relay-server-side-proxy-chaining) · [Panel UI](#💻-management-panel) · [中文版](README_CN.md)
+[Quick Start](#quick-start) · [Features](#core-features) · [Dynamic Subscriptions](#dynamic-subscription-server) · [Landing Relay](#landing-relay-server-side-proxy-chaining) · [Panel UI](#management-panel) · [中文版](README_CN.md)
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
@@ -38,7 +38,7 @@ Non-interactive installation (for CI/CD pipelines):
 NODE_NAME=Tokyo CDN_DOMAIN=skk.moe bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
 ```
 
-## 💎 Core Features
+## Core Features
 
 | Dimension | Technical Detail |
 |-----------|------------------|
@@ -50,30 +50,37 @@ NODE_NAME=Tokyo CDN_DOMAIN=skk.moe bash <(curl -Ls https://raw.githubusercontent
 | **Smart WARP Routing** | One-click WARP IPv6 / SOCKS5 mount. DNS-level outbound splitting: e.g., Google via IPv6, YouTube via SOCKS5, avoiding captchas and throttles. |
 | **Lightweight Daemon** | Full compatibility with Debian, Ubuntu, CentOS, and Alpine. Native support for both `systemd` and `openrc`. Extremely lightweight process isolation. |
 
-## 💻 Management Panel
+## Management Panel
 
 Just type `ag` to take full control of your network topology:
 
 ```text
-╔══════════════════════════════════════════════════╗
-║     ArgoV  Management Panel                      ║
-║     VL-Argo VM-Argo SS Reality                   ║
-╚══════════════════════════════════════════════════╝
+ ╔══════════════════════════════════════════════════╗
+ ║     ArgoV  Management Panel                      ║
+ ║     VL-Argo VM-Argo SS Reality                   ║
+ ╚══════════════════════════════════════════════════╝
 
   Name : Tokyo    Xray: ● up    Argo: ● up
+  UUID : 45c7acf6-1fb...
+  Host : xxx.trycloudflare.com
+  CDN  : skk.moe:443
 
-── Nodes ──
-  1. Show links    2. Change CDN    3. Config    a. Manage nodes
+ ──────────────── ✦ Core Features ✦ ────────────────
+  1. 🔗 Show links         2. ☁️  Change CDN
+  3. ⚙️  Base config        a. 🧩 Manage nodes (Add/Edit)
 
-── Services ──
-  4. Start    5. Stop    6. Restart (Argo only)
+ ──────────────── ✦ Adv Routing ✦ ────────────────
+  w. 🌐 WARP split         r. 🔀 Landing relay
 
-── System ──
-  7. Reinstall    8. Update    9. Uninstall
-  0. Exit    w. WARP routing
+ ──────────────── ✦ Operations ✦ ────────────────
+  4. ▶️  Start system       7. 🔄 Reinstall (Keep data)
+  5. ⏹️  Stop system        8. 🆙 Update script
+  6. 🔁 Restart Tunnel     x. 🚀 Update Xray core
+  9. 🗑️  Uninstall          0. 🚪 Exit
+ ───────────────────────────────────────────────
 ```
 
-## 📡 Dynamic Subscription Server
+## Dynamic Subscription Server
 
 Never lose connection, even if Cloudflare resets your Argo domain or your VPS reboots.
 **No SSH required** to retrieve new links. The subscription server pushes the latest tunnel configurations in real-time.
@@ -82,7 +89,7 @@ Never lose connection, even if Cloudflare resets your Argo domain or your VPS re
 - **High Compatibility**: Supports Self-signed TLS (Cloudflare Full SSL compatible) or raw HTTP dispatch.
 - **Port Freedom**: Integrates with any Cloudflare proxy port (2096, 8443, 2053, 443, etc.).
 
-## 🔗 Advanced Node Matrix
+## Advanced Node Matrix
 
 Press `a` to enter the **Protocol Matrix**. ArgoV can serve as the ultimate "Gateway Subscription Center" for your entire node ecosystem.
 
@@ -102,7 +109,7 @@ Press `a` to enter the **Protocol Matrix**. ArgoV can serve as the ultimate "Gat
 
 > 💡 **Hysteria2 Best Practice**: For bleeding-edge UDP performance, we recommend deploying Hysteria2 via a dedicated script, then pasting its share link into ArgoV via `c1`. ArgoV will seamlessly merge it into your unified subscription.
 
-## ⛓️ Landing Relay (Server-Side Proxy Chaining)
+## Landing Relay (Server-Side Proxy Chaining)
 
 Say goodbye to convoluted client-side chain configurations. ArgoV provides **Transparent Server-Side Relays**.
 
@@ -113,7 +120,7 @@ Say goodbye to convoluted client-side chain configurations. ArgoV provides **Tra
 - **Policy Routing**: Choose between "Global Relay" or "Split Relay" (routing only specific streaming domains through the landing node).
 - Coexists flawlessly with the WARP dual-routing engine.
 
-## 🗺️ Architecture Topology
+## Architecture Topology
 
 ```text
 Client → CF Edge (TLS) → Argo Tunnel → localhost:8080 Xray fallback
@@ -127,10 +134,10 @@ WARP Stack : Xray routing rules → warp-out (SOCKS5 :40000) / v6-direct (IPv6)
 Relay Chain: Xray routing rules → relay-out (SS/VL/VM/TJ) → Landing VPS (Clean IP) → Internet
 ```
 
-## 📝 Client Compatibility
+## Client Compatibility
 
 ArgoV perfectly supports all modern Xray-core / Sing-box based clients:
 `v2rayN` · `Nekoray` · `Shadowrocket` · `Sing-box` · `Clash Meta` · `V2Box` · `Karing`
 
-## ⚖️ License
+## License
 [MIT License](LICENSE).

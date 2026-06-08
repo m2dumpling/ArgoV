@@ -21,11 +21,11 @@
 
 除了隧道基础能力，ArgoV 还内建了原生 **VLESS Reality** 和 **Shadowsocks** 协议支持，并提供了前所未有的灵活路由策略：包括强大的**落地中继 (Chain Proxy)**、**WARP 智能分流**、**订阅动态下发**，以及对第三方节点的**无缝订阅聚合**。一切均由高度优化的 Bash 架构驱动，轻量级、无依赖、秒级响应。
 
-[快速开始](#🚀-快速开始) · [核心特性](#💎-核心特性) · [动态订阅](#📡-动态订阅服务器) · [落地中继](#⛓️-落地中继-server-side-relay) · [面板展示](#💻-极客化管理面板) · [English](README.md)
+[快速开始](#快速开始) · [核心特性](#核心特性) · [动态订阅](#动态订阅服务器) · [落地中继](#落地中继-server-side-relay) · [面板展示](#极客化管理面板) · [English](README.md)
 
 ---
 
-## 🚀 快速开始
+## 快速开始
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
@@ -38,7 +38,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh
 NODE_NAME=Tokyo CDN_DOMAIN=skk.moe bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
 ```
 
-## 💎 核心特性
+## 核心特性
 
 | 特性维度 | 深度解析 |
 |----------|---------|
@@ -50,30 +50,37 @@ NODE_NAME=Tokyo CDN_DOMAIN=skk.moe bash <(curl -Ls https://raw.githubusercontent
 | **智能分流 (WARP)** | 一键挂载 WARP IPv6 / SOCKS5。精准的 DNS 级出站路由：Google 走 IPv6，YouTube 走 SOCKS5，规避封控与限流。 |
 | **轻量级守护** | 兼容 Debian / Ubuntu / CentOS / Alpine。完美适配 `systemd` 与 `openrc`，服务绝对隔离，轻如鸿毛。 |
 
-## 💻 极客化管理面板
+## 极客化管理面板
 
 只需输入 `ag`，掌控全局网络拓扑：
 
 ```text
-╔══════════════════════════════════════════════════╗
-║     ArgoV  Management Panel                      ║
-║     VL-Argo VM-Argo SS Reality                   ║
-╚══════════════════════════════════════════════════╝
+ ╔══════════════════════════════════════════════════╗
+ ║     ArgoV  纯净版隧道管理面板                    ║
+ ║     VL-Argo VM-Argo SS Reality                   ║
+ ╚══════════════════════════════════════════════════╝
 
-  Name : Tokyo    Xray: ● up    Argo: ● up
+  名称 : Tokyo    Xray: ● 运行中    Argo: ● 运行中
+  UUID : 45c7acf6-1fb...
+  域名 : xxx.trycloudflare.com
+  CDN  : skk.moe:443
 
-── Nodes ──
-  1. Show links    2. Change CDN    3. Config    a. Manage nodes
+ ──────────────── ✦ 核心功能 ✦ ────────────────
+  1. 🔗 查看节点链接       2. ☁️  更换优选线路
+  3. ⚙️  修改基础配置       a. 🧩 管理代理节点 (添加/编辑/删除)
 
-── Services ──
-  4. Start    5. Stop    6. Restart (Argo only)
+ ──────────────── ✦ 进阶路由 ✦ ────────────────
+  w. 🌐 独立 WARP 分流     r. 🔀 落地节点中继
 
-── System ──
-  7. Reinstall    8. Update    9. Uninstall
-  0. Exit    w. WARP routing
+ ──────────────── ✦ 状态运维 ✦ ────────────────
+  4. ▶️  启动系统         7. 🔄 重新安装 (保留数据)
+  5. ⏹️  停止系统         8. 🆙 更新管理脚本
+  6. 🔁 重启 Argo 隧道    x. 🚀 更新 Xray 内核
+  9. 🗑️  彻底卸载系统     0. 🚪 安全退出
+ ───────────────────────────────────────────────
 ```
 
-## 📡 动态订阅服务器
+## 动态订阅服务器
 
 无论是重启 VPS 还是 Cloudflare 重置了 Argo 域名，客户端永远不会断连。
 **无需 SSH 登录服务器获取新链接**，订阅服务器会实时将最新的 Argo 隧道信息动态下发。
@@ -82,7 +89,7 @@ NODE_NAME=Tokyo CDN_DOMAIN=skk.moe bash <(curl -Ls https://raw.githubusercontent
 - **高兼容性**：支持自签 TLS（完美兼容 Cloudflare Full SSL）或纯 HTTP 下发。
 - **端口自由**：支持 Cloudflare 全部代理端口（2096, 8443, 2053, 443 等）。
 
-## 🔗 高级协议管理
+## 高级协议管理
 
 按 `a` 键进入**协议管理矩阵**。不仅仅局限于管理 ArgoV 本身的节点，你甚至可以将其作为整个 VPS 的“网关订阅中心”。
 
@@ -102,7 +109,7 @@ NODE_NAME=Tokyo CDN_DOMAIN=skk.moe bash <(curl -Ls https://raw.githubusercontent
 
 > 💡 **Hysteria2 最佳实践**：鉴于内核适配策略，对于需要极致 UDP 性能的 Hysteria2，我们建议使用专用脚本搭建后，将其分享链接通过 `c1` 粘贴至此。ArgoV 会自动将其与现有隧道整合，生成统一订阅。
 
-## ⛓️ 落地中继 (Server-Side Relay)
+## 落地中继 (Server-Side Relay)
 
 告别客户端繁琐的链式代理配置。ArgoV 提供服务端层面的**透明中继**。
 
@@ -113,7 +120,7 @@ NODE_NAME=Tokyo CDN_DOMAIN=skk.moe bash <(curl -Ls https://raw.githubusercontent
 - **策略路由**：支持“全局中继”或“分流中继”（仅指定流媒体域名走落地）。
 - 与 WARP 双路由引擎完美共存。
 
-## 🗺️ 架构拓扑
+## 架构拓扑
 
 ```text
 Client → CF Edge (TLS) → Argo Tunnel → localhost:8080 Xray fallback
@@ -127,10 +134,10 @@ WARP 分流栈 : Xray 路由规则 → warp-out (SOCKS5 :40000) / v6-direct (IPv
 Relay 代理链: Xray 路由规则 → relay-out (SS/VL/VM/TJ) → 落地 VPS (原生 IP) → Internet
 ```
 
-## 📝 客户端适配
+## 客户端适配
 
 ArgoV 完美兼容目前所有的主流 Xray-core / Sing-box 内核客户端：
 `v2rayN` · `Nekoray` · `Shadowrocket` · `Sing-box` · `Clash Meta` · `V2Box` · `Karing`
 
-## ⚖️ License
+## License
 [MIT License](LICENSE).
