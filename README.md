@@ -21,7 +21,7 @@
 
 Beyond basic tunneling, ArgoV is supercharged with native **VLESS Reality** and **Shadowsocks** protocols, alongside unprecedented routing capabilities: **Server-Side Landing Relay**, **Smart WARP Split-routing**, **Dynamic Subscriptions**, and **Seamless Protocol Aggregation** for external nodes. All powered by a highly-optimized, dependency-free Bash architecture.
 
-[Quick Start](#quick-start) · [Features](#core-features) · [Dynamic Subscriptions](#dynamic-subscription-server) · [Landing Relay](#landing-relay-server-side-proxy-chaining) · [Panel UI](#management-panel) · [中文版](README_CN.md)
+[Quick Start](#quick-start) · [Features](#core-features) · [Dynamic Subscriptions](#dynamic-subscription-server) · [User Quotas](#multi-user-traffic-quotas) · [Landing Relay](#landing-relay-server-side-proxy-chaining) · [Panel UI](#management-panel) · [中文版](README_CN.md)
 
 ---
 
@@ -45,6 +45,7 @@ NODE_NAME=Tokyo CDN_DOMAIN=skk.moe bash <(curl -Ls https://raw.githubusercontent
 | **Zero Public Exposure** | VLESS/VMess traffic is isolated inside WS + TLS tunnels. Xray listens solely on `127.0.0.1`, completely hiding the server's real IP and immunizing it against active probing. |
 | **Direct Protocols** | Native support for `VLESS-Reality` (XTLS Vision) and `Shadowsocks` (SS2022 & AEAD). Equipped with advanced QUIC/TLS deep sniffing. |
 | **Dynamic Sub** | Built-in lightweight Python3 HTTP server. Automatically updates tunnel domains after VPS reboot and dispatches client-specific subscriptions: base64 node lists for v2rayN-style clients, Clash YAML profiles for Mihomo/Clash Verge. |
+| **User Quotas** | Create isolated friend accounts with independent subscription tokens, UUIDs, enable/disable state, and bidirectional traffic quotas such as `200G`. Limited-user subscriptions only expose local controllable nodes: VLESS Argo, VMess Argo, and Reality. |
 | **Node Aggregation** | Import external node links (`vless://`, `vmess://`, `ss://`, `trojan://`, `hysteria2://`). ArgoV acts as a centralized gateway to push all supported nodes into a unified client subscription. |
 | **Chain Proxy (Relay)** | **Landing Relay Engine**. Transparently encrypts and routes server traffic to an overseas residential/clean VPS. Clients enjoy native IPs with zero configuration. |
 | **Smart WARP Routing** | One-click WARP IPv6 / SOCKS5 mount. DNS-level outbound splitting: e.g., Google via IPv6, YouTube via SOCKS5, avoiding captchas and throttles. |
@@ -68,6 +69,7 @@ Just type `ag` to take full control of your network topology:
  ──────────────── ✦ Core Features ✦ ────────────────
   1. 🔗 Show links         2. ☁️  Change CDN
   3. ⚙️  Base config        a. 🧩 Manage nodes (Add/Edit)
+  u. 👥 Users / quotas
 
  ──────────────── ✦ Adv Routing ✦ ────────────────
   w. 🌐 WARP split         r. 🔀 Landing relay
@@ -97,6 +99,16 @@ ag
 8. Update script
 7. Reinstall (Keep data)
 ```
+
+## Multi-User Traffic Quotas
+
+Press `u` in the panel to create independent limited users for friends. Each user receives a separate subscription URL like `/sub?token=...`, a separate UUID, and an independent bidirectional quota counter. When the configured total usage is reached, ArgoV disables only that user and syncs Xray clients automatically.
+
+- **Default subscription compatibility**: existing default links such as `/random-token` remain valid for the owner.
+- **Friend subscriptions**: limited users use `/sub?token=...` so ArgoV can identify the exact account and quota.
+- **Quota scope**: usage is counted as upload plus download from Xray per-user stats.
+- **Safe sharing**: limited users receive only VLESS Argo, VMess Argo, and Reality. External aggregated nodes remain available only to the default owner subscription.
+- **Upgrade path**: existing installations should run `8. Update script`, then `7. Reinstall (Keep data)` once, so the new Xray StatsService config and `argov-stats` daemon are generated.
 
 ## Advanced Node Matrix
 
