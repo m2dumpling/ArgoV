@@ -69,6 +69,58 @@ require(
     "subscription responses must expose NODE_NAME through UTF-8 filename metadata",
 )
 require(
+    r'"bind-address": "\*"',
+    "Clash profile should expose bind-address like common airport templates",
+)
+require(
+    r'"external-controller": "127\.0\.0\.1:9090"',
+    "Clash profile should include a local external-controller for dashboard clients",
+)
+require(
+    r'"default-nameserver": \["223\.5\.5\.5", "119\.29\.29\.29"\]',
+    "Clash DNS should include bootstrap default-nameserver entries",
+)
+require(
+    r'"use-hosts": True',
+    "Clash DNS should honor hosts entries",
+)
+require(
+    r'"fallback-filter": \{[\s\S]*"geoip-code": "CN"',
+    "Clash DNS should explicitly configure fallback-filter geoip-code CN",
+)
+require(
+    r'"name": "Proxy", "type": "select"',
+    "Clash profile should include an airport-style Proxy group",
+)
+require(
+    r'"name": "Fallback", "type": "fallback"',
+    "Clash profile should include an airport-style Fallback group",
+)
+require(
+    r'"name": "AIChat", "type": "select"',
+    "Clash profile should include an AIChat group",
+)
+require(
+    r'"MATCH,Final"',
+    "Clash profile should route unmatched traffic through Final",
+)
+require(
+    r'"encryption": "none"',
+    "Generated VLESS proxies should include encryption none for Mihomo compatibility",
+)
+require(
+    r'p\["flow"\] = qs\.get\("flow", \[""\]\)\[0\]',
+    "VLESS Reality/Vision conversion should preserve flow",
+)
+require(
+    r'elif l\.startswith\("hysteria2://"\):',
+    "Custom hysteria2 links should be converted into Clash YAML",
+)
+require(
+    r'"type": "hysteria2"',
+    "Custom hysteria2 links should produce Mihomo hysteria2 proxies",
+)
+require(
     r"ENABLE_REALITY[\s\S]*gen_reality_shortid",
     "Reality install path must generate REALITY_SHORTID",
 )
