@@ -511,22 +511,21 @@ class H(BaseHTTPRequestHandler):
         ok=(s.path=='${SUB_PATH}' or tok=='${SUB_TOKEN}')
         if ok:
             try:
-                with CACHE_LOCK:
-                    s.send_response(200)
-                    ua = s.headers.get('User-Agent', '').lower()
-                    is_clash = 'clash' in ua or 'mihomo' in ua or 'verge' in ua or qs.get('clash',[''])[0]=='1'
-                    
-                    if is_clash and CACHE_CLASH:
-                        s.send_header('Content-Type','text/yaml; charset=utf-8')
-                        s.send_header('Profile-Update-Interval','24')
-                        s.send_header('Content-Disposition','inline; filename="${NODE_NAME}.yaml"')
-                        s.end_headers(); s.wfile.write(CACHE_CLASH)
-                    else:
-                        s.send_header('Content-Type','text/plain; charset=utf-8')
-                        s.send_header('Profile-Update-Interval','24')
-                        s.send_header('Profile-Title','${NODE_NAME}')
-                        s.send_header('Content-Disposition','inline; filename="${NODE_NAME}"')
-                        s.end_headers(); s.wfile.write(CACHE)
+                s.send_response(200)
+                ua = s.headers.get('User-Agent', '').lower()
+                is_clash = 'clash' in ua or 'mihomo' in ua or 'verge' in ua or qs.get('clash',[''])[0]=='1'
+                safe_name = up.quote('${NODE_NAME}')
+                if is_clash and CACHE_CLASH:
+                    s.send_header('Content-Type','text/yaml; charset=utf-8')
+                    s.send_header('Profile-Update-Interval','24')
+                    s.send_header('Content-Disposition',f'inline; filename="{safe_name}.yaml"')
+                    s.end_headers(); s.wfile.write(CACHE_CLASH)
+                else:
+                    s.send_header('Content-Type','text/plain; charset=utf-8')
+                    s.send_header('Profile-Update-Interval','24')
+                    s.send_header('Profile-Title',safe_name)
+                    s.send_header('Content-Disposition',f'inline; filename="{safe_name}"')
+                    s.end_headers(); s.wfile.write(CACHE)
             except: s.send_response(500); s.end_headers()
         else: s.send_response(404); s.end_headers()
     def log_message(s,*a): pass
