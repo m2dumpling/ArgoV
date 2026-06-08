@@ -225,8 +225,12 @@ require(
     "Hysteria2 must be managed by tag hy2",
 )
 require(
-    r'hysteria2://\$\{uuid\}@\$\{ip\}:\$\{hport\}\?sni=\$\{hsni\}&insecure=1&alpn=h3#\$\{NODE_NAME\}-Hy2',
-    "subscription generator must include built-in Hysteria2 links for local controllable users",
+    r'hysteria2://\$\{uuid\}@\$\{ip\}:\$\{hport\}\?sni=\$\{hsni\}&insecure=1&allowInsecure=1&alpn=h3#\$\{NODE_NAME\}-Hy2',
+    "subscription generator must include built-in Hysteria2 links with self-signed TLS compatibility for local controllable users",
+)
+require(
+    r'hysteria2://\$1@\$2:\$3\?sni=\$4&insecure=1&allowInsecure=1&alpn=h3#',
+    "Hysteria2 share link helper must include both insecure and allowInsecure for self-signed certificates",
 )
 require(
     r'select\(\.tag=="reality" or \.tag=="ss" or \.tag=="hy2"\)',
