@@ -449,7 +449,7 @@ def build_clash(lines):
     
     if not proxies: return ""
     cfg = {
-        "port": 7890, "socks-port": 7891, "allow-lan": True, "mode": "rule", "log-level": "info",
+        "mixed-port": 7890, "allow-lan": True, "mode": "rule", "log-level": "info",
         "unified-delay": True, "tcp-concurrent": True,
         "dns": {
             "enable": True, "ipv6": False, "enhanced-mode": "fake-ip", "fake-ip-range": "198.18.0.1/16",
