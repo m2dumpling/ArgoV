@@ -1,225 +1,136 @@
-# 🌐 ArgoV — Cloudflare Argo 隧道管理面板
+# 🌐 ArgoV — Next-Gen Proxy Management Panel
 
 <p align="center">
   <img src="docs/assets/argov-logo.svg?v=3" alt="ArgoV" width="440">
 </p>
 
 <p align="center">
-  <strong>一键部署 · 零公网端口 · VPS 重启自动恢复</strong>
+  <strong>一键部署 · 零公网暴露 · 动态链路路由 · 极客首选面板</strong>
 </p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Platform-Debian|Ubuntu|CentOS|Alpine-lightgrey?style=flat-square" alt="Platform">
+  <img src="https://img.shields.io/badge/Core-Xray_v1.8+-0078D7?style=flat-square" alt="Core">
   <img src="https://img.shields.io/badge/Protocol-VLESS|VMess|SS|Reality-8B5CF6?style=flat-square" alt="Protocols">
 </p>
 
 ---
 
-**ArgoV** 是基于 Cloudflare Argo 隧道的零公网端口代理管理面板。将 VLESS / VMess 流量封装在 CF 边缘网络内 — 无需开放防火墙端口，无需自有域名。可选 Reality 和 Shadowsocks 直连协议。内置订阅服务器，VPS 重启后自动获取新隧道域名、订阅链接无需更新。服务端落地中继 — 干净 IP 出站，全部客户端无感知。
+**ArgoV** 是一款极简、硬核且高度专业化的零公网端口代理管理面板。基于 Cloudflare Argo 隧道，它将 VLESS 和 VMess 流量深度伪装在 Cloudflare 的边缘网络内，无需任何域名，无需开放任何防火墙端口。
 
-[快速开始](#快速开始) · [功能](#功能特性) · [订阅](#订阅服务器) · [中继](#落地中继) · [WARP](#warp-域名分流) · [架构](#架构) · [客户端](#客户端配置) · [English](README.md)
+除了隧道基础能力，ArgoV 还内建了原生 **VLESS Reality** 和 **Shadowsocks** 协议支持，并提供了前所未有的灵活路由策略：包括强大的**落地中继 (Chain Proxy)**、**WARP 智能分流**、**订阅动态下发**，以及对第三方节点的**无缝订阅聚合**。一切均由高度优化的 Bash 架构驱动，轻量级、无依赖、秒级响应。
+
+[快速开始](#🚀-快速开始) · [核心特性](#💎-核心特性) · [动态订阅](#📡-动态订阅服务器) · [落地中继](#⛓️-落地中继-server-side-relay) · [面板展示](#💻-极客化管理面板) · [English](README.md)
 
 ---
 
-## 快速开始
+## 🚀 快速开始
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
 ```
 
-首次运行自动进入交互式安装向导，全程回车使用默认值。
+> **🔥 效率提示**：安装完成后，随时在终端输入 `ag` 或 `argov` 即可极速呼出管理面板。
 
-安装完成后输入 `argov` 打开管理面板。
-
-非交互模式（环境变量）：
-
+非交互模式（适用于自动化流水线）：
 ```bash
-NODE_NAME=东京 CDN_DOMAIN=skk.moe bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
+NODE_NAME=Tokyo CDN_DOMAIN=skk.moe bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
 ```
 
-## 功能特性
+## 💎 核心特性
 
-| 类别 | 详情 |
-|------|------|
-| **Argo 隧道** | VLESS + VMess 双协议，WS + TLS，仅监听 `127.0.0.1`，零公网暴露 |
-| **直连协议** | VLESS Reality（XTLS Vision）+ Shadowsocks（7 种加密：AEAD + SS2022） |
-| **安装向导** | 8 步交互式配置，合理默认值，自动系统检测 |
-| **订阅服务器** | Python3 HTTP 服务器，ThreadingMixIn 多线程 + 10s 自动刷新，Token 认证，重启自动恢复 |
-| **自定义链接** | 粘贴任意协议链接（Hysteria2、Trojan、TUIC 等），自动加入订阅，重启不丢失 |
-| **落地中继** | 服务端链式代理到干净 IP 落地 VPS。DNS 由落地解析（零泄露），支持 SS/VLESS/VMess/Trojan 出口 |
-| **WARP 分流** | 一键 fscarmen WARP，智能分流：Google → IPv6，YouTube → SOCKS5，其余直连 |
-| **节点管理** | 增删改 Reality / Shadowsocks 节点，无需全量重装 |
-| **系统兼容** | Debian / Ubuntu / CentOS / Alpine Linux，systemd + openrc 服务管理 |
-| **服务隔离** | `argov-tunnel` 独立服务，不与已有隧道冲突 |
+| 特性维度 | 深度解析 |
+|----------|---------|
+| **零公网暴露 (Argo)** | VLESS / VMess 流量封装于 WS + TLS 隧道内，Xray 仅监听 `127.0.0.1`，彻底隐匿服务器真实 IP，免疫所有主动探测。 |
+| **极致直连 (Reality)**| 原生支持 `VLESS-Reality` (XTLS Vision) 及 `Shadowsocks` (涵盖 SS2022 与 AEAD 加密)。支持 QUIC/TLS 深度嗅探。 |
+| **一键订阅 (Sub)** | 内置轻量 Python3 HTTP 订阅服务器，VPS 重启后自动更新隧道节点域名并实时下发客户端，彻底告别失联。 |
+| **协议聚合 (Custom)**| 支持一键导入第三方节点链接 (如 Hysteria2、Trojan、TUIC 等)，通过 ArgoV 的订阅服务实现**跨生态节点聚合**。 |
+| **链式代理 (Relay)** | **落地中继**引擎。服务端直接将流量加密路由至海外原生 IP (解锁 VPS)，客户端零配置即享原生纯净出口 IP。 |
+| **智能分流 (WARP)** | 一键挂载 WARP IPv6 / SOCKS5。精准的 DNS 级出站路由：Google 走 IPv6，YouTube 走 SOCKS5，规避封控与限流。 |
+| **轻量级守护** | 兼容 Debian / Ubuntu / CentOS / Alpine。完美适配 `systemd` 与 `openrc`，服务绝对隔离，轻如鸿毛。 |
 
-## 安装向导
+## 💻 极客化管理面板
 
-```
-━━━ ① 节点名称 ━━━
-  ② CDN 优选地址（默认 / 列表选 / 自定义）
-  ③ 客户端端口（CF 边缘，默认 443）
-  ④ UUID（自动生成 / 自定义）
-  ⑤ Argo 隧道类型（临时 / 固定 Token）
-  ⑥ 内部端口（仅 127.0.0.1，自动分配）
-  ⑦ 订阅域名（可选，CF 端口自选）
-  ⑧ 额外协议（Reality / Shadowsocks，端口可输）
-```
+只需输入 `ag`，掌控全局网络拓扑：
 
-## 管理面板
-
-```bash
-argov
-```
-
-```
+```text
 ╔══════════════════════════════════════════════════╗
-║     ArgoV  纯净版隧道管理面板              ║
-║     VL-Argo VM-Argo SS Reality                  ║
+║     ArgoV  Management Panel                      ║
+║     VL-Argo VM-Argo SS Reality                   ║
 ╚══════════════════════════════════════════════════╝
 
-  名称 : 东京    Xray: ● 运行中    Argo: ● 运行中
+  Name : Tokyo    Xray: ● up    Argo: ● up
 
-── 节点管理 ──
-  1. 查看链接    2. 更换 CDN    3. 修改配置    a. 管理节点
+── Nodes ──
+  1. Show links    2. Change CDN    3. Config    a. Manage nodes
 
-── 服务控制 ──
-  4. 启动    5. 停止    6. 重启/恢复（仅 Argo）
+── Services ──
+  4. Start    5. Stop    6. Restart (Argo only)
 
-── 系统维护 ──
-  7. 重装    8. 更新    9. 卸载
-  0. 退出    w. WARP 分流
+── System ──
+  7. Reinstall    8. Update    9. Uninstall
+  0. Exit    w. WARP routing
 ```
 
-## 订阅服务器
+## 📡 动态订阅服务器
 
-VPS 重启后 Argo 隧道自动获取新域名，订阅服务器每次请求返回最新链接 — **无需 SSH**。
+无论是重启 VPS 还是 Cloudflare 重置了 Argo 域名，客户端永远不会断连。
+**无需 SSH 登录服务器获取新链接**，订阅服务器会实时将最新的 Argo 隧道信息动态下发。
 
-| 模式 | URL | 所需配置 |
-|------|-----|----------|
-| 域名（HTTPS） | `https://sub.你的域名.com:2096/sub?token=xxx` | CF 小黄云开，DNS → VPS IP |
-| IP（HTTP） | `http://VPS_IP:端口/TOKEN` | 无需配置 |
+- **高安全性**：64 位随机 Token 硬件级认证。
+- **高兼容性**：支持自签 TLS（完美兼容 Cloudflare Full SSL）或纯 HTTP 下发。
+- **端口自由**：支持 Cloudflare 全部代理端口（2096, 8443, 2053, 443 等）。
 
-- 64 位随机 Token 认证
-- 自签 TLS 证书（兼容 CF Full SSL 模式）
-- CF 代理端口：2096 / 8443 / 2053 / 2083 / 2087 / 443 / 自定义
-- 多线程 Python3 HTTP 服务器，systemd / openrc 管理
+## 🔗 高级协议管理
 
-## 节点管理
+按 `a` 键进入**协议管理矩阵**。不仅仅局限于管理 ArgoV 本身的节点，你甚至可以将其作为整个 VPS 的“网关订阅中心”。
 
-按 `a` 管理全部节点，含自定义链接功能：
-
-```
-╔══════════════════════════════════════════╗
-║         管理节点                         ║
-╚══════════════════════════════════════════╝
-
+```text
   ── Argo 隧道 ──
   e1. VLESS + Argo    端口 8081    /vless-argo
   e2. VMess + Argo    端口 8082    /vmess-argo
 
-  ── 可选协议 ──
+  ── 可选直连协议 ──
   e3. VLESS Reality   amazon.com   :43210
-  e4. Shadowsocks      aes-256-gcm  :8388
+  e4. Shadowsocks     aes-256-gcm  :8388
 
-  a1. 添加 Reality    a2. 添加 SS    d. 删除
-
-  ── 自定义节点 (自添加) ──
+  ── 自定义节点 (聚合下发) ──
   已有 2 个自定义链接
   c1. 添加    c2. 查看/删除
 ```
 
-通过 `c1` 粘贴任意协议链接（`hy2://`、`trojan://`、`tuic://` 等），自动加入订阅，重启不丢失。
+> 💡 **Hysteria2 最佳实践**：鉴于内核适配策略，对于需要极致 UDP 性能的 Hysteria2，我们建议使用专用脚本搭建后，将其分享链接通过 `c1` 粘贴至此。ArgoV 会自动将其与现有隧道整合，生成统一订阅。
 
-| 协议 | 可编辑字段 |
-|------|-----------|
-| VLESS / VMess Argo | 端口、WS 路径（自动同步 fallback 路由） |
-| Shadowsocks | 加密方式、密码、端口、网络（tcp/udp） |
-| VLESS Reality | SNI、端口、shortId、指纹、重新生成 x25519 密钥 |
+## ⛓️ 落地中继 (Server-Side Relay)
 
-## WARP 域名分流
+告别客户端繁琐的链式代理配置。ArgoV 提供服务端层面的**透明中继**。
 
-按 `w` 进入 WARP 管理。三种分流模式：
+*通过在面板按 `r` 进入。*
 
-| 模式 | Google / 搜索 | YouTube | 其他 |
-|------|--------------|---------|------|
-| SOCKS5 | WARP IPv4 | WARP IPv4 | WARP IPv4 |
-| IPv6 | WARP IPv6 | WARP IPv6 | WARP IPv6 |
-| **智能分流**（推荐） | WARP IPv6 | WARP SOCKS5 | 直连 |
+- 粘贴任何有效的 `ss://`, `vless://`, `vmess://`, `trojan://` 链接作为落地出口。
+- **零 DNS 泄露**：启用 `domainStrategy: AsIs`，所有 DNS 查询直接打包发送至落地节点解析。
+- **策略路由**：支持“全局中继”或“分流中继”（仅指定流媒体域名走落地）。
+- 与 WARP 双路由引擎完美共存。
 
-- fscarmen WARP 自动安装（SOCKS5 :40000 / IPv6 WireGuard）
-- 自定义分流域名或注入 Google / YouTube 默认组
-- Python3 安全改写 JSON，校验失败自动回滚
+## 🗺️ 架构拓扑
 
-## 落地中继
+```text
+Client → CF Edge (TLS) → Argo Tunnel → localhost:8080 Xray fallback
+                                           ├── /vless-argo → VLESS+WS :8081
+                                           └── /vmess-argo → VMess+WS :8082
 
-按 `r` 进入服务端链式代理配置。将流量路由到**落地 VPS** 的干净 IP 出站 — 全部客户端自动获得干净 IP，无需客户端链式代理配置。
+Direct (可选) : VLESS+Reality (端口隐匿)  ·  Shadowsocks (流加密)
 
-```
-╔══════════════════════════════════════════╗
-║      落地中继 (Landing Relay)            ║
-╚══════════════════════════════════════════╝
+WARP 分流栈 : Xray 路由规则 → warp-out (SOCKS5 :40000) / v6-direct (IPv6)
 
-  ● 已启用 → ss → 1.2.3.4:28175  模式: 全部
-
-  r1. 设置落地节点    r2. 切换模式    r3. 管理分流域名
-  r4. 应用并重启      r5. 关闭中继
+Relay 代理链: Xray 路由规则 → relay-out (SS/VL/VM/TJ) → 落地 VPS (原生 IP) → Internet
 ```
 
-| 模式 | 行为 |
-|------|------|
-| **全部**（默认） | 所有流量经落地 VPS 出站 |
-| **分流** | 仅指定域名走中继，其余直连/WARP |
+## 📝 客户端适配
 
-- 支持粘贴 `ss://` / `vless://` / `vmess://` / `trojan://` 链接作为落地出口
-- **零 DNS 泄露** — 域名原样发落地解析（`domainStrategy: AsIs`），落地做 DNS
-- 落地 VPS 只需一个 SS 节点（SS-Rust: `chacha20-ietf-poly1305`，一行命令）
-- 切换模式/改域名后自动提示应用，不会忘记 r4
-- 与 WARP 共存 — relay 规则只清理 `relay-out`，不动 `warp-out` / `v6-direct`
-- 重启和重装后自动恢复
+ArgoV 完美兼容目前所有的主流 Xray-core / Sing-box 内核客户端：
+`v2rayN` · `Nekoray` · `Shadowrocket` · `Sing-box` · `Clash Meta` · `V2Box` · `Karing`
 
-## 架构
-
-```
-客户端 → CF 边缘 (TLS) → Argo 隧道 → localhost:8080 Xray fallback
-                                          ├── /vless-argo → VLESS+WS :8081
-                                          └── /vmess-argo → VMess+WS :8082
-
-直连（可选）：VLESS+Reality（公网端口） · Shadowsocks（公网端口）
-
-WARP 分流：Xray 路由规则 → warp-out (SOCKS5 :40000) / v6-direct (IPv6)
-
-落地中继：Xray 路由规则 → relay-out (SS/VLESS/VMess/Trojan) → 落地 VPS → Internet
-
-订阅链路：sub_gen.sh → sub.txt → base64 → Python HTTP → 客户端
-                                ↑
-                  /etc/xray/custom_links.txt (用户自添加)
-```
-
-## Alpine 支持
-
-| 功能 | Debian / Ubuntu | Alpine |
-|------|----------------|--------|
-| 服务控制 | `systemctl` | `rc-service` |
-| 包管理 | `apt` | `apk` |
-| 服务文件 | `/etc/systemd/system/` | `/etc/init.d/` |
-| 隧道恢复 | `Restart=on-failure` | while 循环重试 + 30s 网络等待 |
-| 端口检测 | `netstat` → `ss` → `lsof` | 同 |
-
-## 客户端配置
-
-复制终端输出的链接 → 导入剪贴板，或使用订阅 URL 一键导入。
-
-| 协议 | 链接格式 |
-|------|---------|
-| VLESS Argo | `vless://UUID@CDN:443?encryption=none&security=tls&sni=...&type=ws&host=...&path=%2Fvless-argo#名称-VLESS` |
-| VMess Argo | `vmess://base64(...)` |
-| Shadowsocks | `ss://base64@IP:PORT#名称-SS` |
-| VLESS Reality | `vless://UUID@IP:PORT?...&security=reality&pbk=KEY#名称-Reality` |
-| 自定义 | 面板内粘贴任意 `protocol://` 链接 |
-
-支持客户端：v2rayN · Nekoray · Shadowrocket · Sing-box · Clash Meta · V2Box · Karing
-
-## 协议
-
-MIT License。欢迎 Fork、修改、分享。
+## ⚖️ License
+[MIT License](LICENSE).
