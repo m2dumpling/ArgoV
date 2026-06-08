@@ -366,14 +366,107 @@ start_sub_server() {
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 import subprocess, os, socketserver, threading, time
+import base64, json, urllib.parse
+
 SUB_FILE='/etc/xray/sub.txt'; PORT=${SUB_PORT}
-CACHE=b''; CACHE_LOCK=threading.Lock()
+CACHE=b''; CACHE_CLASH=b''; CACHE_LOCK=threading.Lock()
+
+def to_yaml(data, level=0):
+    out = []
+    ind = "  " * level
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if isinstance(v, (dict, list)):
+                out.append(f"{ind}{k}:")
+                out.append(to_yaml(v, level + 1))
+            else:
+                v_str = json.dumps(v) if isinstance(v, str) else str(v).lower() if isinstance(v, bool) else v
+                out.append(f"{ind}{k}: {v_str}")
+    elif isinstance(data, list):
+        for i in data:
+            if isinstance(i, dict):
+                sub = to_yaml(i, level + 1).split("\\n")
+                sub[0] = sub[0].replace("  " * (level + 1), ind + "- ", 1)
+                out.extend(sub)
+            else:
+                v_str = json.dumps(i) if isinstance(i, str) else str(i).lower() if isinstance(i, bool) else i
+                out.append(f"{ind}- {v_str}")
+    return "\\n".join(out)
+
+def build_clash(lines):
+    proxies, names = [], []
+    for l in lines:
+        try:
+            p = None
+            if l.startswith("vless://"):
+                link = l[8:]
+                name = "VLESS"
+                if "#" in link: link, name = link.split("#", 1)
+                base, q = link.split("?", 1) if "?" in link else (link, "")
+                qs = urllib.parse.parse_qs(q)
+                uuid, server = base.split("@", 1)
+                host, port = server.split(":", 1)
+                p = {"name": urllib.parse.unquote(name), "type": "vless", "server": host, "port": int(port), "uuid": uuid, "udp": True}
+                if qs.get("security", [""])[0] == "tls":
+                    p.update({"tls": True, "servername": qs.get("sni", [""])[0]})
+                elif qs.get("security", [""])[0] == "reality":
+                    p.update({"tls": True, "servername": qs.get("sni", [""])[0], "client-fingerprint": qs.get("fp", ["chrome"])[0], "reality-opts": {"public-key": qs.get("pbk", [""])[0], "short-id": qs.get("sid", [""])[0]}})
+                if qs.get("type", [""])[0] == "ws":
+                    p.update({"network": "ws", "ws-opts": {"path": urllib.parse.unquote(qs.get("path", ["/"])[0]), "headers": {"Host": qs.get("host", [""])[0]}}})
+            elif l.startswith("vmess://"):
+                j = json.loads(base64.b64decode(l[8:] + "==").decode())
+                p = {"name": j.get("ps", "VMess"), "type": "vmess", "server": j.get("add"), "port": int(j.get("port")), "uuid": j.get("id"), "alterId": int(j.get("aid", 0)), "cipher": j.get("scy", "auto"), "udp": True}
+                if j.get("net") == "ws":
+                    p.update({"network": "ws", "ws-opts": {"path": j.get("path", "/"), "headers": {"Host": j.get("host", "")}}})
+                if str(j.get("tls")) == "tls":
+                    p.update({"tls": True, "servername": j.get("sni", "")})
+            elif l.startswith("ss://"):
+                link = l[5:]
+                name = "SS"
+                if "#" in link: link, name = link.split("#", 1)
+                if "@" in link:
+                    b64, server = link.split("@", 1)
+                    mp = base64.b64decode(b64 + "==").decode()
+                else:
+                    decoded = base64.b64decode(link + "==").decode()
+                    mp, server = decoded.split("@", 1)
+                host, port = server.split(":", 1)
+                method, pwd = mp.split(":", 1)
+                p = {"name": urllib.parse.unquote(name), "type": "ss", "server": host, "port": int(port), "cipher": method, "password": pwd, "udp": True}
+            elif l.startswith("trojan://"):
+                link = l[9:]
+                name = "Trojan"
+                if "#" in link: link, name = link.split("#", 1)
+                base, q = link.split("?", 1) if "?" in link else (link, "")
+                pwd, server = base.split("@", 1)
+                host, port = server.split(":", 1)
+                p = {"name": urllib.parse.unquote(name), "type": "trojan", "server": host, "port": int(port), "password": pwd, "udp": True}
+            
+            if p:
+                proxies.append(p)
+                names.append(p["name"])
+        except: pass
+    
+    if not proxies: return ""
+    cfg = {
+        "port": 7890, "socks-port": 7891, "allow-lan": False, "mode": "rule", "log-level": "info",
+        "proxies": proxies,
+        "proxy-groups": [
+            {"name": "🚀 节点选择", "type": "select", "proxies": ["⚡ 自动测速", "🎯 全局直连"] + names},
+            {"name": "⚡ 自动测速", "type": "url-test", "url": "http://www.gstatic.com/generate_204", "interval": 300, "proxies": names}
+        ],
+        "rules": ["DOMAIN-SUFFIX,local,🎯 全局直连", "MATCH,🚀 节点选择"]
+    }
+    return to_yaml(cfg)
 
 def refresh_cache():
-    global CACHE
+    global CACHE, CACHE_CLASH
     try:
         subprocess.run(['${WORK_DIR}/sub_gen.sh'],timeout=15)
-        with open(SUB_FILE,'rb') as f: CACHE=f.read()
+        with open(SUB_FILE,'rb') as f:
+            CACHE=f.read()
+            raw_lines = base64.b64decode(CACHE).decode('utf-8', errors='ignore').splitlines()
+            CACHE_CLASH = build_clash(raw_lines).encode('utf-8')
     except: pass
 
 class ThreadedServer(ThreadingMixIn, HTTPServer):
@@ -389,11 +482,20 @@ class H(BaseHTTPRequestHandler):
             try:
                 with CACHE_LOCK:
                     s.send_response(200)
-                    s.send_header('Content-Type','text/plain; charset=utf-8')
-                    s.send_header('Profile-Update-Interval','24')
-                    s.send_header('Profile-Title','${NODE_NAME}')
-                    s.send_header('Content-Disposition','inline; filename="${NODE_NAME}"')
-                    s.end_headers(); s.wfile.write(CACHE)
+                    ua = s.headers.get('User-Agent', '').lower()
+                    is_clash = 'clash' in ua or 'mihomo' in ua or 'verge' in ua or qs.get('clash',[''])[0]=='1'
+                    
+                    if is_clash and CACHE_CLASH:
+                        s.send_header('Content-Type','text/yaml; charset=utf-8')
+                        s.send_header('Profile-Update-Interval','24')
+                        s.send_header('Content-Disposition','inline; filename="${NODE_NAME}.yaml"')
+                        s.end_headers(); s.wfile.write(CACHE_CLASH)
+                    else:
+                        s.send_header('Content-Type','text/plain; charset=utf-8')
+                        s.send_header('Profile-Update-Interval','24')
+                        s.send_header('Profile-Title','${NODE_NAME}')
+                        s.send_header('Content-Disposition','inline; filename="${NODE_NAME}"')
+                        s.end_headers(); s.wfile.write(CACHE)
             except: s.send_response(500); s.end_headers()
         else: s.send_response(404); s.end_headers()
     def log_message(s,*a): pass
@@ -587,7 +689,7 @@ show_node() {
 
     echo -e "  ${yellow}💡${re} 复制链接 → 客户端导入    菜单 2 换线路 | 菜单 3 改配置"
     local su; su=$(get_sub_url "$ip" 2>/dev/null)
-    [ -n "$su" ] && { echo ""; echo -e "  ${purple}━━━ 📡 订阅链接 ━━━${re}"; echo -e "  ${white}${su}${re}"; echo -e "  ${yellow}💡 客户端填入 → 更新订阅 → 全部节点一键导入，重启自动刷新域名${re}"; }
+    [ -n "$su" ] && { echo ""; echo -e "  ${purple}━━━ 📡 订阅链接 ━━━${re}"; echo -e "  ${white}${su}${re}"; echo -e "  ${yellow}💡 V2rayN / Shadowrocket / Clash 系全平台智能适配，一键导入${re}"; }
 }
 
 #==============================================================================
