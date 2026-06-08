@@ -939,7 +939,11 @@ do_install() {
     fi
     if [ "$ENABLE_SS" = 1 ]; then [ "$SS_PORT" = "0" ] && SS_PORT=$(shuf -i 10000-60000 -n 1); port_in_use "$SS_PORT" && SS_PORT=$(find_free_port "$SS_PORT"); fi
 
-    local UUID; UUID="${UUID_CUSTOM:-$(cat /proc/sys/kernel/random/uuid)}"
+    local UUID
+    if [ -f "$CONFIG_FILE" ]; then
+        UUID=$(jq -r '.inbounds[0].settings.clients[0].id//empty' "$CONFIG_FILE" 2>/dev/null)
+    fi
+    [ -z "$UUID" ] && UUID="${UUID_CUSTOM:-$(cat /proc/sys/kernel/random/uuid)}"
     local SS_PASS
     [[ "$SS_METHOD" =~ 2022 ]] && SS_PASS=$(gen_ss2022_pass "$SS_METHOD") || SS_PASS="$UUID"
     [ -z "$SS_PASS" ] && SS_PASS="$UUID"
