@@ -197,6 +197,22 @@ require(
     "Hysteria2 must have a persisted editable port",
 )
 require(
+    r'HY2_MPORT="\$\{HY2_MPORT:-\}"',
+    "Hysteria2 port hopping range must be persisted separately from the listening port",
+)
+require(
+    r"port_in_use_udp\(\)[\s\S]*ss -lunp",
+    "Hysteria2 UDP ports must be checked with UDP listeners, not only TCP listeners",
+)
+require(
+    r"port_in_use_any\(\)[\s\S]*port_in_use_tcp \"\$1\"[\s\S]*port_in_use_udp \"\$1\"",
+    "public UDP protocols must reject ports occupied by either TCP or UDP listeners",
+)
+require(
+    r"is_port_range\(\)[\s\S]*BASH_REMATCH",
+    "Hysteria2 mport input must validate numeric port ranges before writing links or firewall rules",
+)
+require(
     r'ENABLE_HY2=0',
     "Hysteria2 must be selectable as a built-in optional protocol",
 )
@@ -209,11 +225,11 @@ require(
     "Hysteria2 user sync must use per-user auth and email for stats/quota",
 )
 require(
-    r'"protocol":"hysteria","tag":"hy2"[\s\S]*"settings":\{"version":2,"users":\[\{"auth":"\'"\$\{uuid\}"\'","level":0,"email":"argov-default"\}\]\}',
+    r'build_hy2_inbound\(\)[\s\S]*"protocol":"hysteria","tag":"hy2"[\s\S]*"settings":\{"version":2,"users":\[\{"auth":"\'"\$\{auth\}"\'","level":0,"email":"\'"\$\{email\}"\'"\}\]\}',
     "initial Hysteria2 inbound must use Xray hysteria v2 users with email",
 )
 require(
-    r'"streamSettings":\{"network":"hysteria","security":"tls"[\s\S]*"hysteriaSettings":\{"version":2',
+    r'build_hy2_inbound\(\)[\s\S]*"streamSettings":\{"network":"hysteria","security":"tls"[\s\S]*"hysteriaSettings":\{"version":2',
     "initial Hysteria2 inbound must use the official hysteria transport with TLS",
 )
 require(
@@ -225,12 +241,40 @@ require(
     "Hysteria2 must be managed by tag hy2",
 )
 require(
-    r'hysteria2://\$\{uuid\}@\$\{ip\}:\$\{hport\}\?sni=\$\{hsni\}&insecure=1&allowInsecure=1&alpn=h3#\$\{NODE_NAME\}-Hy2',
+    r'hysteria2://\$\{uuid\}@\$\{ip\}:\$\{hport\}\?sni=\$\{hsni\}&insecure=1&allowInsecure=1&alpn=h3\$\{hmport_qs\}#\$\{NODE_NAME\}-Hy2',
     "subscription generator must include built-in Hysteria2 links with self-signed TLS compatibility for local controllable users",
 )
 require(
-    r'hysteria2://\$1@\$2:\$3\?sni=\$4&insecure=1&allowInsecure=1&alpn=h3#',
+    r'local qs="sni=\$4&insecure=1&allowInsecure=1&alpn=h3"',
     "Hysteria2 share link helper must include both insecure and allowInsecure for self-signed certificates",
+)
+require(
+    r'gen_hy2_link\(\)[\s\S]*local mport="\$6"[\s\S]*\[ -n "\$mport" \] && qs="\$\{qs\}&mport=\$\{mport\}"',
+    "Hysteria2 share link helper must append mport only when port hopping is enabled",
+)
+require(
+    r'links\+="hysteria2://\$\{uuid\}@\$\{ip\}:\$\{hport\}\?sni=\$\{hsni\}&insecure=1&allowInsecure=1&alpn=h3\$\{hmport_qs\}#\$\{NODE_NAME\}-Hy2"',
+    "subscription generator must include built-in Hysteria2 mport when port hopping is enabled",
+)
+require(
+    r'mport = qs\.get\("mport", qs\.get\("ports", \[""\]\)\)\[0\][\s\S]*p\["ports"\] = mport[\s\S]*p\["hop-interval"\] = 30',
+    "Clash YAML conversion must preserve Hysteria2 port hopping as ports and hop-interval",
+)
+require(
+    r'build_hy2_inbound\(\)[\s\S]*"finalmask":\{"quicParams":\{"udpHop":\{"ports":"\'"\$\{mport\}"\'","interval":30\}\}\}',
+    "Hysteria2 inbound builder must write Xray Finalmask udpHop quicParams as a string range when port hopping is enabled",
+)
+require(
+    r"apply_hy2_hop_rules\(\)[\s\S]*dport=\"\$\{mport//-/:\}\"[\s\S]*-p udp --dport \"\\\$dport\"[\s\S]*--to-ports \"\\\$listen_port\"",
+    "Hysteria2 port hopping must install UDP REDIRECT rules to the single Xray listening port with iptables range syntax",
+)
+require(
+    r"disable_hy2_hop_rules\(\)[\s\S]*argov-hy2-hop[\s\S]*iptables[\s\S]*-D PREROUTING",
+    "Hysteria2 port hopping must have cleanup for persisted service and iptables rules",
+)
+require(
+    r"clear_hy2_mport_config\(\)[\s\S]*HY2_MPORT=\"\"[\s\S]*del\(\.finalmask\.quicParams\.udpHop\)",
+    "Hysteria2 mport must be removed from config if firewall rule installation fails",
 )
 require(
     r'select\(\.tag=="reality" or \.tag=="ss" or \.tag=="hy2"\)',

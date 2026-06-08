@@ -41,6 +41,7 @@ VMESS_WS_PORT="${VMESS_WS_PORT:-8082}"
 CDN_PORT="${CDN_PORT:-443}"
 REALITY_PORT="${REALITY_PORT:-0}"
 HY2_PORT="${HY2_PORT:-0}"
+HY2_MPORT="${HY2_MPORT:-}"
 SS_PORT="${SS_PORT:-0}"
 SUB_PORT="${SUB_PORT:-0}"
 SUB_PATH="${SUB_PATH:-}"
@@ -89,8 +90,12 @@ CDN_DOMAINS[13]="cdns.doon.eu.org (综合优选·Doorn)"
 #==============================================================================
 # 工具
 #==============================================================================
-port_in_use() { netstat -tlnp 2>/dev/null | grep -q ":$1 " || ss -tlnp 2>/dev/null | grep -q ":$1 " || lsof -iTCP:"$1" -sTCP:LISTEN &>/dev/null; }
+port_in_use_tcp() { (netstat -tlnp 2>/dev/null || ss -tlnp 2>/dev/null || ss -tln 2>/dev/null) | grep -Eq "[:.]$1[[:space:]]" || lsof -iTCP:"$1" -sTCP:LISTEN &>/dev/null; }
+port_in_use_udp() { (ss -lunp 2>/dev/null || ss -lun 2>/dev/null || netstat -ulnp 2>/dev/null || netstat -uln 2>/dev/null) | grep -Eq "[:.]$1[[:space:]]" || lsof -iUDP:"$1" &>/dev/null; }
+port_in_use() { port_in_use_tcp "$1"; }
+port_in_use_any() { port_in_use_tcp "$1" || port_in_use_udp "$1"; }
 find_free_port() { local p="$1"; while port_in_use "$p" && [ "$p" -lt 65535 ]; do p=$((p+1)); done; echo "$p"; }
+find_free_any_port() { local p="$1"; while port_in_use_any "$p" && [ "$p" -lt 65535 ]; do p=$((p+1)); done; echo "$p"; }
 detect_arch() {
     case "$(uname -m)" in
         x86_64) echo "64" ;; i686|i386) echo "32" ;;
@@ -154,6 +159,85 @@ get_ip() {
     echo "${ip:-NAT环境}"
 }
 is_port() { [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
+is_port_range() {
+    [[ "$1" =~ ^([0-9]+)-([0-9]+)$ ]] || return 1
+    local start="${BASH_REMATCH[1]}" end="${BASH_REMATCH[2]}"
+    is_port "$start" && is_port "$end" && [ "$start" -le "$end" ]
+}
+build_hy2_inbound() {
+    local listen_port="$1" sni="$2" auth="$3" email="${4:-argov-default}" mport="$5"
+    if [ -n "$mport" ]; then
+        printf '%s' '{"port":'"${listen_port}"',"listen":"0.0.0.0","protocol":"hysteria","tag":"hy2","settings":{"version":2,"users":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"alpn":["h3"],"serverName":"'"${sni}"'","certificates":[{"certificateFile":"'"${HY2_CERT_FILE}"'","keyFile":"'"${HY2_KEY_FILE}"'"}]},"hysteriaSettings":{"version":2,"udpIdleTimeout":"60s"},"finalmask":{"quicParams":{"udpHop":{"ports":"'"${mport}"'","interval":30}}}}}'
+    else
+        printf '%s' '{"port":'"${listen_port}"',"listen":"0.0.0.0","protocol":"hysteria","tag":"hy2","settings":{"version":2,"users":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"alpn":["h3"],"serverName":"'"${sni}"'","certificates":[{"certificateFile":"'"${HY2_CERT_FILE}"'","keyFile":"'"${HY2_KEY_FILE}"'"}]},"hysteriaSettings":{"version":2,"udpIdleTimeout":"60s"}}}'
+    fi
+}
+disable_hy2_hop_rules() {
+    local listen_port="${1:-$HY2_PORT}" mport dport
+    if [ "$#" -ge 2 ]; then mport="$2"; else mport="$HY2_MPORT"; fi
+    dport="${mport//-/:}"
+    systemctl stop argov-hy2-hop 2>/dev/null || true
+    systemctl disable argov-hy2-hop 2>/dev/null || true
+    rc-service argov-hy2-hop stop 2>/dev/null || true
+    rc-update del argov-hy2-hop default 2>/dev/null || true
+    if [ -n "$listen_port" ] && [ -n "$mport" ] && command -v iptables >/dev/null 2>&1; then
+        while iptables -t nat -C PREROUTING -p udp --dport "$dport" -j REDIRECT --to-ports "$listen_port" 2>/dev/null; do
+            iptables -t nat -D PREROUTING -p udp --dport "$dport" -j REDIRECT --to-ports "$listen_port" 2>/dev/null || break
+        done
+    fi
+    rm -f "${WORK_DIR}/hy2-hop.sh" /etc/systemd/system/argov-hy2-hop.service /etc/init.d/argov-hy2-hop 2>/dev/null || true
+    systemctl daemon-reload 2>/dev/null || true
+}
+clear_hy2_mport_config() {
+    HY2_MPORT=""
+    [ -f "$CONFIG_FILE" ] || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+    jq '(.inbounds[]|select(.tag=="hy2")|.streamSettings) |= (del(.finalmask.quicParams.udpHop) | if (.finalmask.quicParams == {}) then del(.finalmask.quicParams) else . end | if (.finalmask == {}) then del(.finalmask) else . end | del(.hysteriaSettings.quicParams))' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+}
+apply_hy2_hop_rules() {
+    local listen_port="$1" mport="$2" dport
+    [ -z "$mport" ] && { disable_hy2_hop_rules "$listen_port" ""; return 0; }
+    is_port "$listen_port" && is_port_range "$mport" || { red_msg "Invalid Hysteria2 port hopping range."; return 1; }
+    dport="${mport//-/:}"
+    command -v iptables >/dev/null 2>&1 || { yellow_msg "iptables not found; Hysteria2 port hopping rule was not installed."; return 1; }
+    mkdir -p "$WORK_DIR" 2>/dev/null
+    cat > "${WORK_DIR}/hy2-hop.sh" << EOF
+#!/usr/bin/env bash
+set -e
+listen_port="${listen_port}"
+dport="${dport}"
+while iptables -t nat -C PREROUTING -p udp --dport "\$dport" -j REDIRECT --to-ports "\$listen_port" 2>/dev/null; do
+    iptables -t nat -D PREROUTING -p udp --dport "\$dport" -j REDIRECT --to-ports "\$listen_port" 2>/dev/null || break
+done
+iptables -t nat -A PREROUTING -p udp --dport "\$dport" -j REDIRECT --to-ports "\$listen_port"
+EOF
+    chmod +x "${WORK_DIR}/hy2-hop.sh"
+    "${WORK_DIR}/hy2-hop.sh" || return 1
+    if [ "$IS_ALPINE" = 1 ]; then
+        cat > /etc/init.d/argov-hy2-hop << EOF
+#!/sbin/openrc-run
+name=argov-hy2-hop
+command=${WORK_DIR}/hy2-hop.sh
+command_background=false
+EOF
+        chmod +x /etc/init.d/argov-hy2-hop
+        rc-update add argov-hy2-hop default 2>/dev/null || true
+    else
+        cat > /etc/systemd/system/argov-hy2-hop.service << EOF
+[Unit]
+Description=ArgoV Hysteria2 Port Hopping Rules
+After=network.target
+[Service]
+Type=oneshot
+ExecStart=${WORK_DIR}/hy2-hop.sh
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target
+EOF
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl enable argov-hy2-hop 2>/dev/null || true
+    fi
+}
 save_var() { printf "%s=%q\n" "$1" "$2"; }
 json_array_from_file() {
     local file="$1" py
@@ -510,7 +594,7 @@ load_conf() {
     CDN_PORT="${CDN_PORT:-443}"; CDN_DOMAIN="${CDN_DOMAIN:-$CDN_DEFAULT}"
     ARGO_MODE="${ARGO_MODE:-temp}"; ARGO_AUTH="${ARGO_AUTH:-}"
     ARGO_FIXED_DOMAIN="${ARGO_FIXED_DOMAIN:-}"; UUID_CUSTOM="${UUID_CUSTOM:-}"; LAST_ARGO_DOMAIN="${LAST_ARGO_DOMAIN:-}"
-    REALITY_PORT="${REALITY_PORT:-0}"; HY2_PORT="${HY2_PORT:-0}"; SS_PORT="${SS_PORT:-0}"
+    REALITY_PORT="${REALITY_PORT:-0}"; HY2_PORT="${HY2_PORT:-0}"; HY2_MPORT="${HY2_MPORT:-}"; SS_PORT="${SS_PORT:-0}"
     SUB_PORT="${SUB_PORT:-0}"; SUB_PATH="${SUB_PATH:-}"
     SUB_DOMAIN="${SUB_DOMAIN:-}"; SUB_TOKEN="${SUB_TOKEN:-}"
     REALITY_SNI="${REALITY_SNI:-www.amazon.com}"; HY2_SNI="${HY2_SNI:-www.bing.com}"; SS_METHOD="${SS_METHOD:-aes-256-gcm}"
@@ -520,6 +604,7 @@ load_conf() {
     REALITY_SHORTID="${REALITY_SHORTID:-}"
     RELAY_ENABLED="${RELAY_ENABLED:-0}"; RELAY_LINK="${RELAY_LINK:-}"
     RELAY_MODE="${RELAY_MODE:-all}"
+    [ -n "$HY2_MPORT" ] && ! is_port_range "$HY2_MPORT" && HY2_MPORT=""
 }
 save_conf() {
     {
@@ -529,7 +614,7 @@ save_conf() {
         save_var VMESS_WS_PORT "$VMESS_WS_PORT"; save_var CDN_PORT "$CDN_PORT"
         save_var CDN_DOMAIN "$CDN_DOMAIN"; save_var ARGO_MODE "$ARGO_MODE"; save_var ARGO_AUTH "$ARGO_AUTH"
         save_var ARGO_FIXED_DOMAIN "$ARGO_FIXED_DOMAIN"; save_var UUID_CUSTOM "$UUID_CUSTOM"
-        save_var REALITY_PORT "$REALITY_PORT"; save_var HY2_PORT "$HY2_PORT"; save_var SS_PORT "$SS_PORT"; save_var SUB_PORT "$SUB_PORT"; save_var SUB_PATH "$SUB_PATH"; save_var SUB_DOMAIN "$SUB_DOMAIN"; save_var SUB_TOKEN "$SUB_TOKEN"
+        save_var REALITY_PORT "$REALITY_PORT"; save_var HY2_PORT "$HY2_PORT"; save_var HY2_MPORT "$HY2_MPORT"; save_var SS_PORT "$SS_PORT"; save_var SUB_PORT "$SUB_PORT"; save_var SUB_PATH "$SUB_PATH"; save_var SUB_DOMAIN "$SUB_DOMAIN"; save_var SUB_TOKEN "$SUB_TOKEN"
         save_var REALITY_SNI "$REALITY_SNI"; save_var HY2_SNI "$HY2_SNI"; save_var SS_METHOD "$SS_METHOD"
         save_var ENABLE_REALITY "$ENABLE_REALITY"; save_var ENABLE_HY2 "$ENABLE_HY2"; save_var ENABLE_SS "$ENABLE_SS"
         save_var HY2_CERT_FILE "$HY2_CERT_FILE"; save_var HY2_KEY_FILE "$HY2_KEY_FILE"
@@ -560,7 +645,10 @@ gen_reality_link() {
     printf '%s' "vless://$1@$2:$3?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=$4&pbk=$5&fp=${fp}${sid}#${7:-${NODE_NAME}-Reality}"
 }
 gen_hy2_link() {
-    printf '%s' "hysteria2://$1@$2:$3?sni=$4&insecure=1&allowInsecure=1&alpn=h3#${5:-${NODE_NAME}-Hy2}"
+    local mport="$6"
+    local qs="sni=$4&insecure=1&allowInsecure=1&alpn=h3"
+    [ -n "$mport" ] && qs="${qs}&mport=${mport}"
+    printf '%s' "hysteria2://$1@$2:$3?${qs}#${5:-${NODE_NAME}-Hy2}"
 }
 
 show_qr() {
@@ -803,6 +891,10 @@ def build_clash(lines):
                     p["obfs-password"] = qs.get("obfs-password", [""])[0]
                 if qs.get("alpn", [""])[0]:
                     p["alpn"] = [i for i in qs.get("alpn", [""])[0].split(",") if i]
+                mport = qs.get("mport", qs.get("ports", [""]))[0]
+                if mport:
+                    p["ports"] = mport
+                    p["hop-interval"] = 30
             
             if p:
                 proxies.append(p)
@@ -1050,7 +1142,9 @@ fi
 if $JQ -e '.inbounds[]|select(.tag=="hy2")' "$CFG" >/dev/null 2>&1 && [ -n "$ip" ]; then
     hport=$($JQ -r '.inbounds[]|select(.tag=="hy2")|.port' "$CFG")
     hsni=$($JQ -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.serverName//"www.bing.com"' "$CFG")
-    [ -n "$hport" ] && links+="hysteria2://${uuid}@${ip}:${hport}?sni=${hsni}&insecure=1&allowInsecure=1&alpn=h3#${NODE_NAME}-Hy2"$'\n'
+    hmport=$($JQ -r '.inbounds[]|select(.tag=="hy2")|(.streamSettings.finalmask.quicParams.udpHop.ports//.streamSettings.hysteriaSettings.quicParams.udpHop.ports[0]//empty)' "$CFG")
+    hmport_qs=""; [ -n "$hmport" ] && hmport_qs="&mport=${hmport}"
+    [ -n "$hport" ] && links+="hysteria2://${uuid}@${ip}:${hport}?sni=${hsni}&insecure=1&allowInsecure=1&alpn=h3${hmport_qs}#${NODE_NAME}-Hy2"$'\n'
 fi
 out=$(printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n')
 [ "$IS_DEFAULT_USER" = "1" ] && printf '%s' "$out" > /etc/xray/sub.txt
@@ -1357,13 +1451,15 @@ show_node() {
     fi
 
     if jq -e '.inbounds[]|select(.tag=="hy2")' "$CONFIG_FILE" >/dev/null 2>&1 && [ -n "$ip" ]; then
-        local hport hsni
+        local hport hsni hmport
         hport=$(jq -r '.inbounds[]|select(.tag=="hy2")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
         hsni=$(jq -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.serverName//"www.bing.com"' "$CONFIG_FILE" 2>/dev/null)
+        hmport=$(jq -r '.inbounds[]|select(.tag=="hy2")|(.streamSettings.finalmask.quicParams.udpHop.ports//.streamSettings.hysteriaSettings.quicParams.udpHop.ports[0]//empty)' "$CONFIG_FILE" 2>/dev/null)
         echo -e "  ${white}── Hysteria2 (端口 ${hport}) ──${re}"
         echo ""
-        echo -e "  ${green}$(gen_hy2_link "$uuid" "$ip" "$hport" "$hsni" "${NODE_NAME}-Hy2")${re}"
+        echo -e "  ${green}$(gen_hy2_link "$uuid" "$ip" "$hport" "$hsni" "${NODE_NAME}-Hy2" "$hmport")${re}"
         echo -e "  ${cyan}SNI${re}: ${hsni}  ALPN: h3  TLS: self-signed/insecure"
+        [ -n "$hmport" ] && echo -e "  ${cyan}MPort${re}: ${hmport}"
         echo ""
     fi
 
@@ -1724,13 +1820,25 @@ select_protocols() {
             0)
                 echo ""
                 [ "$ENABLE_REALITY" = 1 ] && { local rp; rp=$(find_free_port "$(shuf -i 10000-60000 -n 1)"); echo -ne "  ${cyan}Reality 端口 [随机 ${rp}]: ${re}"; read ri; REALITY_PORT="${ri:-$rp}"; echo -e "  → ${green}${REALITY_PORT}${re}"; }
-                [ "$ENABLE_HY2" = 1 ] && { local hp; hp=$(find_free_port "$(shuf -i 10000-60000 -n 1)"); echo -ne "  ${cyan}Hysteria2 端口 [随机 ${hp}]: ${re}"; read hi; HY2_PORT="${hi:-$hp}"; echo -e "  → ${green}${HY2_PORT}${re}"; }
+                if [ "$ENABLE_HY2" = 1 ]; then
+                    local hp hm
+                    hp=$(find_free_any_port "$(shuf -i 10000-60000 -n 1)")
+                    echo -ne "  ${cyan}Hysteria2 端口 [随机 ${hp}]: ${re}"; read hi; HY2_PORT="${hi:-$hp}"; echo -e "  → ${green}${HY2_PORT}${re}"
+                    echo -ne "  ${cyan}Hysteria2 端口跳跃范围 [回车关闭，如 5000-6000]: ${re}"; read hm
+                    if [ -n "$hm" ]; then
+                        if is_port_range "$hm"; then HY2_MPORT="$hm"; else HY2_MPORT=""; red_msg "端口跳跃范围无效，已关闭。"; fi
+                    else
+                        HY2_MPORT=""
+                    fi
+                    [ -n "$HY2_MPORT" ] && echo -e "  → ${green}${HY2_MPORT}${re}"
+                fi
                 [ "$ENABLE_SS" = 1 ] && { local sp; sp=$(find_free_port "$(shuf -i 10000-60000 -n 1)"); echo -ne "  ${cyan}Shadowsocks 端口 [随机 ${sp}]: ${re}"; read si; SS_PORT="${si:-$sp}"; echo -e "  → ${green}${SS_PORT}${re}"; }
                 echo ""
                 echo -e "  ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
                 echo -e "  ${white}即将安装:${re}  Argo: VLESS+VMess"
                 [ "$ENABLE_REALITY" = 1 ] && echo -e "  Reality: 端口 ${green}${REALITY_PORT}${re}  (UUID/SNI/密钥 自动生成)"
                 [ "$ENABLE_HY2" = 1 ] && echo -e "  Hysteria2: 端口 ${green}${HY2_PORT}${re}  (UUID/证书 自动生成)"
+                [ "$ENABLE_HY2" = 1 ] && [ -n "$HY2_MPORT" ] && echo -e "  Hysteria2 跳跃: ${green}${HY2_MPORT}${re}  (UDP 转发到 ${HY2_PORT})"
                 [ "$ENABLE_SS" = 1 ] && echo -e "  Shadowsocks: 端口 ${green}${SS_PORT}${re}  (加密/密码 自动生成)"
                 echo -e "  ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
                 echo ""
@@ -1866,7 +1974,7 @@ do_install() {
     fi
     if [ "$ENABLE_HY2" = 1 ]; then
         [ "$HY2_PORT" = "0" ] && HY2_PORT=$(shuf -i 10000-60000 -n 1)
-        port_in_use "$HY2_PORT" && HY2_PORT=$(find_free_port "$HY2_PORT")
+        port_in_use_any "$HY2_PORT" && HY2_PORT=$(find_free_any_port "$HY2_PORT")
         gen_hy2_cert || { red_msg "Hy2 证书生成失败，请确认 openssl 可用。"; exit 1; }
     fi
     if [ "$ENABLE_SS" = 1 ]; then [ "$SS_PORT" = "0" ] && SS_PORT=$(shuf -i 10000-60000 -n 1); port_in_use "$SS_PORT" && SS_PORT=$(find_free_port "$SS_PORT"); fi
@@ -1904,7 +2012,10 @@ do_install() {
            "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
 
         echo "$saved_inbounds" | jq -e '.[] | select(.tag=="reality")' &>/dev/null && ENABLE_REALITY=1
-        echo "$saved_inbounds" | jq -e '.[] | select(.tag=="hy2")'      &>/dev/null && ENABLE_HY2=1
+        if echo "$saved_inbounds" | jq -e '.[] | select(.tag=="hy2")' &>/dev/null; then
+            ENABLE_HY2=1
+            HY2_MPORT=$(jq -r '.inbounds[]|select(.tag=="hy2")|(.streamSettings.finalmask.quicParams.udpHop.ports//.streamSettings.hysteriaSettings.quicParams.udpHop.ports[0]//empty)' "$CONFIG_FILE" 2>/dev/null)
+        fi
         echo "$saved_inbounds" | jq -e '.[] | select(.tag=="ss")'       &>/dev/null && ENABLE_SS=1
     fi
     sync_xray_users
@@ -1935,7 +2046,15 @@ WantedBy=multi-user.target
 EOF
     fi
     rebuild_tunnel "$ARGO_MODE"; rm -f "$TUNNEL_LOG"; systemctl daemon-reload
-    systemctl enable xray argov-tunnel 2>/dev/null; systemctl restart xray argov-tunnel; sleep 5; green_msg "  完成"
+    systemctl enable xray argov-tunnel 2>/dev/null; systemctl restart xray argov-tunnel; sleep 5
+    if [ "$ENABLE_HY2" = 1 ] && [ -n "$HY2_MPORT" ]; then
+        if ! apply_hy2_hop_rules "$HY2_PORT" "$HY2_MPORT"; then
+            clear_hy2_mport_config
+            save_conf
+            yellow_msg "  Hysteria2 端口跳跃规则安装失败，已关闭 mport。"
+        fi
+    fi
+    green_msg "  完成"
 
     cat > "$SCRIPT_PATH" << 'ARGOWRAP'
 #!/usr/bin/env bash
@@ -1999,7 +2118,11 @@ build_xray_config() {
     # 4. Reality (opt)
     [ "$ENABLE_REALITY" = 1 ] && inbounds+=',{"port":'"${REALITY_PORT}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision","email":"argov-default"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${REALITY_SNI}"':443","serverNames":["'"${REALITY_SNI}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":["'"${REALITY_SHORTID}"'"],"fingerprint":"chrome"}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
     # 5. Hysteria2 (opt)
-    [ "$ENABLE_HY2" = 1 ] && inbounds+=',{"port":'"${HY2_PORT}"',"listen":"0.0.0.0","protocol":"hysteria","tag":"hy2","settings":{"version":2,"users":[{"auth":"'"${uuid}"'","level":0,"email":"argov-default"}]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"alpn":["h3"],"serverName":"'"${HY2_SNI}"'","certificates":[{"certificateFile":"'"${HY2_CERT_FILE}"'","keyFile":"'"${HY2_KEY_FILE}"'"}]},"hysteriaSettings":{"version":2,"udpIdleTimeout":"60s"}}}'
+    if [ "$ENABLE_HY2" = 1 ]; then
+        local hy2_inbound
+        hy2_inbound=$(build_hy2_inbound "$HY2_PORT" "$HY2_SNI" "$uuid" "argov-default" "$HY2_MPORT")
+        inbounds+=",${hy2_inbound}"
+    fi
     # 6. SS (opt)
     [ "$ENABLE_SS" = 1 ] && inbounds+=',{"port":'"${SS_PORT}"',"listen":"0.0.0.0","protocol":"shadowsocks","tag":"ss","settings":{"method":"'"${SS_METHOD}"'","password":"'"${ss_pass}"'","network":"tcp,udp"}}'
     inbounds+=']'
@@ -2024,13 +2147,15 @@ XRAYCONF
 # 管理节点 (添加/编辑/删除)
 #==============================================================================
 edit_hy2_protocol() {
-    local uuid ip cur_port cur_sni new_port new_sni
+    local uuid ip cur_port cur_sni cur_mport new_port new_sni new_mport new_inbound
     uuid=$(get_uuid)
     ip=$(get_ip)
     cur_port=$(jq -r '.inbounds[]|select(.tag=="hy2")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
     cur_sni=$(jq -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.serverName//"www.bing.com"' "$CONFIG_FILE" 2>/dev/null)
+    cur_mport=$(jq -r '.inbounds[]|select(.tag=="hy2")|(.streamSettings.finalmask.quicParams.udpHop.ports//.streamSettings.hysteriaSettings.quicParams.udpHop.ports[0]//empty)' "$CONFIG_FILE" 2>/dev/null)
     new_port="$cur_port"
     new_sni="$cur_sni"
+    new_mport="$cur_mport"
 
     clear
     echo ""; echo -e " ${purple}┌────────────────────────────────────────┐${re}"
@@ -2047,35 +2172,63 @@ edit_hy2_protocol() {
     echo -e "  ${yellow}当前: ${cyan}${cur_port}${re} 公网端口"
     read -p "  新端口 [回车保持]: " hp
     if [ -n "$hp" ]; then
-        if is_port "$hp" && ! port_in_use "$hp"; then
+        if ! is_port "$hp"; then
+            red_msg "端口无效，保持原端口"
+        elif [ "$hp" = "$cur_port" ]; then
             new_port="$hp"
+        elif port_in_use_any "$hp"; then
+            red_msg "端口已占用，保持原端口"
         else
-            red_msg "端口无效或已占用，保持原端口"
+            new_port="$hp"
         fi
     fi
     echo -e "  → ${green}${new_port}${re}\n"
 
+    echo -e " ${white}── 端口跳跃 ──${re}"
+    echo -e "  ${yellow}当前: ${cyan}${cur_mport:-关闭}${re}"
+    read -p "  新范围 [回车保持，off 关闭，如 5000-6000]: " hm
+    if [ "$hm" = "off" ] || [ "$hm" = "OFF" ]; then
+        new_mport=""
+    elif [ -n "$hm" ]; then
+        if is_port_range "$hm"; then
+            new_mport="$hm"
+        else
+            red_msg "端口跳跃范围无效，保持原设置"
+        fi
+    fi
+    echo -e "  → ${green}${new_mport:-关闭}${re}\n"
+
     echo -e " ${white}确认修改:${re}"
     echo -e "  SNI: ${cyan}${cur_sni}${re} → ${green}${new_sni}${re}"
     echo -e "  端口: ${cyan}${cur_port}${re} → ${green}${new_port}${re}"
+    echo -e "  跳跃: ${cyan}${cur_mport:-关闭}${re} → ${green}${new_mport:-关闭}${re}"
     echo ""
     echo -ne "  ${yellow}确认? (y/n) [y]: ${re}"
     read cf
     [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "已取消。"; return; }
 
-    jq --arg sni "$new_sni" --argjson pt "$new_port" \
-       '(.inbounds[]|select(.tag=="hy2")|.port)=$pt|(.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.serverName)=$sni' \
-       "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+    new_inbound=$(build_hy2_inbound "$new_port" "$new_sni" "$uuid" "argov-default" "$new_mport")
+    jq --argjson i "$new_inbound" '(.inbounds[]|select(.tag=="hy2"))=$i' "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
     HY2_PORT="$new_port"
     HY2_SNI="$new_sni"
+    HY2_MPORT="$new_mport"
+    sync_xray_users || return
     save_conf
     yellow_msg "重启 Xray..."
+    disable_hy2_hop_rules "$cur_port" "$cur_mport"
     systemctl restart xray 2>/dev/null
     rc-service xray restart 2>/dev/null || true
+    if [ -n "$HY2_MPORT" ]; then
+        if ! apply_hy2_hop_rules "$HY2_PORT" "$HY2_MPORT"; then
+            clear_hy2_mport_config
+            save_conf
+            yellow_msg "Hysteria2 port hopping rule failed; mport disabled."
+        fi
+    fi
     sleep 2
     get_status
     green_msg "完成"
-    [ -n "$ip" ] && echo -e "  ${green}$(gen_hy2_link "$uuid" "$ip" "$new_port" "$new_sni" "${NODE_NAME}-Hy2")${re}"
+    [ -n "$ip" ] && echo -e "  ${green}$(gen_hy2_link "$uuid" "$ip" "$new_port" "$new_sni" "${NODE_NAME}-Hy2" "$new_mport")${re}"
     echo ""; read -p "  按回车继续..." -r
 }
 
@@ -3542,10 +3695,10 @@ update_xray_core() {
 # 主菜单
 #==============================================================================
 add_hy2_protocol() {
-    local uuid ip h_port h_sni new_inbound
+    local uuid ip h_port h_sni h_mport new_inbound
     uuid=$(get_uuid)
     ip=$(get_ip)
-    h_port=$(find_free_port "$(shuf -i 10000-60000 -n 1)")
+    h_port=$(find_free_any_port "$(shuf -i 10000-60000 -n 1)")
     h_sni="${HY2_SNI:-www.bing.com}"
 
     clear
@@ -3559,25 +3712,38 @@ add_hy2_protocol() {
     echo -e "  Random port: ${cyan}${h_port}${re}"
     read -p "  Port [enter keep]: " hp
     if [ -n "$hp" ]; then
-        if is_port "$hp" && ! port_in_use "$hp"; then
-            h_port="$hp"
+        if ! is_port "$hp"; then
+            red_msg "Invalid port, keep random port."
+        elif port_in_use_any "$hp"; then
+            red_msg "Port occupied: $hp, keep random port."
         else
-            red_msg "Invalid or occupied port, keep random port."
+            h_port="$hp"
+        fi
+    fi
+
+    read -p "  Port hopping range [enter disable, e.g. 5000-6000]: " hm
+    if [ -n "$hm" ]; then
+        if is_port_range "$hm"; then
+            h_mport="$hm"
+        else
+            red_msg "Invalid port hopping range, keep disabled."
         fi
     fi
 
     echo ""
     echo -e "  Hysteria2 SNI: ${green}${h_sni}${re}"
     echo -e "  Hysteria2 port: ${green}${h_port}${re}"
+    [ -n "$h_mport" ] && echo -e "  Hysteria2 mport: ${green}${h_mport}${re}"
     echo -ne "  Confirm add? (y/n) [y]: "
     read cf
     [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "Canceled."; return; }
 
     HY2_PORT="$h_port"
     HY2_SNI="$h_sni"
+    HY2_MPORT="$h_mport"
     gen_hy2_cert || { red_msg "Failed to generate Hysteria2 self-signed certificate."; return; }
 
-    new_inbound='{"port":'"${HY2_PORT}"',"listen":"0.0.0.0","protocol":"hysteria","tag":"hy2","settings":{"version":2,"users":[{"auth":"'"${uuid}"'","level":0,"email":"argov-default"}]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"alpn":["h3"],"serverName":"'"${HY2_SNI}"'","certificates":[{"certificateFile":"'"${HY2_CERT_FILE}"'","keyFile":"'"${HY2_KEY_FILE}"'"}]},"hysteriaSettings":{"version":2,"udpIdleTimeout":"60s"}}}'
+    new_inbound=$(build_hy2_inbound "$HY2_PORT" "$HY2_SNI" "$uuid" "argov-default" "$HY2_MPORT")
     jq --argjson i "$new_inbound" '.inbounds += [$i]' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
     ENABLE_HY2=1
     sync_xray_users || return
@@ -3585,10 +3751,17 @@ add_hy2_protocol() {
     yellow_msg "Restarting Xray..."
     systemctl restart xray 2>/dev/null || true
     rc-service xray restart 2>/dev/null || true
+    if [ -n "$HY2_MPORT" ]; then
+        if ! apply_hy2_hop_rules "$HY2_PORT" "$HY2_MPORT"; then
+            clear_hy2_mport_config
+            save_conf
+            yellow_msg "Hysteria2 port hopping rule failed; mport disabled."
+        fi
+    fi
     sleep 2
     get_status
     green_msg "Hysteria2 added."
-    [ -n "$ip" ] && echo -e "  ${green}$(gen_hy2_link "$uuid" "$ip" "$HY2_PORT" "$HY2_SNI" "${NODE_NAME}-Hy2")${re}"
+    [ -n "$ip" ] && echo -e "  ${green}$(gen_hy2_link "$uuid" "$ip" "$HY2_PORT" "$HY2_SNI" "${NODE_NAME}-Hy2" "$HY2_MPORT")${re}"
     echo ""
     read -p "  Press Enter to continue..." -r
 }
@@ -3611,7 +3784,7 @@ delete_protocol() {
 
     case "$choice" in
         1) [ "$has_reality" = 1 ] || return; tag="reality"; label="Reality"; ENABLE_REALITY=0; REALITY_PORT=0 ;;
-        2) [ "$has_hy2" = 1 ] || return; tag="hy2"; label="Hysteria2"; ENABLE_HY2=0; HY2_PORT=0 ;;
+        2) [ "$has_hy2" = 1 ] || return; tag="hy2"; label="Hysteria2"; ENABLE_HY2=0; HY2_PORT=0; HY2_MPORT="" ;;
         3) [ "$has_ss" = 1 ] || return; tag="ss"; label="Shadowsocks"; ENABLE_SS=0; SS_PORT=0 ;;
         0) return ;;
         *) red_msg "Invalid."; sleep 1; return ;;
@@ -3624,6 +3797,13 @@ delete_protocol() {
     case "$tag" in
         ss)
             jq 'del(.inbounds[] | select(.tag=="ss" or .protocol=="shadowsocks"))' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+            ;;
+        hy2)
+            local old_hy2_port old_hy2_mport
+            old_hy2_port=$(jq -r '.inbounds[]|select(.tag=="hy2")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
+            old_hy2_mport=$(jq -r '.inbounds[]|select(.tag=="hy2")|(.streamSettings.finalmask.quicParams.udpHop.ports//.streamSettings.hysteriaSettings.quicParams.udpHop.ports[0]//empty)' "$CONFIG_FILE" 2>/dev/null)
+            disable_hy2_hop_rules "$old_hy2_port" "$old_hy2_mport"
+            jq --arg tag "$tag" 'del(.inbounds[] | select(.tag==$tag))' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
             ;;
         *)
             jq --arg tag "$tag" 'del(.inbounds[] | select(.tag==$tag))' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
@@ -3672,10 +3852,11 @@ manage_protocols() {
             echo -e "  ${green}e3${re}. VLESS Reality    ${cyan}${rs}${re}  端口 ${cyan}${rp}${re}"
         fi
         if [ "$has_hy2" = 1 ]; then
-            local hp hs
+            local hp hs hm
             hp=$(jq -r '.inbounds[]|select(.tag=="hy2")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
             hs=$(jq -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.serverName//"www.bing.com"' "$CONFIG_FILE" 2>/dev/null)
-            echo -e "  ${green}e4${re}. Hysteria2       ${cyan}${hs}${re}  端口 ${cyan}${hp}${re}"
+            hm=$(jq -r '.inbounds[]|select(.tag=="hy2")|(.streamSettings.finalmask.quicParams.udpHop.ports//.streamSettings.hysteriaSettings.quicParams.udpHop.ports[0]//empty)' "$CONFIG_FILE" 2>/dev/null)
+            echo -e "  ${green}e4${re}. Hysteria2       ${cyan}${hs}${re}  端口 ${cyan}${hp}${re}$( [ -n "$hm" ] && echo "  跳跃 ${cyan}${hm}${re}" )"
         fi
         if [ "$has_ss" = 1 ]; then
             local sp sm
@@ -3699,7 +3880,7 @@ manage_protocols() {
         echo ""
         echo -e "  ${cyan}c1${re}. 添加自定义链接   ${cyan}c2${re}. 查看/删除自定义链接"
         echo ""
-        echo -e "  ${purple}提示${re}: 内置 Hysteria2 会进入用户统计与限额；端口跳跃暂未自动配置。"
+        echo -e "  ${purple}提示${re}: 内置 Hysteria2 会进入用户统计与限额；端口跳跃会用 UDP 转发到单监听端口。"
 
         [ "$has_reality" = 1 ] || [ "$has_hy2" = 1 ] || [ "$has_ss" = 1 ] && echo "" && echo -e "  ${red}d${re}. 删除可选节点"
         echo ""; echo -e "  ${red}0${re}. 返回"
