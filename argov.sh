@@ -30,6 +30,7 @@ CONFIG_FILE="/etc/xray/config.json"
 USER_CONF="/etc/xray/argov.conf"
 TUNNEL_LOG="/etc/xray/argo.log"
 WORK_DIR="/etc/xray"
+ARGOV_USERS_FILE="/etc/xray/argov_users.json"
 SCRIPT_PATH="/usr/bin/ag"
 CDN_DEFAULT="cdn.31514926.xyz"
 
@@ -162,6 +163,308 @@ with open(sys.argv[1], 'r', encoding='utf-8') as f:
         if item and item not in items:
             items.append(item)
 print(json.dumps(items, ensure_ascii=False))
+PYEOF
+}
+rand_token() { openssl rand -hex 16 2>/dev/null || printf '%08x%08x%08x%08x' $RANDOM $RANDOM $RANDOM $RANDOM; }
+rand_uuid() { cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen 2>/dev/null || printf '%08x-%04x-%04x-%04x-%012x\n' $RANDOM $RANDOM $RANDOM $RANDOM $RANDOM; }
+py_bin() { command -v python3 || command -v python || true; }
+ensure_users_file() {
+    local py uuid token
+    py=$(py_bin); [ -z "$py" ] && return 1
+    mkdir -p "$WORK_DIR" 2>/dev/null
+    uuid=$(get_uuid); [ -z "$uuid" ] && uuid="${UUID_CUSTOM:-$(rand_uuid)}"
+    [ -z "$SUB_TOKEN" ] && SUB_TOKEN=$(rand_token)
+    token="$SUB_TOKEN"
+    "$py" - "$ARGOV_USERS_FILE" "$uuid" "$token" << 'PYEOF'
+import json, os, re, sys, time
+path, uuid, token = sys.argv[1:4]
+
+def clean_name(v):
+    v = (v or "default").strip()
+    return v or "default"
+
+def email_for(name):
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", clean_name(name)).strip("-._").lower()
+    return "argov-" + (safe or "user")
+
+def norm_user(u, default_uuid, default_token):
+    u = dict(u or {})
+    u["name"] = clean_name(u.get("name"))
+    u["uuid"] = u.get("uuid") or default_uuid
+    u["token"] = u.get("token") or (default_token if u["name"] == "default" else "")
+    u["enabled"] = bool(u.get("enabled", True))
+    u["quota_bytes"] = int(u.get("quota_bytes") or 0)
+    u["used_up"] = int(u.get("used_up") or 0)
+    u["used_down"] = int(u.get("used_down") or 0)
+    u["email"] = u.get("email") or email_for(u["name"])
+    u["created_at"] = int(u.get("created_at") or time.time())
+    return u
+
+data = {}
+if os.path.exists(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        data = {}
+users = data.get("users") if isinstance(data, dict) else None
+if not isinstance(users, list):
+    users = []
+
+seen, out, has_default = set(), [], False
+for u in users:
+    nu = norm_user(u, uuid, token)
+    if nu["name"] in seen:
+        continue
+    seen.add(nu["name"])
+    if nu["name"] == "default":
+        has_default = True
+        if token:
+            nu["token"] = token
+        if uuid:
+            nu["uuid"] = uuid
+    out.append(nu)
+if not has_default:
+    out.insert(0, norm_user({"name": "default", "uuid": uuid, "token": token, "quota_bytes": 0}, uuid, token))
+
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump({"version": 1, "users": out}, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
+PYEOF
+}
+parse_bytes() {
+    local py; py=$(py_bin); [ -z "$py" ] && { echo 0; return; }
+    "$py" - "$1" << 'PYEOF'
+import re, sys
+s=(sys.argv[1] if len(sys.argv)>1 else "0").strip().upper().replace(" ", "")
+if s in ("", "0", "UNLIMITED", "NONE"):
+    print(0); raise SystemExit
+m=re.match(r"^([0-9]+(?:\.[0-9]+)?)(B|K|KB|M|MB|G|GB|T|TB)?$", s)
+if not m:
+    print(-1); raise SystemExit
+unit=m.group(2) or "B"
+mul={"B":1,"K":1024,"KB":1024,"M":1024**2,"MB":1024**2,"G":1024**3,"GB":1024**3,"T":1024**4,"TB":1024**4}[unit]
+print(int(float(m.group(1))*mul))
+PYEOF
+}
+format_bytes() {
+    local py; py=$(py_bin); [ -z "$py" ] && { echo "$1 B"; return; }
+    "$py" - "$1" << 'PYEOF'
+import sys
+n=int(float(sys.argv[1] or 0))
+for u in ["B","KB","MB","GB","TB","PB"]:
+    if n < 1024 or u == "PB":
+        print(f"{n:.2f} {u}" if u != "B" else f"{n} B")
+        break
+    n /= 1024
+PYEOF
+}
+sync_xray_users() {
+    [ -f "$CONFIG_FILE" ] || return 0
+    ensure_users_file || return 1
+    local py; py=$(py_bin); [ -z "$py" ] && return 1
+    "$py" - "$CONFIG_FILE" "$ARGOV_USERS_FILE" << 'PYEOF'
+import json, os, re, sys
+cfg_path, users_path = sys.argv[1:3]
+
+def load(path, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+def email_for(name):
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", (name or "user")).strip("-._").lower()
+    return "argov-" + (safe or "user")
+
+cfg = load(cfg_path, {})
+udb = load(users_path, {"users": []})
+users = []
+for u in udb.get("users", []):
+    if not u.get("enabled", True):
+        continue
+    uuid = u.get("uuid")
+    if not uuid:
+        continue
+    name = u.get("name") or "user"
+    email = u.get("email") or email_for(name)
+    users.append({"name": name, "uuid": uuid, "email": email})
+if not users:
+    raise SystemExit("no enabled users")
+
+def vless_clients(flow=False):
+    out = []
+    for u in users:
+        c = {"id": u["uuid"], "email": u["email"]}
+        if flow:
+            c["flow"] = "xtls-rprx-vision"
+        out.append(c)
+    return out
+
+def vmess_clients():
+    return [{"id": u["uuid"], "alterId": 0, "email": u["email"]} for u in users]
+
+for inbound in cfg.get("inbounds", []):
+    tag = inbound.get("tag")
+    if tag == "argo-in":
+        inbound.setdefault("settings", {})["clients"] = vless_clients(True)
+    elif tag == "vless-ws":
+        inbound.setdefault("settings", {})["clients"] = vless_clients(False)
+    elif tag == "vmess-ws":
+        inbound.setdefault("settings", {})["clients"] = vmess_clients()
+    elif tag == "reality":
+        inbound.setdefault("settings", {})["clients"] = vless_clients(True)
+
+if not any(i.get("tag") == "api-in" for i in cfg.get("inbounds", [])):
+    cfg.setdefault("inbounds", []).append({"listen":"127.0.0.1","port":10085,"protocol":"dokodemo-door","tag":"api-in","settings":{"address":"127.0.0.1"}})
+cfg["api"] = {"tag":"api","services":["StatsService"]}
+cfg["stats"] = {}
+cfg["policy"] = {"levels":{"0":{"statsUserUplink":True,"statsUserDownlink":True}},"system":{"statsInboundUplink":True,"statsInboundDownlink":True,"statsOutboundUplink":True,"statsOutboundDownlink":True}}
+routing = cfg.setdefault("routing", {})
+rules = routing.setdefault("rules", [])
+if not any(r.get("inboundTag") == ["api-in"] and r.get("outboundTag") == "api" for r in rules if isinstance(r, dict)):
+    rules.insert(0, {"type":"field","inboundTag":["api-in"],"outboundTag":"api"})
+
+tmp = cfg_path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, ensure_ascii=False, separators=(",", ":"))
+    f.write("\n")
+os.replace(tmp, cfg_path)
+PYEOF
+}
+get_user_sub_url() {
+    local ip="$1" token="$2"
+    [ -z "$token" ] && return 1
+    if [ -n "$SUB_DOMAIN" ]; then
+        echo "https://${SUB_DOMAIN}:${SUB_PORT}/sub?token=${token}"
+    else
+        [ -z "$ip" ] && ip=$(get_ip)
+        echo "http://${ip}:${SUB_PORT}/sub?token=${token}"
+    fi
+}
+restart_user_runtime() {
+    sync_xray_users || return 1
+    if [ "$IS_ALPINE" = 1 ]; then
+        rc-service xray restart 2>/dev/null || true
+    else
+        systemctl restart xray 2>/dev/null || true
+    fi
+    start_sub_server >/dev/null 2>&1 || true
+    start_stats_service >/dev/null 2>&1 || true
+}
+user_db_op() {
+    local op="$1"; shift
+    local py; py=$(py_bin); [ -z "$py" ] && return 1
+    "$py" - "$ARGOV_USERS_FILE" "$op" "$@" << 'PYEOF'
+import json, os, re, sys, time
+path, op, args = sys.argv[1], sys.argv[2], sys.argv[3:]
+
+def clean_name(v):
+    v = (v or "").strip()
+    v = re.sub(r"\s+", "-", v)
+    v = re.sub(r"[^A-Za-z0-9_.-]+", "-", v).strip("-._")
+    return v or "user"
+
+def email_for(name):
+    return "argov-" + clean_name(name).lower()
+
+def load():
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        data = {"version": 1, "users": []}
+    if not isinstance(data, dict):
+        data = {"version": 1, "users": []}
+    data.setdefault("version", 1)
+    data.setdefault("users", [])
+    return data
+
+def save(data):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    os.replace(tmp, path)
+
+def find(data, name):
+    for u in data.get("users", []):
+        if u.get("name") == name:
+            return u
+    return None
+
+def fmt_line(u):
+    used = int(u.get("used_up") or 0) + int(u.get("used_down") or 0)
+    quota = int(u.get("quota_bytes") or 0)
+    enabled = "1" if u.get("enabled", True) else "0"
+    print("\t".join([u.get("name",""), enabled, str(used), str(quota), u.get("token","")]))
+
+data = load()
+if op == "list":
+    for u in data.get("users", []):
+        fmt_line(u)
+    raise SystemExit
+
+if op == "show":
+    u = find(data, args[0])
+    if not u:
+        raise SystemExit(2)
+    fmt_line(u)
+    raise SystemExit
+
+if op == "add":
+    name, quota, uuid, token = args[:4]
+    name = clean_name(name)
+    if name == "default" or find(data, name):
+        raise SystemExit(2)
+    data["users"].append({
+        "name": name,
+        "uuid": uuid,
+        "token": token,
+        "quota_bytes": int(quota),
+        "used_up": 0,
+        "used_down": 0,
+        "enabled": True,
+        "email": email_for(name),
+        "created_at": int(time.time()),
+    })
+elif op == "set-enabled":
+    name, enabled = args[:2]
+    if name == "default":
+        raise SystemExit(3)
+    u = find(data, name)
+    if not u:
+        raise SystemExit(2)
+    u["enabled"] = enabled == "1"
+elif op == "set-quota":
+    name, quota = args[:2]
+    u = find(data, name)
+    if not u:
+        raise SystemExit(2)
+    u["quota_bytes"] = int(quota)
+    if int(quota) <= 0 or int(u.get("used_up") or 0) + int(u.get("used_down") or 0) < int(quota):
+        u["enabled"] = True
+elif op == "reset":
+    u = find(data, args[0])
+    if not u:
+        raise SystemExit(2)
+    u["used_up"] = 0
+    u["used_down"] = 0
+    u["enabled"] = True
+elif op == "delete":
+    name = args[0]
+    if name == "default":
+        raise SystemExit(3)
+    old = len(data.get("users", []))
+    data["users"] = [u for u in data.get("users", []) if u.get("name") != name]
+    if len(data["users"]) == old:
+        raise SystemExit(2)
+else:
+    raise SystemExit(1)
+save(data)
 PYEOF
 }
 gen_reality_keys() {
@@ -349,7 +652,7 @@ start_sub_server() {
     port_in_use "$SUB_PORT" && SUB_PORT=$(find_free_port "$SUB_PORT")
     [ -z "$SUB_TOKEN" ] && SUB_TOKEN=$(openssl rand -hex 8 2>/dev/null || printf '%08x%08x' $RANDOM $RANDOM)
     [ -z "$SUB_PATH" ] && SUB_PATH="/${SUB_TOKEN}"
-    save_conf; bash "${WORK_DIR}/sub_gen.sh" 2>/dev/null
+    save_conf; ensure_users_file
 
     # 自签证书（CF Full 模式需要），域名变更时重新生成
     if [ -n "$SUB_DOMAIN" ]; then
@@ -369,7 +672,8 @@ import subprocess, os, socketserver, threading, time
 import base64, json, urllib.parse
 
 SUB_FILE='/etc/xray/sub.txt'; PORT=${SUB_PORT}
-CACHE=b''; CACHE_CLASH=b''; CACHE_LOCK=threading.Lock()
+USERS_FILE='/etc/xray/argov_users.json'; GEN_SCRIPT='${WORK_DIR}/sub_gen.sh'
+CACHE={}; CACHE_LOCK=threading.Lock()
 
 def to_yaml(data, level=0):
     out = []
@@ -557,15 +861,41 @@ def build_clash(lines):
     }
     return to_yaml(cfg)
 
-def refresh_cache():
-    global CACHE, CACHE_CLASH
+def load_users():
     try:
-        subprocess.run(['${WORK_DIR}/sub_gen.sh'],timeout=15)
-        with open(SUB_FILE,'rb') as f:
-            CACHE=f.read()
-            raw_lines = base64.b64decode(CACHE).decode('utf-8', errors='ignore').splitlines()
-            CACHE_CLASH = build_clash(raw_lines).encode('utf-8')
-    except: pass
+        with open(USERS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f).get('users', [])
+    except:
+        return []
+
+def resolve_token(path, qs):
+    tok = qs.get('token', [None])[0]
+    if path == '${SUB_PATH}' or tok == '${SUB_TOKEN}':
+        return '${SUB_TOKEN}', True
+    if not tok:
+        return None, False
+    for u in load_users():
+        if u.get('token') == tok and u.get('enabled', True):
+            return tok, False
+    return None, False
+
+def refresh_cache(token):
+    try:
+        raw = subprocess.check_output([GEN_SCRIPT, token], timeout=15)
+        if not raw:
+            return None
+        raw_lines = base64.b64decode(raw).decode('utf-8', errors='ignore').splitlines()
+        clash = build_clash(raw_lines).encode('utf-8')
+        with CACHE_LOCK:
+            CACHE[token] = (raw, clash)
+        return CACHE[token]
+    except:
+        return None
+
+def get_cache(token):
+    with CACHE_LOCK:
+        item = CACHE.get(token)
+    return item or refresh_cache(token)
 
 class ThreadedServer(ThreadingMixIn, HTTPServer):
     allow_reuse_address=True; daemon_threads=True
@@ -574,30 +904,32 @@ class H(BaseHTTPRequestHandler):
     def do_GET(s):
         import urllib.parse as up
         qs=up.parse_qs(up.urlparse(s.path).query)
-        tok=qs.get('token',[None])[0]
-        ok=(s.path=='${SUB_PATH}' or tok=='${SUB_TOKEN}')
-        if ok:
+        req_path=up.urlparse(s.path).path
+        token,is_default=resolve_token(req_path, qs)
+        item=get_cache(token) if token else None
+        if item:
             try:
                 s.send_response(200)
+                cache_raw, cache_clash = item
                 ua = s.headers.get('User-Agent', '').lower()
                 is_clash = 'clash' in ua or 'mihomo' in ua or 'verge' in ua or qs.get('clash',[''])[0]=='1'
                 safe_name = up.quote('${NODE_NAME}', safe='')
-                if is_clash and CACHE_CLASH:
+                if is_clash and cache_clash:
                     s.send_header('Content-Type','text/yaml; charset=utf-8')
-                    s.send_header('Content-Length', str(len(CACHE_CLASH)))
+                    s.send_header('Content-Length', str(len(cache_clash)))
                     s.send_header('Connection', 'close')
                     s.send_header('Profile-Update-Interval','24')
                     s.send_header('Profile-Title',safe_name)
                     s.send_header('Content-Disposition',f"inline; filename*=UTF-8''{safe_name}")
-                    s.end_headers(); s.wfile.write(CACHE_CLASH)
+                    s.end_headers(); s.wfile.write(cache_clash)
                 else:
                     s.send_header('Content-Type','text/plain; charset=utf-8')
-                    s.send_header('Content-Length', str(len(CACHE)))
+                    s.send_header('Content-Length', str(len(cache_raw)))
                     s.send_header('Connection', 'close')
                     s.send_header('Profile-Update-Interval','24')
                     s.send_header('Profile-Title',safe_name)
                     s.send_header('Content-Disposition',f"inline; filename*=UTF-8''{safe_name}")
-                    s.end_headers(); s.wfile.write(CACHE)
+                    s.end_headers(); s.wfile.write(cache_raw)
             except: 
                 s.send_response(500)
                 s.send_header('Connection', 'close')
@@ -609,10 +941,14 @@ class H(BaseHTTPRequestHandler):
     def log_message(s,*a): pass
 
 # 后台定时刷新（首次+每60秒）
-refresh_cache()
+refresh_cache('${SUB_TOKEN}')
 def bg_refresh():
     while True:
-        time.sleep(10); refresh_cache()
+        time.sleep(10)
+        with CACHE_LOCK:
+            toks=list(CACHE.keys())
+        for tok in toks:
+            refresh_cache(tok)
 threading.Thread(target=bg_refresh,daemon=True).start()
 
 import ssl, os
@@ -632,7 +968,8 @@ PYEOF
     cat > "${WORK_DIR}/sub_gen.sh" << 'SUBEOF'
 #!/usr/bin/env bash
 JQ=/usr/bin/jq
-CFG=/etc/xray/config.json; LOG=/etc/xray/argo.log; CONF=/etc/xray/argov.conf
+CFG=/etc/xray/config.json; LOG=/etc/xray/argo.log; CONF=/etc/xray/argov.conf; USERS=/etc/xray/argov_users.json
+USER_TOKEN="${1:-}"
 [ -f "$CONF" ] && . "$CONF"
 NODE_NAME="${NODE_NAME:-ArgoV}"; MODE="${ARGO_MODE:-temp}"; FIXED="${ARGO_FIXED_DOMAIN:-}"
 CDN_PORT="${CDN_PORT:-443}"
@@ -645,7 +982,18 @@ get_domain() {
     echo "$LAST_ARGO_DOMAIN"
 }
 b64() { printf '%s' "$1" | base64 -w0 2>/dev/null || printf '%s' "$1" | base64 | tr -d '\n'; }
-uuid=$($JQ -r '.inbounds[0].settings.clients[0].id//empty' "$CFG")
+[ -f "$USERS" ] || exit 1
+USER_JSON=$($JQ -c --arg tok "$USER_TOKEN" --arg def "${SUB_TOKEN:-}" 'if ($tok == "" or $tok == $def) then (.users[]|select(.name=="default" and (.enabled//true))) else (.users[]|select(.token==$tok and (.enabled//true))) end' "$USERS" 2>/dev/null | head -n 1)
+[ -z "$USER_JSON" ] && exit 1
+uuid=$(printf '%s' "$USER_JSON" | $JQ -r '.uuid//empty')
+user_name=$(printf '%s' "$USER_JSON" | $JQ -r '.name//"user"')
+[ -z "$uuid" ] && exit 1
+IS_DEFAULT_USER=0
+[ "$user_name" = "default" ] && IS_DEFAULT_USER=1
+INCLUDE_CUSTOM=0
+if [ "$IS_DEFAULT_USER" = "1" ]; then
+    INCLUDE_CUSTOM=1
+fi
 cdn=$($JQ -r '.current_cdn//"cdn.31514926.xyz"' "$CFG")
 cp=$($JQ -r '.current_cdn_port//443' "$CFG")
 hd=$(get_domain)
@@ -669,14 +1017,17 @@ if $JQ -e '.inbounds[]|select(.tag=="reality")' "$CFG" >/dev/null 2>&1 && [ -n "
     [ -n "$rport" ] && links+="vless://${uuid}@${ip}:${rport}?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=${rs}&pbk=${rpub}&fp=chrome${rsid}#${NODE_NAME}-Reality"$'\n'
 fi
 # 自定义链接（用户自添加）
-if [ -f /etc/xray/custom_links.txt ]; then
+if [ "$INCLUDE_CUSTOM" = "1" ] && [ -f /etc/xray/custom_links.txt ]; then
     while IFS= read -r cl; do
         [ -n "$cl" ] && links+="${cl}"$'\n'
     done < /etc/xray/custom_links.txt
 fi
-{ printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n'; } > /etc/xray/sub.txt
+out=$(printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n')
+[ "$IS_DEFAULT_USER" = "1" ] && printf '%s' "$out" > /etc/xray/sub.txt
+printf '%s' "$out"
 SUBEOF
     chmod +x "${WORK_DIR}/sub_gen.sh"
+    bash "${WORK_DIR}/sub_gen.sh" "$SUB_TOKEN" >/dev/null 2>&1 || true
 
     if [ "$IS_ALPINE" = 1 ]; then
         cat > /etc/init.d/argov-sub << EOF
@@ -720,6 +1071,192 @@ stop_sub_server() {
     fi
     rm -f "${WORK_DIR}/sub.py" "${WORK_DIR}/sub_gen.sh" "${WORK_DIR}/sub.txt"
     systemctl daemon-reload 2>/dev/null || true
+}
+
+start_stats_service() {
+    ensure_users_file || return 1
+    sync_xray_users || true
+    local py; py=$(py_bin)
+    [ -z "$py" ] && return 1
+
+    cat > "${WORK_DIR}/stats.py" << 'PYEOF'
+import json, os, re, subprocess, time
+
+USERS_FILE = "/etc/xray/argov_users.json"
+CONFIG_FILE = "/etc/xray/config.json"
+XRAY_BIN = "/etc/xray/xray"
+API_SERVER = "127.0.0.1:10085"
+INTERVAL = 60
+
+# xray api statsquery --server=127.0.0.1:10085 --pattern user>>>argov-user>>>traffic>>>uplink --reset
+# xray api statsquery --server=127.0.0.1:10085 --pattern user>>>argov-user>>>traffic>>>downlink --reset
+
+def load_json(path, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+def save_json(path, data):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        if path == USERS_FILE:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        else:
+            json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+        f.write("\n")
+    os.replace(tmp, path)
+
+def email_for(name):
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", (name or "user")).strip("-._").lower()
+    return "argov-" + (safe or "user")
+
+def query_stat(email, direction):
+    pattern = f"user>>>{email}>>>traffic>>>{direction}"
+    cmd = [XRAY_BIN, "api", "statsquery", f"--server={API_SERVER}", "--pattern", pattern, "--reset"]
+    try:
+        raw = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, timeout=10).decode("utf-8", "ignore")
+    except Exception:
+        return 0
+    total = 0
+    try:
+        data = json.loads(raw)
+        for item in data.get("stat") or data.get("stats") or []:
+            total += int(item.get("value") or 0)
+    except Exception:
+        for n in re.findall(r'"value"\s*:\s*([0-9]+)', raw):
+            total += int(n)
+    return total
+
+def sync_config(users):
+    cfg = load_json(CONFIG_FILE, {})
+    enabled = []
+    for u in users:
+        if not u.get("enabled", True) or not u.get("uuid"):
+            continue
+        enabled.append({"uuid": u["uuid"], "email": u.get("email") or email_for(u.get("name"))})
+    if not enabled:
+        return False
+
+    def vless(flow=False):
+        out = []
+        for u in enabled:
+            c = {"id": u["uuid"], "email": u["email"]}
+            if flow:
+                c["flow"] = "xtls-rprx-vision"
+            out.append(c)
+        return out
+
+    for inbound in cfg.get("inbounds", []):
+        tag = inbound.get("tag")
+        if tag == "argo-in":
+            inbound.setdefault("settings", {})["clients"] = vless(True)
+        elif tag == "vless-ws":
+            inbound.setdefault("settings", {})["clients"] = vless(False)
+        elif tag == "vmess-ws":
+            inbound.setdefault("settings", {})["clients"] = [{"id": u["uuid"], "alterId": 0, "email": u["email"]} for u in enabled]
+        elif tag == "reality":
+            inbound.setdefault("settings", {})["clients"] = vless(True)
+
+    if not any(i.get("tag") == "api-in" for i in cfg.get("inbounds", [])):
+        cfg.setdefault("inbounds", []).append({"listen":"127.0.0.1","port":10085,"protocol":"dokodemo-door","tag":"api-in","settings":{"address":"127.0.0.1"}})
+    cfg["api"] = {"tag":"api","services":["StatsService"]}
+    cfg["stats"] = {}
+    cfg["policy"] = {"levels":{"0":{"statsUserUplink":True,"statsUserDownlink":True}},"system":{"statsInboundUplink":True,"statsInboundDownlink":True,"statsOutboundUplink":True,"statsOutboundDownlink":True}}
+    routing = cfg.setdefault("routing", {})
+    rules = routing.setdefault("rules", [])
+    if not any(isinstance(r, dict) and r.get("inboundTag") == ["api-in"] and r.get("outboundTag") == "api" for r in rules):
+        rules.insert(0, {"type":"field","inboundTag":["api-in"],"outboundTag":"api"})
+    save_json(CONFIG_FILE, cfg)
+    return True
+
+def restart_xray():
+    if os.path.exists("/etc/alpine-release"):
+        subprocess.call(["rc-service", "xray", "restart"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        subprocess.call(["systemctl", "restart", "xray"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def poll_once():
+    data = load_json(USERS_FILE, {"version": 1, "users": []})
+    changed = False
+    disabled = False
+    for u in data.get("users", []):
+        if not u.get("enabled", True):
+            continue
+        email = u.get("email") or email_for(u.get("name"))
+        u["email"] = email
+        up = query_stat(email, "uplink")
+        down = query_stat(email, "downlink")
+        if up or down:
+            u["used_up"] = int(u.get("used_up") or 0) + up
+            u["used_down"] = int(u.get("used_down") or 0) + down
+            changed = True
+        quota = int(u.get("quota_bytes") or 0)
+        used = int(u.get("used_up") or 0) + int(u.get("used_down") or 0)
+        if u.get("name") != "default" and quota > 0 and used >= quota:
+            u["enabled"] = False
+            changed = True
+            disabled = True
+    if changed:
+        save_json(USERS_FILE, data)
+    if disabled and sync_config(data.get("users", [])):
+        restart_xray()
+
+def main():
+    while True:
+        poll_once()
+        time.sleep(INTERVAL)
+
+if __name__ == "__main__":
+    main()
+PYEOF
+
+    if [ "$IS_ALPINE" = 1 ]; then
+        cat > /etc/init.d/argov-stats << EOF
+#!/sbin/openrc-run
+name=argov-stats
+command=$py
+command_args="${WORK_DIR}/stats.py"
+command_background=true
+pidfile=/var/run/argov-stats.pid
+EOF
+        chmod +x /etc/init.d/argov-stats
+        rc-update add argov-stats default 2>/dev/null || true
+        rc-service argov-stats restart 2>/dev/null || true
+    else
+        cat > /etc/systemd/system/argov-stats.service << EOF
+[Unit]
+Description=ArgoV User Traffic Quota Watcher
+After=network.target xray.service
+
+[Service]
+Type=simple
+ExecStart=$py ${WORK_DIR}/stats.py
+Restart=always
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl enable argov-stats 2>/dev/null || true
+        systemctl restart argov-stats 2>/dev/null || true
+    fi
+}
+
+stop_stats_service() {
+    if [ "$IS_ALPINE" = 1 ]; then
+        rc-service argov-stats stop 2>/dev/null || true
+        rc-update del argov-stats default 2>/dev/null || true
+        rm -f /etc/init.d/argov-stats
+    else
+        systemctl stop argov-stats 2>/dev/null || true
+        systemctl disable argov-stats 2>/dev/null || true
+        rm -f /etc/systemd/system/argov-stats.service
+        systemctl daemon-reload 2>/dev/null || true
+    fi
+    rm -f "${WORK_DIR}/stats.py"
 }
 
 #==============================================================================
@@ -803,9 +1340,39 @@ show_node() {
 #==============================================================================
 # 服务控制
 #==============================================================================
-start_services() { yellow_msg "启动..."; systemctl start xray argov-tunnel 2>/dev/null; sleep 2; get_status; echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; green_msg "完成"; }
-stop_services()  { yellow_msg "停止..."; systemctl stop xray argov-tunnel 2>/dev/null; sleep 1; get_status; echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; red_msg "已停止"; }
-restart_services() { yellow_msg "重启..."; rm -f "$TUNNEL_LOG"; systemctl restart xray argov-tunnel 2>/dev/null; sleep 3; get_status; local d; d=$(get_argo_domain); echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"; green_msg "完成"; [ -n "$d" ] && { echo -e "  域名: ${purple}${d}${re}"; LAST_ARGO_DOMAIN="$d"; save_conf; }; }
+start_services() {
+    yellow_msg "Starting..."
+    systemctl start xray argov-tunnel argov-stats 2>/dev/null || true
+    rc-service xray start 2>/dev/null || true
+    rc-service argov-tunnel start 2>/dev/null || true
+    rc-service argov-stats start 2>/dev/null || true
+    sleep 2; get_status
+    echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"
+    green_msg "Done"
+}
+stop_services()  {
+    yellow_msg "Stopping..."
+    systemctl stop xray argov-tunnel argov-stats 2>/dev/null || true
+    rc-service xray stop 2>/dev/null || true
+    rc-service argov-tunnel stop 2>/dev/null || true
+    rc-service argov-stats stop 2>/dev/null || true
+    sleep 1; get_status
+    echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"
+    red_msg "Stopped"
+}
+restart_services() {
+    yellow_msg "Restarting..."
+    rm -f "$TUNNEL_LOG"
+    systemctl restart xray argov-tunnel argov-stats 2>/dev/null || true
+    rc-service xray restart 2>/dev/null || true
+    rc-service argov-tunnel restart 2>/dev/null || true
+    rc-service argov-stats restart 2>/dev/null || true
+    sleep 3; get_status
+    local d; d=$(get_argo_domain)
+    echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"
+    green_msg "Done"
+    [ -n "$d" ] && { echo -e "  Domain: ${purple}${d}${re}"; LAST_ARGO_DOMAIN="$d"; save_conf; }
+}
 
 #==============================================================================
 # 优选域名
@@ -874,7 +1441,7 @@ change_config() {
             1) read -p "  新名称 [${NODE_NAME}]: " n; [ -n "$n" ] && NODE_NAME="$n"; save_conf; green_msg "已更新: ${NODE_NAME}" ;;
             2) local nu; read -p "  新 UUID (回车生成): " nu; [ -z "$nu" ] && nu=$(cat /proc/sys/kernel/random/uuid)
                jq --arg u "$nu" '(.inbounds[].settings.clients[]?|select(.id)|.id)|=$u' "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-               UUID_CUSTOM="$nu"; save_conf; systemctl restart xray 2>/dev/null; green_msg "UUID 已更新！${nu}" ;;
+               UUID_CUSTOM="$nu"; save_conf; ensure_users_file; sync_xray_users; systemctl restart xray 2>/dev/null; rc-service xray restart 2>/dev/null || true; green_msg "UUID 已更新！${nu}" ;;
             3) switch_argo_tunnel ;;
             4) echo ""; for i in "${!SS_METHODS[@]}"; do echo -e "  ${green}$((i+1))${re}. ${SS_METHODS[$i]}"; done; echo ""
                read -p "  选择 [默认 aes-256-gcm]: " sm; [ -n "$sm" ] && SS_METHOD="${SS_METHODS[$((sm-1))]:-$SS_METHOD}"
@@ -891,6 +1458,102 @@ change_config() {
 #==============================================================================
 # Argo 隧道切换
 #==============================================================================
+manage_users() {
+    load_conf
+    [ ! -f "$CONFIG_FILE" ] && { red_msg "Please install first."; return; }
+    ensure_users_file || { red_msg "Cannot create users database."; return; }
+
+    while true; do
+        clear
+        echo ""
+        echo -e "  ${white}ArgoV users and traffic quota${re}"
+        echo ""
+        printf "  %-16s %-8s %-14s %-14s %s\n" "name" "state" "used" "quota" "token"
+        printf "  %-16s %-8s %-14s %-14s %s\n" "----" "-----" "----" "-----" "-----"
+        while IFS=$'\t' read -r name enabled used quota token; do
+            [ -z "$name" ] && continue
+            local state="off"
+            [ "$enabled" = "1" ] && state="on"
+            printf "  %-16s %-8s %-14s %-14s %s\n" "$name" "$state" "$(format_bytes "$used")" "$([ "$quota" = "0" ] && echo unlimited || format_bytes "$quota")" "$token"
+        done < <(user_db_op list 2>/dev/null)
+        echo ""
+        echo -e "  ${green}1${re}. Add limited user"
+        echo -e "  ${green}2${re}. Enable user"
+        echo -e "  ${yellow}3${re}. Disable user"
+        echo -e "  ${green}4${re}. Set quota"
+        echo -e "  ${green}5${re}. Reset usage"
+        echo -e "  ${cyan}6${re}. Show subscription URL"
+        echo -e "  ${red}7${re}. Delete user"
+        echo -e "  ${red}0${re}. Back"
+        echo ""
+        read -p "  Select: " c
+        case "$c" in
+            1)
+                local name quota quota_bytes uuid token ip
+                read -p "  User name (letters/numbers, e.g. friend): " name
+                [ -z "$name" ] && { red_msg "Empty name."; sleep 1; continue; }
+                read -p "  Quota, e.g. 200G (0 = unlimited): " quota
+                quota_bytes=$(parse_bytes "${quota:-0}")
+                [ "$quota_bytes" -lt 0 ] && { red_msg "Invalid quota."; sleep 1; continue; }
+                uuid=$(rand_uuid)
+                token=$(rand_token)
+                if user_db_op add "$name" "$quota_bytes" "$uuid" "$token"; then
+                    restart_user_runtime
+                    ip=$(get_ip)
+                    echo ""
+                    green_msg "User added."
+                    echo -e "  URL: ${green}$(get_user_sub_url "$ip" "$token")${re}"
+                    echo -e "  Limited users receive only: VLESS Argo, VMess Argo, Reality."
+                else
+                    red_msg "User already exists or cannot be added."
+                fi
+                read -p "  Press Enter..." -r
+                ;;
+            2|3|4|5|6|7)
+                local name quota quota_bytes token ip line enabled used quota_cur
+                read -p "  User name: " name
+                [ -z "$name" ] && { red_msg "Empty name."; sleep 1; continue; }
+                case "$c" in
+                    2)
+                        user_db_op set-enabled "$name" 1 && restart_user_runtime && green_msg "Enabled." || red_msg "Cannot enable user."
+                        ;;
+                    3)
+                        user_db_op set-enabled "$name" 0 && restart_user_runtime && green_msg "Disabled." || red_msg "Cannot disable user."
+                        ;;
+                    4)
+                        read -p "  New quota, e.g. 200G (0 = unlimited): " quota
+                        quota_bytes=$(parse_bytes "${quota:-0}")
+                        [ "$quota_bytes" -lt 0 ] && { red_msg "Invalid quota."; sleep 1; continue; }
+                        user_db_op set-quota "$name" "$quota_bytes" && restart_user_runtime && green_msg "Quota updated." || red_msg "Cannot update quota."
+                        ;;
+                    5)
+                        user_db_op reset "$name" && restart_user_runtime && green_msg "Usage reset." || red_msg "Cannot reset user."
+                        ;;
+                    6)
+                        line=$(user_db_op show "$name" 2>/dev/null) || { red_msg "User not found."; sleep 1; continue; }
+                        IFS=$'\t' read -r name enabled used quota_cur token << EOF
+$line
+EOF
+                        ip=$(get_ip)
+                        echo ""
+                        echo -e "  ${green}$(get_user_sub_url "$ip" "$token")${re}"
+                        read -p "  Press Enter..." -r
+                        ;;
+                    7)
+                        echo -ne "  Delete ${name}? (y/n): "; read cf
+                        if [ "$cf" = "y" ] || [ "$cf" = "Y" ]; then
+                            user_db_op delete "$name" && restart_user_runtime && green_msg "Deleted." || red_msg "Cannot delete user."
+                        fi
+                        ;;
+                esac
+                sleep 1
+                ;;
+            0) return ;;
+            *) red_msg "Invalid."; sleep 1 ;;
+        esac
+    done
+}
+
 switch_argo_tunnel() {
     load_conf; clear
     echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
@@ -1155,6 +1818,8 @@ do_install() {
         UUID=$(jq -r '.inbounds[0].settings.clients[0].id//empty' "$CONFIG_FILE" 2>/dev/null)
     fi
     [ -z "$UUID" ] && UUID="${UUID_CUSTOM:-$(cat /proc/sys/kernel/random/uuid)}"
+    UUID_CUSTOM="$UUID"
+    ensure_users_file
     local SS_PASS
     [[ "$SS_METHOD" =~ 2022 ]] && SS_PASS=$(gen_ss2022_pass "$SS_METHOD") || SS_PASS="$UUID"
     [ -z "$SS_PASS" ] && SS_PASS="$UUID"
@@ -1183,6 +1848,7 @@ do_install() {
         echo "$saved_inbounds" | jq -e '.[] | select(.tag=="reality")' &>/dev/null && ENABLE_REALITY=1
         echo "$saved_inbounds" | jq -e '.[] | select(.tag=="ss")'       &>/dev/null && ENABLE_SS=1
     fi
+    sync_xray_users
     green_msg "  完成"
 
     yellow_msg "[6/6] 启动..."
@@ -1228,6 +1894,7 @@ ARGOWRAP
     [ -f "$WARP_DOMAIN_FILE" ] && [ -s "$WARP_DOMAIN_FILE" ] && warp_apply_routing "restore"
 
     start_sub_server
+    start_stats_service
 
     echo ""; echo -e " ${purple}╔══════════════════════════════════════════════════╗${re}"
     echo -e " ${purple}║${re}       ${white}🎉 部署成功 · ${NODE_NAME}${re}"
@@ -1265,13 +1932,13 @@ build_xray_config() {
     fallbacks='{"path":"/vmess-argo","dest":'"${VMESS_WS_PORT}"'},{"path":"/vless-argo","dest":'"${VLESS_WS_PORT}"'},{"dest":'"${VLESS_WS_PORT}"'}'
 
     # 1. Argo 路由入口
-    inbounds+='{"port":'"${ARGO_PORT}"',"listen":"127.0.0.1","protocol":"vless","tag":"argo-in","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none","fallbacks":['"${fallbacks}"']},"streamSettings":{"network":"tcp"}}'
+    inbounds+='{"port":'"${ARGO_PORT}"',"listen":"127.0.0.1","protocol":"vless","tag":"argo-in","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision","email":"argov-default"}],"decryption":"none","fallbacks":['"${fallbacks}"']},"streamSettings":{"network":"tcp"}}'
     # 2. VLESS WS
-    inbounds+=',{"port":'"${VLESS_WS_PORT}"',"listen":"127.0.0.1","protocol":"vless","tag":"vless-ws","settings":{"clients":[{"id":"'"${uuid}"'"}],"decryption":"none"},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vless-argo"}}}'
+    inbounds+=',{"port":'"${VLESS_WS_PORT}"',"listen":"127.0.0.1","protocol":"vless","tag":"vless-ws","settings":{"clients":[{"id":"'"${uuid}"'","email":"argov-default"}],"decryption":"none"},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vless-argo"}}}'
     # 3. VMess WS
-    inbounds+=',{"port":'"${VMESS_WS_PORT}"',"listen":"127.0.0.1","protocol":"vmess","tag":"vmess-ws","settings":{"clients":[{"id":"'"${uuid}"'","alterId":0}]},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vmess-argo"}}}'
+    inbounds+=',{"port":'"${VMESS_WS_PORT}"',"listen":"127.0.0.1","protocol":"vmess","tag":"vmess-ws","settings":{"clients":[{"id":"'"${uuid}"'","alterId":0,"email":"argov-default"}]},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vmess-argo"}}}'
     # 4. Reality (opt)
-    [ "$ENABLE_REALITY" = 1 ] && inbounds+=',{"port":'"${REALITY_PORT}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${REALITY_SNI}"':443","serverNames":["'"${REALITY_SNI}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":["'"${REALITY_SHORTID}"'"],"fingerprint":"chrome"}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
+    [ "$ENABLE_REALITY" = 1 ] && inbounds+=',{"port":'"${REALITY_PORT}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision","email":"argov-default"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${REALITY_SNI}"':443","serverNames":["'"${REALITY_SNI}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":["'"${REALITY_SHORTID}"'"],"fingerprint":"chrome"}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
     # 5. SS (opt)
     [ "$ENABLE_SS" = 1 ] && inbounds+=',{"port":'"${SS_PORT}"',"listen":"0.0.0.0","protocol":"shadowsocks","tag":"ss","settings":{"method":"'"${SS_METHOD}"'","password":"'"${ss_pass}"'","network":"tcp,udp"}}'
     inbounds+=']'
@@ -1282,9 +1949,14 @@ build_xray_config() {
   "current_cdn_port": ${CDN_PORT},
   "log": { "access": "/dev/null", "error": "/dev/null", "loglevel": "none" },
   "inbounds": ${inbounds},
-  "outbounds": [{ "protocol": "freedom", "tag": "direct" }]
+  "outbounds": [{ "protocol": "freedom", "tag": "direct" }],
+  "api":{"tag":"api","services":["StatsService"]},
+  "stats":{},
+  "policy":{"levels":{"0":{"statsUserUplink":true,"statsUserDownlink":true}},"system":{"statsInboundUplink":true,"statsInboundDownlink":true,"statsOutboundUplink":true,"statsOutboundDownlink":true}},
+  "routing":{"rules":[{"type":"field","inboundTag":["api-in"],"outboundTag":"api"}]}
 }
 XRAYCONF
+    jq '.inbounds += [{"listen":"127.0.0.1","port":10085,"protocol":"dokodemo-door","tag":"api-in","settings":{"address":"127.0.0.1"}}]' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
 }
 
 #==============================================================================
@@ -1697,10 +2369,11 @@ add_single_protocol() {
             [ -z "$REALITY_PRIV" ] || [ "$REALITY_PRIV" = "REPLACE_ME" ] && gen_reality_keys
             REALITY_SHORTID="$r_sid"
             local sid_val="\"$REALITY_SHORTID\""
-            new_inbound='{"port":'"${r_port}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${r_sni}"':443","serverNames":["'"${r_sni}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":['"${sid_val}"'],"fingerprint":"'"${r_fp}"'"}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
+            new_inbound='{"port":'"${r_port}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision","email":"argov-default"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${r_sni}"':443","serverNames":["'"${r_sni}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":['"${sid_val}"'],"fingerprint":"'"${r_fp}"'"}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
             REALITY_PORT="$r_port"; REALITY_SNI="$r_sni"; ENABLE_REALITY=1 ;;
     esac
     jq --argjson i "$new_inbound" '.inbounds+=[$i]' "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+    sync_xray_users
     save_conf; yellow_msg "重启 Xray..."; systemctl restart xray 2>/dev/null; sleep 2; get_status; green_msg "完成"
 
     echo ""; echo -e " ${white}━━━ 链接 ━━━${re}"; echo ""
@@ -2772,6 +3445,7 @@ main_menu() {
         echo -e " ${purple}──────────────── ✦ 核心功能 ✦ ────────────────${re}"
         echo -e "  ${green}1${re}. 🔗 查看节点链接       ${green}2${re}. ☁️  更换优选线路"
         echo -e "  ${green}3${re}. ⚙️  修改基础配置       ${cyan}a${re}. 🧩 管理代理节点 (添加/编辑/删除)"
+        echo -e "  ${cyan}u${re}. 👥 用户/流量限额       ${yellow}配额用户仅下发本机节点"
         echo ""
         echo -e " ${purple}──────────────── ✦ 进阶路由 ✦ ────────────────${re}"
         echo -e "  ${purple}w${re}. 🌐 独立 WARP 分流     ${purple}r${re}. 🔀 落地节点中继"
@@ -2782,12 +3456,13 @@ main_menu() {
         echo -e "  ${cyan}8${re}. 🆙 更新管理脚本      ${red}9${re}. 🗑️  彻底卸载系统"
         echo -e "  ${purple}x${re}. 🚀 更新 Xray 内核    ${cyan}0${re}. 🚪 安全退出"
         echo -e " ${purple}───────────────────────────────────────────────${re}"
-        read -p "  请输入 (0-9 / a / x / w / r): " c
+        read -p "  请输入 (0-9 / a / u / x / w / r): " c
         case "$c" in
             1) show_node; read -p "  按回车返回..." -r ;;
             2) edit_cdn; read -p "  按回车返回..." -r ;;
             3) change_config ;;
             a|A) manage_protocols ;;
+            u|U) manage_users ;;
             4) start_services; sleep 1 ;; 5) stop_services; sleep 1 ;; 6) restart_services; sleep 1 ;;
             7) echo -ne "  ${yellow}重新安装? (y/n): ${re}"; read cf
                [ "$cf" = "y" ] || [ "$cf" = "Y" ] && { load_conf; do_install; }; read -p "  按回车返回..." -r ;;
@@ -2799,13 +3474,14 @@ main_menu() {
             9) echo -ne "  ${red}⚠ 确定卸载? (y/n): ${re}"; read cf
                if [ "$cf" = "y" ] || [ "$cf" = "Y" ]; then
                    stop_sub_server 2>/dev/null
-                   systemctl stop xray argov-tunnel 2>/dev/null; systemctl disable xray argov-tunnel 2>/dev/null
-                   rm -rf "$WORK_DIR"; rm -f /etc/systemd/system/xray.service /etc/systemd/system/argov-tunnel.service /etc/systemd/system/argov-sub.service /etc/init.d/xray /etc/init.d/argov-tunnel "$SCRIPT_PATH" "${WORK_DIR}/argov-tunnel.sh"
+                   stop_stats_service 2>/dev/null
+                   systemctl stop xray argov-tunnel argov-stats 2>/dev/null; systemctl disable xray argov-tunnel argov-stats 2>/dev/null
+                    rm -rf "$WORK_DIR"; rm -f /etc/systemd/system/xray.service /etc/systemd/system/argov-tunnel.service /etc/systemd/system/argov-sub.service /etc/systemd/system/argov-stats.service /etc/init.d/xray /etc/init.d/argov-tunnel /etc/init.d/argov-stats "$SCRIPT_PATH" "${WORK_DIR}/argov-tunnel.sh"
                    systemctl daemon-reload; green_msg "卸载完成。"; fi ;;
             w|W) warp_menu ;;
             r|R) relay_menu ;;
             0) clear; break ;;
-            *) red_msg "无效 (0-9 / a / x / w / r)"; sleep 1 ;;
+            *) red_msg "无效 (0-9 / a / u / x / w / r)"; sleep 1 ;;
         esac
     done
 }
@@ -2827,6 +3503,7 @@ migrate_argox_to_argov() {
         load_conf
         rebuild_tunnel "$ARGO_MODE"
         start_sub_server
+        start_stats_service
         systemctl start xray argov-tunnel 2>/dev/null
         
         cat > "$SCRIPT_PATH" << 'ARGOWRAP'

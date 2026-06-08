@@ -121,6 +121,66 @@ require(
     "Custom hysteria2 links should produce Mihomo hysteria2 proxies",
 )
 require(
+    r'ARGOV_USERS_FILE="/etc/xray/argov_users\.json"',
+    "multi-user quota state must be persisted in /etc/xray/argov_users.json",
+)
+require(
+    r"ensure_users_file\(\)",
+    "script must migrate/create the ArgoV users database",
+)
+require(
+    r"manage_users\(\)",
+    "main menu must expose user quota management",
+)
+require(
+    r"sync_xray_users\(\)",
+    "user changes must sync enabled users into Xray clients without reinstalling",
+)
+require(
+    r"start_stats_service\(\)",
+    "script must install a traffic quota watcher service",
+)
+require(
+    r"argov-stats\.service",
+    "systemd installs must include an argov-stats traffic watcher",
+)
+require(
+    r'"api":\{"tag":"api","services":\["StatsService"\]\}',
+    "Xray config must enable StatsService API",
+)
+require(
+    r'"stats":\{\}',
+    "Xray config must enable stats collection",
+)
+require(
+    r'"statsUserUplink":true',
+    "Xray policy must enable per-user uplink stats",
+)
+require(
+    r'"statsUserDownlink":true',
+    "Xray policy must enable per-user downlink stats",
+)
+require(
+    r'"email":"argov-',
+    "Xray clients must include stable email values for per-user stats",
+)
+require(
+    r'USER_TOKEN="\$\{1:-\}"[\s\S]*USER_JSON=',
+    "subscription generator must accept a per-user token and resolve user JSON",
+)
+require(
+    r'INCLUDE_CUSTOM=0[\s\S]*if \[ "\$IS_DEFAULT_USER" = "1" \]; then[\s\S]*INCLUDE_CUSTOM=1',
+    "only the default/global subscription may include external custom links",
+)
+require(
+    r'quota_bytes[\s\S]*used_up[\s\S]*used_down[\s\S]*enabled',
+    "user records must track quota, bidirectional usage, and enabled state",
+)
+require(
+    r'xray api statsquery[\s\S]*traffic>>>uplink[\s\S]*traffic>>>downlink',
+    "traffic watcher must query Xray per-user uplink and downlink counters",
+)
+require(
     r"ENABLE_REALITY[\s\S]*gen_reality_shortid",
     "Reality install path must generate REALITY_SHORTID",
 )
