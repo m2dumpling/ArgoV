@@ -449,13 +449,44 @@ def build_clash(lines):
     
     if not proxies: return ""
     cfg = {
-        "port": 7890, "socks-port": 7891, "allow-lan": False, "mode": "rule", "log-level": "info",
+        "port": 7890, "socks-port": 7891, "allow-lan": True, "mode": "rule", "log-level": "info",
+        "unified-delay": True, "tcp-concurrent": True,
+        "dns": {
+            "enable": True, "ipv6": False, "enhanced-mode": "fake-ip", "fake-ip-range": "198.18.0.1/16",
+            "nameserver": ["https://doh.pub/dns-query", "https://dns.alidns.com/dns-query"],
+            "fallback": ["https://8.8.8.8/dns-query", "https://1.1.1.1/dns-query"]
+        },
         "proxies": proxies,
         "proxy-groups": [
             {"name": "🚀 节点选择", "type": "select", "proxies": ["⚡ 自动测速", "🎯 全局直连"] + names},
-            {"name": "⚡ 自动测速", "type": "url-test", "url": "http://www.gstatic.com/generate_204", "interval": 300, "proxies": names}
+            {"name": "⚡ 自动测速", "type": "url-test", "url": "http://www.gstatic.com/generate_204", "interval": 300, "proxies": names},
+            {"name": "🤖 AI 服务", "type": "select", "proxies": ["🚀 节点选择"] + names},
+            {"name": "🎥 流媒体", "type": "select", "proxies": ["🚀 节点选择"] + names},
+            {"name": "💬 电报消息", "type": "select", "proxies": ["🚀 节点选择"] + names},
+            {"name": "🍎 苹果服务", "type": "select", "proxies": ["DIRECT", "🚀 节点选择"]},
+            {"name": "🎯 全局直连", "type": "select", "proxies": ["DIRECT"]},
+            {"name": "🛑 广告拦截", "type": "select", "proxies": ["REJECT", "DIRECT"]}
         ],
-        "rules": ["DOMAIN-SUFFIX,local,🎯 全局直连", "MATCH,🚀 节点选择"]
+        "rule-providers": {
+            "reject": {"type": "http", "behavior": "domain", "url": "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/reject.txt", "path": "./ruleset/reject.yaml", "interval": 86400},
+            "proxy": {"type": "http", "behavior": "domain", "url": "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/proxy.txt", "path": "./ruleset/proxy.yaml", "interval": 86400},
+            "direct": {"type": "http", "behavior": "domain", "url": "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/direct.txt", "path": "./ruleset/direct.yaml", "interval": 86400}
+        },
+        "rules": [
+            "RULE-SET,reject,🛑 广告拦截",
+            "GEOSITE,openai,🤖 AI 服务",
+            "GEOSITE,youtube,🎥 流媒体",
+            "GEOSITE,netflix,🎥 流媒体",
+            "GEOSITE,telegram,💬 电报消息",
+            "GEOSITE,apple,🍎 苹果服务",
+            "GEOSITE,bilibili,🎯 全局直连",
+            "GEOSITE,category-games,🚀 节点选择",
+            "RULE-SET,proxy,🚀 节点选择",
+            "RULE-SET,direct,🎯 全局直连",
+            "GEOIP,LAN,🎯 全局直连",
+            "GEOIP,CN,🎯 全局直连",
+            "MATCH,🚀 节点选择"
+        ]
     }
     return to_yaml(cfg)
 
