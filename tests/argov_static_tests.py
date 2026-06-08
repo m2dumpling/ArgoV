@@ -56,6 +56,18 @@ require(
     r"json\.dumps\(i,\s*ensure_ascii=False\)",
     "Clash YAML list strings must preserve UTF-8 instead of emitting surrogate escapes such as \\ud83d\\ude80",
 )
+forbid(
+    r'Content-Disposition\',f\'inline; filename="\{safe_name\}\.yaml"',
+    "Clash subscription profile names must not include a forced .yaml suffix",
+)
+require(
+    r"safe_name = up\.quote\('\$\{NODE_NAME\}',\s*safe=''\)",
+    "subscription profile names must percent-encode all unsafe filename characters",
+)
+require(
+    r"Content-Disposition',f\"inline; filename\*=UTF-8''\{safe_name\}\"",
+    "subscription responses must expose NODE_NAME through UTF-8 filename metadata",
+)
 require(
     r"ENABLE_REALITY[\s\S]*gen_reality_shortid",
     "Reality install path must generate REALITY_SHORTID",

@@ -514,13 +514,14 @@ class H(BaseHTTPRequestHandler):
                 s.send_response(200)
                 ua = s.headers.get('User-Agent', '').lower()
                 is_clash = 'clash' in ua or 'mihomo' in ua or 'verge' in ua or qs.get('clash',[''])[0]=='1'
-                safe_name = up.quote('${NODE_NAME}')
+                safe_name = up.quote('${NODE_NAME}', safe='')
                 if is_clash and CACHE_CLASH:
                     s.send_header('Content-Type','text/yaml; charset=utf-8')
                     s.send_header('Content-Length', str(len(CACHE_CLASH)))
                     s.send_header('Connection', 'close')
                     s.send_header('Profile-Update-Interval','24')
-                    s.send_header('Content-Disposition',f'inline; filename="{safe_name}.yaml"')
+                    s.send_header('Profile-Title',safe_name)
+                    s.send_header('Content-Disposition',f"inline; filename*=UTF-8''{safe_name}")
                     s.end_headers(); s.wfile.write(CACHE_CLASH)
                 else:
                     s.send_header('Content-Type','text/plain; charset=utf-8')
@@ -528,7 +529,7 @@ class H(BaseHTTPRequestHandler):
                     s.send_header('Connection', 'close')
                     s.send_header('Profile-Update-Interval','24')
                     s.send_header('Profile-Title',safe_name)
-                    s.send_header('Content-Disposition',f'inline; filename="{safe_name}"')
+                    s.send_header('Content-Disposition',f"inline; filename*=UTF-8''{safe_name}")
                     s.end_headers(); s.wfile.write(CACHE)
             except: 
                 s.send_response(500)
