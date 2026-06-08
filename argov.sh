@@ -395,6 +395,13 @@ def to_yaml(data, level=0):
 
 def build_clash(lines):
     proxies, names = [], []
+    def split_host_port(server):
+        host, port = server.rsplit(":", 1)
+        return host.strip("[]"), int(port)
+
+    def bool_qs(v):
+        return str(v).lower() in ("1", "true", "yes")
+
     for l in lines:
         try:
             p = None
@@ -405,8 +412,10 @@ def build_clash(lines):
                 base, q = link.split("?", 1) if "?" in link else (link, "")
                 qs = urllib.parse.parse_qs(q)
                 uuid, server = base.split("@", 1)
-                host, port = server.split(":", 1)
-                p = {"name": urllib.parse.unquote(name), "type": "vless", "server": host, "port": int(port), "uuid": uuid, "udp": True}
+                host, port = split_host_port(server)
+                p = {"name": urllib.parse.unquote(name), "type": "vless", "server": host, "port": port, "uuid": uuid, "udp": True, "encryption": "none"}
+                if qs.get("flow", [""])[0]:
+                    p["flow"] = qs.get("flow", [""])[0]
                 if qs.get("security", [""])[0] == "tls":
                     p.update({"tls": True, "servername": qs.get("sni", [""])[0]})
                 elif qs.get("security", [""])[0] == "reality":
@@ -430,17 +439,41 @@ def build_clash(lines):
                 else:
                     decoded = base64.b64decode(link + "==").decode()
                     mp, server = decoded.split("@", 1)
-                host, port = server.split(":", 1)
+                host, port = split_host_port(server)
                 method, pwd = mp.split(":", 1)
-                p = {"name": urllib.parse.unquote(name), "type": "ss", "server": host, "port": int(port), "cipher": method, "password": pwd, "udp": True}
+                p = {"name": urllib.parse.unquote(name), "type": "ss", "server": host, "port": port, "cipher": method, "password": pwd, "udp": True}
             elif l.startswith("trojan://"):
                 link = l[9:]
                 name = "Trojan"
                 if "#" in link: link, name = link.split("#", 1)
                 base, q = link.split("?", 1) if "?" in link else (link, "")
+                qs = urllib.parse.parse_qs(q)
                 pwd, server = base.split("@", 1)
-                host, port = server.split(":", 1)
-                p = {"name": urllib.parse.unquote(name), "type": "trojan", "server": host, "port": int(port), "password": pwd, "udp": True}
+                host, port = split_host_port(server)
+                p = {"name": urllib.parse.unquote(name), "type": "trojan", "server": host, "port": port, "password": urllib.parse.unquote(pwd), "udp": True}
+                if qs.get("sni", [""])[0]:
+                    p["sni"] = qs.get("sni", [""])[0]
+                if qs.get("allowInsecure", [""])[0] or qs.get("skip-cert-verify", [""])[0]:
+                    p["skip-cert-verify"] = bool_qs(qs.get("allowInsecure", qs.get("skip-cert-verify", ["false"]))[0])
+            elif l.startswith("hysteria2://"):
+                link = l[12:]
+                name = "Hysteria2"
+                if "#" in link: link, name = link.split("#", 1)
+                base, q = link.split("?", 1) if "?" in link else (link, "")
+                qs = urllib.parse.parse_qs(q)
+                pwd, server = base.split("@", 1)
+                host, port = split_host_port(server)
+                p = {"name": urllib.parse.unquote(name), "type": "hysteria2", "server": host, "port": port, "password": urllib.parse.unquote(pwd), "udp": True}
+                if qs.get("sni", [""])[0]:
+                    p["sni"] = qs.get("sni", [""])[0]
+                if qs.get("insecure", [""])[0] or qs.get("skip-cert-verify", [""])[0]:
+                    p["skip-cert-verify"] = bool_qs(qs.get("insecure", qs.get("skip-cert-verify", ["false"]))[0])
+                if qs.get("obfs", [""])[0]:
+                    p["obfs"] = qs.get("obfs", [""])[0]
+                if qs.get("obfs-password", [""])[0]:
+                    p["obfs-password"] = qs.get("obfs-password", [""])[0]
+                if qs.get("alpn", [""])[0]:
+                    p["alpn"] = [i for i in qs.get("alpn", [""])[0].split(",") if i]
             
             if p:
                 proxies.append(p)
@@ -448,44 +481,78 @@ def build_clash(lines):
         except: pass
     
     if not proxies: return ""
+    proxy_names = ["Automatic", "Fallback"] + names
+    direct_proxy_names = ["DIRECT", "Proxy", "Automatic"] + names
     cfg = {
-        "mixed-port": 7890, "allow-lan": True, "mode": "rule", "log-level": "info",
+        "mixed-port": 7890, "allow-lan": True, "bind-address": "*", "mode": "rule", "log-level": "info", "external-controller": "127.0.0.1:9090",
         "unified-delay": True, "tcp-concurrent": True,
         "dns": {
-            "enable": True, "ipv6": False, "enhanced-mode": "fake-ip", "fake-ip-range": "198.18.0.1/16",
+            "enable": True, "ipv6": False, "default-nameserver": ["223.5.5.5", "119.29.29.29"], "enhanced-mode": "fake-ip", "fake-ip-range": "198.18.0.1/16", "use-hosts": True,
             "nameserver": ["https://doh.pub/dns-query", "https://dns.alidns.com/dns-query"],
-            "fallback": ["https://8.8.8.8/dns-query", "https://1.1.1.1/dns-query"]
+            "fallback": ["https://public.dns.iij.jp/dns-query", "https://dns.twnic.tw/dns-query", "https://8.8.8.8/dns-query", "https://1.1.1.1/dns-query"],
+            "fallback-filter": {"geoip": True, "geoip-code": "CN", "ipcidr": ["240.0.0.0/4", "0.0.0.0/32", "127.0.0.1/32"], "domain": ["+.google.com", "+.facebook.com", "+.twitter.com", "+.youtube.com", "+.googleapis.com", "+.googleapis.cn", "+.gvt1.com"]}
         },
         "proxies": proxies,
         "proxy-groups": [
-            {"name": "🚀 节点选择", "type": "select", "proxies": ["⚡ 自动测速", "🎯 全局直连"] + names},
-            {"name": "⚡ 自动测速", "type": "url-test", "url": "http://www.gstatic.com/generate_204", "interval": 300, "proxies": names},
-            {"name": "🤖 AI 服务", "type": "select", "proxies": ["🚀 节点选择"] + names},
-            {"name": "🎥 流媒体", "type": "select", "proxies": ["🚀 节点选择"] + names},
-            {"name": "💬 电报消息", "type": "select", "proxies": ["🚀 节点选择"] + names},
-            {"name": "🍎 苹果服务", "type": "select", "proxies": ["DIRECT", "🚀 节点选择"]},
-            {"name": "🎯 全局直连", "type": "select", "proxies": ["DIRECT"]},
-            {"name": "🛑 广告拦截", "type": "select", "proxies": ["REJECT", "DIRECT"]}
+            {"name": "Proxy", "type": "select", "proxies": proxy_names},
+            {"name": "Automatic", "type": "url-test", "url": "http://www.gstatic.com/generate_204", "interval": 86400, "proxies": names},
+            {"name": "Fallback", "type": "fallback", "url": "http://www.gstatic.com/generate_204", "interval": 7200, "proxies": names},
+            {"name": "Apple", "type": "select", "proxies": direct_proxy_names},
+            {"name": "MicroSoft", "type": "select", "proxies": direct_proxy_names},
+            {"name": "Telegram", "type": "select", "proxies": ["Proxy", "Automatic"] + names},
+            {"name": "Bilibili", "type": "select", "proxies": ["DIRECT", "Proxy", "Automatic"] + names},
+            {"name": "Bahamut", "type": "select", "proxies": ["Proxy", "Automatic"] + names},
+            {"name": "YouTube", "type": "select", "proxies": ["Proxy", "Automatic"] + names},
+            {"name": "Netflix", "type": "select", "proxies": ["Proxy", "Automatic"] + names},
+            {"name": "AIChat", "type": "select", "proxies": ["Proxy", "Automatic"] + names},
+            {"name": "Game", "type": "select", "proxies": direct_proxy_names},
+            {"name": "Final", "type": "select", "proxies": ["Proxy", "DIRECT", "Automatic"] + names}
         ],
         "rule-providers": {
             "reject": {"type": "http", "behavior": "domain", "url": "https://ghproxy.net/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/reject.txt", "path": "./ruleset/reject.yaml", "interval": 86400},
             "proxy": {"type": "http", "behavior": "domain", "url": "https://ghproxy.net/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/proxy.txt", "path": "./ruleset/proxy.yaml", "interval": 86400},
-            "direct": {"type": "http", "behavior": "domain", "url": "https://ghproxy.net/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/direct.txt", "path": "./ruleset/direct.yaml", "interval": 86400}
+            "direct": {"type": "http", "behavior": "domain", "url": "https://ghproxy.net/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/direct.txt", "path": "./ruleset/direct.yaml", "interval": 86400},
+            "gemini": {"type": "http", "behavior": "classical", "url": "https://ghproxy.net/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Gemini/Gemini.yaml", "path": "./ruleset/gemini.yaml", "interval": 86400},
+            "Claude": {"type": "http", "behavior": "classical", "url": "https://ghproxy.net/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Claude/Claude.yaml", "path": "./ruleset/Claude.yaml", "interval": 86400}
         },
         "rules": [
-            "RULE-SET,reject,🛑 广告拦截",
-            "GEOSITE,openai,🤖 AI 服务",
-            "GEOSITE,youtube,🎥 流媒体",
-            "GEOSITE,netflix,🎥 流媒体",
-            "GEOSITE,telegram,💬 电报消息",
-            "GEOSITE,apple,🍎 苹果服务",
-            "GEOSITE,bilibili,🎯 全局直连",
-            "GEOSITE,category-games,🚀 节点选择",
-            "RULE-SET,proxy,🚀 节点选择",
-            "RULE-SET,direct,🎯 全局直连",
-            "GEOIP,LAN,🎯 全局直连",
-            "GEOIP,CN,🎯 全局直连",
-            "MATCH,🚀 节点选择"
+            "DOMAIN,services.googleapis.cn,DIRECT",
+            "DOMAIN-KEYWORD,overleaf,DIRECT",
+            "RULE-SET,reject,REJECT",
+            "DOMAIN-SUFFIX,chatgpt.com,AIChat",
+            "DOMAIN-SUFFIX,openai.com,AIChat",
+            "DOMAIN-SUFFIX,pay.openai.com,AIChat",
+            "DOMAIN-SUFFIX,chat.openai.com,AIChat",
+            "DOMAIN-SUFFIX,auth0.openai.com,AIChat",
+            "DOMAIN-SUFFIX,platform.openai.com,AIChat",
+            "DOMAIN-SUFFIX,ai.com,AIChat",
+            "DOMAIN-SUFFIX,oaistatic.com,AIChat",
+            "DOMAIN-SUFFIX,oaiusercontent.com,AIChat",
+            "DOMAIN-SUFFIX,bing.com,AIChat",
+            "DOMAIN-SUFFIX,copilot.microsoft.com,AIChat",
+            "DOMAIN-SUFFIX,poe.com,AIChat",
+            "RULE-SET,Claude,AIChat",
+            "RULE-SET,gemini,AIChat",
+            "GEOSITE,openai,AIChat",
+            "GEOSITE,youtube,YouTube",
+            "GEOSITE,netflix,Netflix",
+            "GEOSITE,telegram,Telegram",
+            "GEOSITE,apple,Apple",
+            "GEOSITE,microsoft,MicroSoft",
+            "GEOSITE,bilibili,Bilibili",
+            "GEOSITE,bahamut,Bahamut",
+            "GEOSITE,category-games,Game",
+            "PROCESS-NAME,aria2c.exe,DIRECT",
+            "PROCESS-NAME,fdm.exe,DIRECT",
+            "PROCESS-NAME,Thunder.exe,DIRECT",
+            "PROCESS-NAME,Transmission.exe,DIRECT",
+            "PROCESS-NAME,uTorrent.exe,DIRECT",
+            "PROCESS-NAME,qbittorrent.exe,DIRECT",
+            "RULE-SET,proxy,Proxy",
+            "RULE-SET,direct,DIRECT",
+            "GEOIP,LAN,DIRECT",
+            "GEOIP,CN,DIRECT",
+            "MATCH,Final"
         ]
     }
     return to_yaml(cfg)
