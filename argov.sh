@@ -253,9 +253,9 @@ install_qrencode() {
 #==============================================================================
 get_sub_url() {
     if [ -n "$SUB_DOMAIN" ]; then
-        echo "https://${SUB_DOMAIN}:${SUB_PORT}/sub?token=${SUB_TOKEN}#${NODE_NAME}"
+        echo "https://${SUB_DOMAIN}:${SUB_PORT}/sub?token=${SUB_TOKEN}"
     elif [ -n "$SUB_PORT" ] && [ "$SUB_PORT" != "0" ] && [ -n "$SUB_PATH" ]; then
-        echo "http://${1:-127.0.0.1}:${SUB_PORT}${SUB_PATH}#${NODE_NAME}"
+        echo "http://${1:-127.0.0.1}:${SUB_PORT}${SUB_PATH}"
     fi
 }
 
@@ -380,7 +380,7 @@ def to_yaml(data, level=0):
                 out.append(f"{ind}{k}:")
                 out.append(to_yaml(v, level + 1))
             else:
-                v_str = json.dumps(v) if isinstance(v, str) else str(v).lower() if isinstance(v, bool) else v
+                v_str = json.dumps(v, ensure_ascii=False) if isinstance(v, str) else str(v).lower() if isinstance(v, bool) else v
                 out.append(f"{ind}{k}: {v_str}")
     elif isinstance(data, list):
         for i in data:
@@ -389,7 +389,7 @@ def to_yaml(data, level=0):
                 sub[0] = sub[0].replace("  " * (level + 1), ind + "- ", 1)
                 out.extend(sub)
             else:
-                v_str = json.dumps(i) if isinstance(i, str) else str(i).lower() if isinstance(i, bool) else i
+                v_str = json.dumps(i, ensure_ascii=False) if isinstance(i, str) else str(i).lower() if isinstance(i, bool) else i
                 out.append(f"{ind}- {v_str}")
     return "\\n".join(out)
 
