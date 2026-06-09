@@ -31,7 +31,7 @@ Beyond basic tunneling, ArgoV is supercharged with native **VLESS Reality**, **H
 bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
 ```
 
-> **🔥 Pro Tip**: After installation, simply type `ag` or `argov` in your terminal to instantly launch the management panel.
+> **🔥 Pro Tip**: After installation, simply type `ag` in your terminal to instantly launch the management panel.
 
 Non-interactive installation (for CI/CD pipelines):
 ```bash
@@ -139,7 +139,7 @@ Say goodbye to convoluted client-side chain configurations. ArgoV provides **Tra
 *Press `r` in the panel to configure.*
 
 - Paste any valid `ss://`, `vless://`, `vmess://`, or `trojan://` link to act as your exit node.
-- **Zero DNS Leak**: Uses `domainStrategy: AsIs`. DNS queries are securely encapsulated and resolved strictly on the landing node.
+- **Zero DNS Leak**: `domainStrategy: AsIs` — domains pass through the proxy protocol as-is. Only the landing VPS resolves DNS; the entry VPS never touches DNS for relayed traffic.
 - **Policy Routing**: Choose between "Global Relay" or "Split Relay" (routing only specific streaming domains through the landing node).
 - Coexists flawlessly with the WARP dual-routing engine.
 
