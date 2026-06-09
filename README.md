@@ -108,6 +108,7 @@ Press `u` in the panel to create independent limited users for friends. Each use
 - **Friend subscriptions**: limited users use `/sub?token=...` so ArgoV can identify the exact account and quota.
 - **Quota scope**: usage is counted as upload plus download from Xray per-user stats.
 - **Safe sharing**: limited users receive only VLESS Argo, VMess Argo, Reality, and built-in Hysteria2. External aggregated nodes remain available only to the default owner subscription.
+- **Monthly auto-reset**: Set a reset day (1–28, Beijing time) per user. On that day each month, usage counters automatically reset and any quota-disabled users are re-enabled. Zero manual maintenance.
 - **Upgrade path**: existing installations should run `8. Update script`, then `7. Reinstall (Keep data)` once, so the new Xray StatsService config, `argov-stats` daemon, and Xray-native Hysteria2 inbound are generated.
 
 ## Advanced Node Matrix
