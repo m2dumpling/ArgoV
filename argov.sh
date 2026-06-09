@@ -3974,6 +3974,10 @@ manage_protocols() {
 
 main_menu() {
     load_conf
+    # 无感升级：旧版 stats.py 无配额阻断逻辑 → 静默重新生成
+    if [ -f "${WORK_DIR}/stats.py" ] && ! grep -qF 'disabled and sync_config' "${WORK_DIR}/stats.py" 2>/dev/null; then
+        start_stats_service >/dev/null 2>&1 &
+    fi
     while true; do
         get_status; clear
         local uuid_short="未安装" hd=""
