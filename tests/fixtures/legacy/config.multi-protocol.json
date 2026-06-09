@@ -1,0 +1,118 @@
+{
+  "log": {
+    "loglevel": "warning"
+  },
+  "api": {
+    "tag": "api",
+    "services": ["StatsService"]
+  },
+  "stats": {},
+  "policy": {
+    "levels": {
+      "0": {
+        "statsUserUplink": true,
+        "statsUserDownlink": true
+      }
+    }
+  },
+  "inbounds": [
+    {
+      "tag": "api",
+      "listen": "127.0.0.1",
+      "port": 10085,
+      "protocol": "dokodemo-door",
+      "settings": {"address": "127.0.0.1"}
+    },
+    {
+      "tag": "argo-in",
+      "listen": "127.0.0.1",
+      "port": 18080,
+      "protocol": "vless",
+      "settings": {
+        "clients": [{"id": "11111111-1111-4111-8111-111111111111", "email": "argov-default"}],
+        "decryption": "none"
+      },
+      "streamSettings": {"network": "ws", "wsSettings": {"path": "/vless-argo"}},
+      "sniffing": {"enabled": true, "destOverride": ["http", "tls", "quic"], "routeOnly": true}
+    },
+    {
+      "tag": "vless-ws",
+      "listen": "0.0.0.0",
+      "port": 18081,
+      "protocol": "vless",
+      "settings": {
+        "clients": [{"id": "11111111-1111-4111-8111-111111111111", "email": "argov-default"}],
+        "decryption": "none"
+      },
+      "streamSettings": {"network": "ws", "security": "none", "wsSettings": {"path": "/vless-ws"}},
+      "sniffing": {"enabled": true, "destOverride": ["http", "tls", "quic"], "routeOnly": true}
+    },
+    {
+      "tag": "vmess-ws",
+      "listen": "0.0.0.0",
+      "port": 18082,
+      "protocol": "vmess",
+      "settings": {"clients": [{"id": "11111111-1111-4111-8111-111111111111", "alterId": 0, "email": "argov-default"}]},
+      "streamSettings": {"network": "ws", "security": "none", "wsSettings": {"path": "/vmess-ws"}},
+      "sniffing": {"enabled": true, "destOverride": ["http", "tls", "quic"], "routeOnly": true}
+    },
+    {
+      "tag": "reality",
+      "listen": "0.0.0.0",
+      "port": 18443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [{"id": "11111111-1111-4111-8111-111111111111", "flow": "xtls-rprx-vision", "email": "argov-default"}],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "dest": "www.amazon.com:443",
+          "serverNames": ["www.amazon.com"],
+          "privateKey": "legacy-private-key",
+          "shortIds": ["abcd1234"],
+          "fingerprint": "chrome"
+        }
+      },
+      "sniffing": {"enabled": true, "destOverride": ["http", "tls", "quic"], "routeOnly": true}
+    },
+    {
+      "tag": "hy2",
+      "listen": "0.0.0.0",
+      "port": 24443,
+      "protocol": "hysteria",
+      "settings": {
+        "version": 2,
+        "users": [{"auth": "11111111-1111-4111-8111-111111111111", "level": 0, "email": "argov-default"}],
+        "clients": [{"auth": "11111111-1111-4111-8111-111111111111", "level": 0, "email": "argov-default"}]
+      },
+      "streamSettings": {
+        "network": "hysteria",
+        "security": "tls",
+        "tlsSettings": {"alpn": ["h3"], "serverName": "hy2.example.com"},
+        "hysteriaSettings": {"version": 2, "udpIdleTimeout": 60}
+      },
+      "sniffing": {"enabled": true, "destOverride": ["http", "tls", "quic"], "routeOnly": true}
+    },
+    {
+      "tag": "ss",
+      "listen": "0.0.0.0",
+      "port": 18388,
+      "protocol": "shadowsocks",
+      "settings": {"method": "aes-256-gcm", "password": "legacy-ss-pass", "email": "argov-default"},
+      "sniffing": {"enabled": true, "destOverride": ["http", "tls", "quic"], "routeOnly": true}
+    }
+  ],
+  "outbounds": [
+    {"tag": "direct", "protocol": "freedom"},
+    {"tag": "block", "protocol": "blackhole"}
+  ],
+  "routing": {
+    "rules": [
+      {"type": "field", "inboundTag": ["api"], "outboundTag": "api"}
+    ]
+  }
+}

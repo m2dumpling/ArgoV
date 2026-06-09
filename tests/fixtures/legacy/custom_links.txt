@@ -1,0 +1,4 @@
+vless://11111111-1111-4111-8111-111111111111@legacy.example.com:443?encryption=none&security=tls&type=ws&host=legacy.example.com&path=%2Fvless-argo#Legacy-VLESS
+vmess://eyJ2IjoiMiIsInBzIjoiTGVnYWN5LVZNZXNzIiwiYWRkIjoibGVnYWN5LmV4YW1wbGUuY29tIiwicG9ydCI6IjQ0MyIsImlkIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYWlkIjoiMCIsIm5ldCI6IndzIiwidHlwZSI6Im5vbmUiLCJ0bHMiOiJ0bHMifQ==
+hysteria2://hy2pass@2001:db8::10:443?sni=hy2.example.com&insecure=1&allowInsecure=1&alpn=h3#Legacy-Hy2
+trojan://legacy-pass@[2001:db8::30]:443?security=tls&sni=trojan.example.com#Legacy-Trojan
