@@ -179,7 +179,7 @@ build_hy2_inbound() {
     qp="${qp%,}"
     local fm=""
     [ -n "$qp" ] && fm=",\"finalmask\":{\"quicParams\":{${qp}}}"
-    printf '%s' '{"port":'"${listen_port}"',"listen":"0.0.0.0","protocol":"hysteria","tag":"hy2","settings":{"version":2,"users":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}],"clients":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"alpn":["h3"],"serverName":"'"${sni}"'","certificates":[{"certificateFile":"'"${HY2_CERT_FILE}"'","keyFile":"'"${HY2_KEY_FILE}"'"}]},"hysteriaSettings":{"version":2,"udpIdleTimeout":60}$fm},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
+    printf '%s' '{"port":'"${listen_port}"',"listen":"0.0.0.0","protocol":"hysteria","tag":"hy2","settings":{"version":2,"users":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}],"clients":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"alpn":["h3"],"serverName":"'"${sni}"'","certificates":[{"certificateFile":"'"${HY2_CERT_FILE}"'","keyFile":"'"${HY2_KEY_FILE}"'"}]},"hysteriaSettings":{"version":2,"udpIdleTimeout":60}'"$fm"'},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
 }
 disable_hy2_hop_rules() {
     local listen_port="${1:-$HY2_PORT}" mport dport
