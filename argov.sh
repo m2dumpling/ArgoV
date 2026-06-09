@@ -2277,7 +2277,7 @@ edit_hy2_protocol() {
     echo -e " ${white}── Brutal 拥塞控制 ──${re}"
     local cur_cong="${HY2_CONGESTION:-}" cur_up="${HY2_UP_MBPS:-}" cur_down="${HY2_DOWN_MBPS:-}"
     local new_cong="$cur_cong" new_up="$cur_up" new_down="$cur_down"
-    local cur_label; cur_label=$([ -n "$cur_cong" ] && echo "${cur_cong} ↑${cur_up}mbps ↓${cur_down}mbps" || echo "关闭")
+    local cur_label; cur_label=$([ -n "$cur_cong" ] && echo "${cur_cong} ↑${cur_up}mbps ↓${cur_down}mbps" || echo "cubic (默认)")
     echo -e "  ${yellow}当前: ${cyan}${cur_label}${re}"
     echo ""
     echo -e "  ${green}1${re}. 关闭 (默认)"
