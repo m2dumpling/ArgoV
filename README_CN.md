@@ -31,7 +31,7 @@
 bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
 ```
 
-> **🔥 效率提示**：安装完成后，随时在终端输入 `ag` 或 `argov` 即可极速呼出管理面板。
+> **🔥 效率提示**：安装完成后，随时在终端输入 `ag` 即可极速呼出管理面板。
 
 非交互模式（适用于自动化流水线）：
 ```bash
@@ -139,7 +139,7 @@ ag
 *通过在面板按 `r` 进入。*
 
 - 粘贴任何有效的 `ss://`, `vless://`, `vmess://`, `trojan://` 链接作为落地出口。
-- **零 DNS 泄露**：启用 `domainStrategy: AsIs`，所有 DNS 查询直接打包发送至落地节点解析。
+- **零 DNS 泄露**：`domainStrategy: AsIs` — 域名由代理协议原样透传至落地，入口 VPS 不参与任何 DNS 解析。
 - **策略路由**：支持“全局中继”或“分流中继”（仅指定流媒体域名走落地）。
 - 与 WARP 双路由引擎完美共存。
 
