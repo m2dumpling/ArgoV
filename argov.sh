@@ -2274,16 +2274,22 @@ edit_hy2_protocol() {
     fi
     echo -e "  → ${green}${new_mport:-关闭}${re}\n"
 
-    echo -e " ${white}── Brutal 拥塞控制 ──${re}"
+    echo -e " ${white}── 拥塞控制 ──${re}"
     local cur_cong="${HY2_CONGESTION:-}" cur_up="${HY2_UP_MBPS:-}" cur_down="${HY2_DOWN_MBPS:-}"
     local new_cong="$cur_cong" new_up="$cur_up" new_down="$cur_down"
-    local cur_label; cur_label=$([ -n "$cur_cong" ] && echo "${cur_cong} ↑${cur_up}mbps ↓${cur_down}mbps" || echo "cubic (默认)")
+    local cur_label
+    if [ "$cur_cong" = "brutal" ]; then cur_label="brutal ↑${cur_up}mbps ↓${cur_down}mbps"
+    elif [ -n "$cur_cong" ]; then cur_label="$cur_cong"
+    else cur_label="cubic (默认)"; fi
     echo -e "  ${yellow}当前: ${cyan}${cur_label}${re}"
     echo ""
-    echo -e "  ${green}1${re}. 关闭 (默认)"
-    echo -e "  ${green}2${re}. brutal (高丢包线路暴力冲带宽)"
+    echo -e "  ${green}1${re}. cubic (默认，自适应)"
+    echo -e "  ${green}2${re}. brutal (高丢包暴力冲带宽)"
+    echo -e "  ${green}3${re}. bbr (低延迟优化)"
     echo ""
-    local def_opt=1; [ -n "$cur_cong" ] && def_opt=2
+    local def_opt=1
+    [ "$cur_cong" = "brutal" ] && def_opt=2
+    [ "$cur_cong" = "bbr" ] && def_opt=3
     echo -ne "  ${yellow}请选择 [${def_opt}]:${re} "; read hc
     case "${hc:-$def_opt}" in
         1) new_cong=""; new_up=""; new_down="" ;;
@@ -2292,19 +2298,22 @@ edit_hy2_protocol() {
            [ -n "$hu" ] && new_up="$hu" || new_up="${cur_up:-100}"
            echo -ne "  ${cyan}下行带宽 Mbps [${cur_down:-100}]: ${re}"; read hd
            [ -n "$hd" ] && new_down="$hd" || new_down="${cur_down:-100}" ;;
+        3) new_cong="bbr"; new_up=""; new_down="" ;;
         *) red_msg "无效，保持原设置"; sleep 1 ;;
     esac
-    if [ -n "$new_cong" ]; then
-        echo -e "  → ${green}${new_cong} ↑${new_up}mbps ↓${new_down}mbps${re}\n"
+    if [ "$new_cong" = "brutal" ]; then
+        echo -e "  → ${green}brutal ↑${new_up}mbps ↓${new_down}mbps${re}\n"
+    elif [ -n "$new_cong" ]; then
+        echo -e "  → ${green}${new_cong}${re}\n"
     else
-        echo -e "  → ${green}关闭${re}\n"
+        echo -e "  → ${green}cubic (默认)${re}\n"
     fi
 
     echo -e " ${white}确认修改:${re}"
     echo -e "  SNI: ${cyan}${cur_sni}${re} → ${green}${new_sni}${re}"
     echo -e "  端口: ${cyan}${cur_port}${re} → ${green}${new_port}${re}"
     echo -e "  跳跃: ${cyan}${cur_mport:-关闭}${re} → ${green}${new_mport:-关闭}${re}"
-    [ -n "$new_cong" ] && echo -e "  Brutal: ${green}${new_cong} ↑${new_up}mbps ↓${new_down}mbps${re}"
+    [ -n "$new_cong" ] && echo -e "  拥塞: ${green}${new_cong}$([ "$new_cong" = "brutal" ] && echo " ↑${new_up}mbps ↓${new_down}mbps")${re}"
     echo ""
     echo -ne "  ${yellow}确认? (y/n) [y]: ${re}"
     read cf
