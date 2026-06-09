@@ -167,9 +167,9 @@ is_port_range() {
 build_hy2_inbound() {
     local listen_port="$1" sni="$2" auth="$3" email="${4:-argov-default}" mport="$5"
     if [ -n "$mport" ]; then
-        printf '%s' '{"port":'"${listen_port}"',"listen":"0.0.0.0","protocol":"hysteria","tag":"hy2","settings":{"version":2,"users":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}],"clients":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"alpn":["h3"],"serverName":"'"${sni}"'","certificates":[{"certificateFile":"'"${HY2_CERT_FILE}"'","keyFile":"'"${HY2_KEY_FILE}"'"}]},"hysteriaSettings":{"version":2,"udpIdleTimeout":60},"finalmask":{"quicParams":{"udpHop":{"ports":"'"${mport}"'","interval":30}}}}}'
+        printf '%s' '{"port":'"${listen_port}"',"listen":"0.0.0.0","protocol":"hysteria","tag":"hy2","settings":{"version":2,"users":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}],"clients":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"alpn":["h3"],"serverName":"'"${sni}"'","certificates":[{"certificateFile":"'"${HY2_CERT_FILE}"'","keyFile":"'"${HY2_KEY_FILE}"'"}]},"hysteriaSettings":{"version":2,"udpIdleTimeout":60},"finalmask":{"quicParams":{"udpHop":{"ports":"'"${mport}"'","interval":30}}}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
     else
-        printf '%s' '{"port":'"${listen_port}"',"listen":"0.0.0.0","protocol":"hysteria","tag":"hy2","settings":{"version":2,"users":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}],"clients":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"alpn":["h3"],"serverName":"'"${sni}"'","certificates":[{"certificateFile":"'"${HY2_CERT_FILE}"'","keyFile":"'"${HY2_KEY_FILE}"'"}]},"hysteriaSettings":{"version":2,"udpIdleTimeout":60}}}'
+        printf '%s' '{"port":'"${listen_port}"',"listen":"0.0.0.0","protocol":"hysteria","tag":"hy2","settings":{"version":2,"users":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}],"clients":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"alpn":["h3"],"serverName":"'"${sni}"'","certificates":[{"certificateFile":"'"${HY2_CERT_FILE}"'","keyFile":"'"${HY2_KEY_FILE}"'"}]},"hysteriaSettings":{"version":2,"udpIdleTimeout":60}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
     fi
 }
 disable_hy2_hop_rules() {
@@ -399,8 +399,13 @@ def vmess_clients():
 def hy2_users():
     return [{"auth": u["uuid"], "level": 0, "email": u["email"]} for u in users]
 
+ROUTE_SNIFFING = {"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": True}
+ROUTE_SNIFF_TAGS = {"argo-in", "vless-ws", "vmess-ws", "reality", "hy2", "ss"}
+
 for inbound in cfg.get("inbounds", []):
     tag = inbound.get("tag")
+    if tag in ROUTE_SNIFF_TAGS:
+        inbound["sniffing"] = dict(ROUTE_SNIFFING)
     if tag == "argo-in":
         inbound.setdefault("settings", {})["clients"] = vless_clients(True)
     elif tag == "vless-ws":
@@ -2114,11 +2119,11 @@ build_xray_config() {
     fallbacks='{"path":"/vmess-argo","dest":'"${VMESS_WS_PORT}"'},{"path":"/vless-argo","dest":'"${VLESS_WS_PORT}"'},{"dest":'"${VLESS_WS_PORT}"'}'
 
     # 1. Argo 路由入口
-    inbounds+='{"port":'"${ARGO_PORT}"',"listen":"127.0.0.1","protocol":"vless","tag":"argo-in","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision","email":"argov-default"}],"decryption":"none","fallbacks":['"${fallbacks}"']},"streamSettings":{"network":"tcp"}}'
+    inbounds+='{"port":'"${ARGO_PORT}"',"listen":"127.0.0.1","protocol":"vless","tag":"argo-in","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision","email":"argov-default"}],"decryption":"none","fallbacks":['"${fallbacks}"']},"streamSettings":{"network":"tcp"},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
     # 2. VLESS WS
-    inbounds+=',{"port":'"${VLESS_WS_PORT}"',"listen":"127.0.0.1","protocol":"vless","tag":"vless-ws","settings":{"clients":[{"id":"'"${uuid}"'","email":"argov-default"}],"decryption":"none"},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vless-argo"}}}'
+    inbounds+=',{"port":'"${VLESS_WS_PORT}"',"listen":"127.0.0.1","protocol":"vless","tag":"vless-ws","settings":{"clients":[{"id":"'"${uuid}"'","email":"argov-default"}],"decryption":"none"},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vless-argo"}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
     # 3. VMess WS
-    inbounds+=',{"port":'"${VMESS_WS_PORT}"',"listen":"127.0.0.1","protocol":"vmess","tag":"vmess-ws","settings":{"clients":[{"id":"'"${uuid}"'","alterId":0,"email":"argov-default"}]},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vmess-argo"}}}'
+    inbounds+=',{"port":'"${VMESS_WS_PORT}"',"listen":"127.0.0.1","protocol":"vmess","tag":"vmess-ws","settings":{"clients":[{"id":"'"${uuid}"'","alterId":0,"email":"argov-default"}]},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vmess-argo"}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
     # 4. Reality (opt)
     [ "$ENABLE_REALITY" = 1 ] && inbounds+=',{"port":'"${REALITY_PORT}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision","email":"argov-default"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${REALITY_SNI}"':443","serverNames":["'"${REALITY_SNI}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":["'"${REALITY_SHORTID}"'"],"fingerprint":"chrome"}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
     # 5. Hysteria2 (opt)
@@ -2128,7 +2133,7 @@ build_xray_config() {
         inbounds+=",${hy2_inbound}"
     fi
     # 6. SS (opt)
-    [ "$ENABLE_SS" = 1 ] && inbounds+=',{"port":'"${SS_PORT}"',"listen":"0.0.0.0","protocol":"shadowsocks","tag":"ss","settings":{"method":"'"${SS_METHOD}"'","password":"'"${ss_pass}"'","network":"tcp,udp"}}'
+    [ "$ENABLE_SS" = 1 ] && inbounds+=',{"port":'"${SS_PORT}"',"listen":"0.0.0.0","protocol":"shadowsocks","tag":"ss","settings":{"method":"'"${SS_METHOD}"'","password":"'"${ss_pass}"'","network":"tcp,udp"},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
     inbounds+=']'
 
     cat > "$CONFIG_FILE" << XRAYCONF
@@ -2973,13 +2978,13 @@ relay_apply() {
     cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
 
     local py_err; py_err=$(mktemp /tmp/relay_err.XXXXXX)
-    python3 2>"$py_err" << PYEOF
-import json, base64, re, sys
-from urllib.parse import parse_qs, unquote
+    RELAY_LINK_ENV="$RELAY_LINK" RELAY_MODE_ENV="$RELAY_MODE" python3 2>"$py_err" << PYEOF
+import json, base64, os, re, sys
+from urllib.parse import parse_qs, unquote, urlsplit
 
 CONFIG = '${CONFIG_FILE}'
-RELAY_LINK = '${RELAY_LINK}'
-RELAY_MODE = '${RELAY_MODE}'
+RELAY_LINK = os.environ.get('RELAY_LINK_ENV', '')
+RELAY_MODE = os.environ.get('RELAY_MODE_ENV', 'all')
 DOMAINS = ${domains_json}
 
 def decode_b64(s):
@@ -2988,7 +2993,87 @@ def decode_b64(s):
     s = s.replace('-', '+').replace('_', '/')
     return base64.b64decode(s).decode('utf-8', errors='replace')
 
+def split_host_port(server, default_port=443):
+    server = server.split('?', 1)[0].split('#', 1)[0]
+    if server.startswith('['):
+        host, _, rest = server[1:].partition(']')
+        port = int(rest[1:]) if rest.startswith(':') and rest[1:] else default_port
+        return host, port
+    if server.count(':') > 1:
+        return server, default_port
+    host, sep, raw_port = server.rpartition(':')
+    if sep and raw_port.isdigit():
+        return host, int(raw_port)
+    return server, default_port
+
+def parse_url(link):
+    u = urlsplit(link)
+    host = u.hostname or ''
+    port = u.port or 443
+    return u, host, port, parse_qs(u.query)
+
+def apply_stream(out, network='tcp', security='none', sni='', qs=None):
+    qs = qs or {}
+    stream = {"network": network or "tcp"}
+    if security == 'reality':
+        stream["security"] = "reality"
+        stream["realitySettings"] = {
+            "serverName": sni,
+            "publicKey": qs.get('pbk', [''])[0],
+            "shortId": qs.get('sid', [''])[0],
+            "fingerprint": qs.get('fp', ['chrome'])[0]
+        }
+    elif security == 'tls':
+        stream["security"] = "tls"
+        tls = {"serverName": sni} if sni else {}
+        if qs.get('allowInsecure', qs.get('insecure', ['']))[0] in ('1', 'true', 'yes'):
+            tls["allowInsecure"] = True
+        stream["tlsSettings"] = tls
+    elif security and security != 'none':
+        stream["security"] = security
+
+    if stream["network"] == "ws":
+        path = unquote(qs.get('path', ['/'])[0] or '/')
+        host = qs.get('host', [''])[0]
+        ws = {"path": path}
+        if host:
+            ws["headers"] = {"Host": host}
+        stream["wsSettings"] = ws
+
+    if stream["network"] != "tcp" or stream.get("security") not in (None, "none"):
+        out["streamSettings"] = stream
+
+ROUTE_SNIFFING = {"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": True}
+ROUTE_SNIFF_TAGS = {"argo-in", "vless-ws", "vmess-ws", "reality", "hy2", "ss"}
+DOMAIN_PREFIXES = ("domain:", "full:", "regexp:", "keyword:", "geosite:", "ext:", "dotless:")
+
+def enable_route_sniffing(config):
+    for inbound in config.get("inbounds", []):
+        if inbound.get("tag") in ROUTE_SNIFF_TAGS:
+            inbound["sniffing"] = dict(ROUTE_SNIFFING)
+
 # --- 解析链接 ---
+def normalize_relay_domains(items):
+    out = []
+    seen = set()
+    for raw in items:
+        d = str(raw).strip()
+        if not d:
+            continue
+        if d.startswith(("http://", "https://")):
+            d = urlsplit(d).hostname or ""
+        if d.startswith("*."):
+            d = d[2:]
+        d = d.strip().strip("/")
+        if not d:
+            continue
+        if not d.startswith(DOMAIN_PREFIXES):
+            d = "domain:" + d.lstrip(".")
+        if d not in seen:
+            seen.add(d)
+            out.append(d)
+    return out
+
 proto = addr = port = ''
 out = {}  # Xray outbound
 
@@ -3007,9 +3092,7 @@ if RELAY_LINK.startswith('ss://'):
     if '@' in rest:
         # SIP002: userinfo@addr:port
         userinfo, addr_part = rest.split('@', 1)
-        addr = addr_part.split(':')[0]
-        p = re.search(r':(\d+)', addr_part)
-        port = int(p.group(1)) if p else 443
+        addr, port = split_host_port(addr_part)
         raw = decode_b64(userinfo)
         parts = raw.split(':', 1)
         method = parts[0] if parts[0] else method
@@ -3017,11 +3100,13 @@ if RELAY_LINK.startswith('ss://'):
     else:
         # Legacy: 整个字符串是一个 base64
         raw = decode_b64(rest)
-        m2 = re.search(r'^([^:]+):(.+?)@([^:]+):(\d+)', raw)
-        if m2:
-            method, password, addr, port = m2.group(1), m2.group(2), m2.group(3), int(m2.group(4))
-        else:
+        if '@' not in raw:
             raise ValueError(f'Cannot parse SS link format: {rest[:40]}...')
+        mp, addr_part = raw.rsplit('@', 1)
+        addr, port = split_host_port(addr_part)
+        parts = mp.split(':', 1)
+        method = parts[0] if parts[0] else method
+        password = parts[1] if len(parts) > 1 else ''
     out = {
         "tag": "relay-out",
         "protocol": "shadowsocks",
@@ -3031,46 +3116,24 @@ if RELAY_LINK.startswith('ss://'):
 
 elif RELAY_LINK.startswith('vless://'):
     proto = 'vless'
-    # vless://UUID@IP:PORT?params#name
-    m = re.search(r'vless://([^@]+)@([^:]+):(\d+)(\?.*?)?(#.*)?$', RELAY_LINK)
-    if m:
-        uuid = m.group(1)
-        addr = m.group(2)
-        port = int(m.group(3))
-        qs = parse_qs(unquote(m.group(4) or ''))
-        flow = qs.get('flow', [''])[0]
-        security = qs.get('security', ['none'])[0]
-        sni = qs.get('sni', [''])[0]
-        pbk = qs.get('pbk', [''])[0]
-        sid = qs.get('sid', [''])[0]
-        fp = qs.get('fp', ['chrome'])[0]
-        out = {
-            "tag": "relay-out",
-            "protocol": "vless",
-            "domainStrategy": "AsIs",
-            "settings": {
-                "vnext": [{"address": addr, "port": port, "users": [{"id": uuid, "encryption": "none", "flow": flow}]}]
-            }
-        }
-        if security == 'reality':
-            out["streamSettings"] = {
-                "network": "tcp",
-                "security": "reality",
-                "realitySettings": {
-                    "serverName": sni,
-                    "publicKey": pbk,
-                    "shortId": sid,
-                    "fingerprint": fp
-                }
-            }
-        elif security == 'tls' and sni:
-            out["streamSettings"] = {
-                "network": "ws",
-                "security": "tls",
-                "tlsSettings": {"serverName": sni}
-            }
-    else:
-        raise ValueError(f'Invalid vless link')
+    u, addr, port, qs = parse_url(RELAY_LINK)
+    uuid = unquote(u.username or '')
+    if not uuid or not addr:
+        raise ValueError('Invalid vless link')
+    flow = qs.get('flow', [''])[0]
+    user = {"id": uuid, "encryption": "none"}
+    if flow:
+        user["flow"] = flow
+    out = {
+        "tag": "relay-out",
+        "protocol": "vless",
+        "domainStrategy": "AsIs",
+        "settings": {"vnext": [{"address": addr, "port": port, "users": [user]}]}
+    }
+    network = qs.get('type', qs.get('network', ['tcp']))[0] or 'tcp'
+    security = qs.get('security', ['none'])[0]
+    sni = qs.get('sni', qs.get('servername', ['']))[0]
+    apply_stream(out, network, security, sni, qs)
 
 elif RELAY_LINK.startswith('vmess://'):
     proto = 'vmess'
@@ -3081,35 +3144,32 @@ elif RELAY_LINK.startswith('vmess://'):
     port = int(vm.get('port', 443))
     uuid = vm.get('id', '')
     sni = vm.get('sni', addr)
+    network = vm.get('net', 'tcp') or 'tcp'
     out = {
         "tag": "relay-out",
         "protocol": "vmess",
         "domainStrategy": "AsIs",
         "settings": {"vnext": [{"address": addr, "port": port, "users": [{"id": uuid, "alterId": 0}]}]}
     }
-    if vm.get('tls') == 'tls':
-        out["streamSettings"] = {"network": "ws", "security": "tls", "tlsSettings": {"serverName": sni}}
+    qs = {"path": [vm.get('path', '/')], "host": [vm.get('host', '')]}
+    apply_stream(out, network, 'tls' if vm.get('tls') == 'tls' else 'none', sni, qs)
 
 elif RELAY_LINK.startswith('trojan://'):
     proto = 'trojan'
-    # trojan://PASSWORD@IP:PORT?params#name
-    m = re.search(r'trojan://([^@]+)@([^:]+):(\d+)(\?.*?)?(#.*)?$', RELAY_LINK)
-    if m:
-        password = m.group(1)
-        addr = m.group(2)
-        port = int(m.group(3))
-        qs = parse_qs(unquote(m.group(4) or ''))
-        sni = qs.get('sni', [''])[0]
-        out = {
-            "tag": "relay-out",
-            "protocol": "trojan",
-            "domainStrategy": "AsIs",
-            "settings": {"servers": [{"address": addr, "port": port, "password": password}]}
-        }
-        if sni:
-            out["streamSettings"] = {"network": "tcp", "security": "tls", "tlsSettings": {"serverName": sni}}
-    else:
-        raise ValueError(f'Invalid trojan link')
+    u, addr, port, qs = parse_url(RELAY_LINK)
+    password = unquote(u.username or '')
+    if not password or not addr:
+        raise ValueError('Invalid trojan link')
+    out = {
+        "tag": "relay-out",
+        "protocol": "trojan",
+        "domainStrategy": "AsIs",
+        "settings": {"servers": [{"address": addr, "port": port, "password": password}]}
+    }
+    network = qs.get('type', qs.get('network', ['tcp']))[0] or 'tcp'
+    sni = qs.get('sni', qs.get('peer', ['']))[0]
+    security = qs.get('security', ['tls' if sni else 'none'])[0]
+    apply_stream(out, network, security, sni, qs)
 
 else:
     raise ValueError(f'Unsupported protocol: {proto}')
@@ -3121,6 +3181,8 @@ if not addr or not port or port <= 0:
 # --- 注入 config.json ---
 with open(CONFIG, 'r') as f:
     config = json.load(f)
+
+enable_route_sniffing(config)
 
 # 清理旧 relay-out (只清 relay，不动 warp)
 config['outbounds'] = [o for o in config['outbounds'] if o.get('tag') != 'relay-out']
@@ -3134,9 +3196,10 @@ config['outbounds'].append(out)
 if RELAY_MODE == 'all':
     relay_rule = {"type": "field", "network": "tcp,udp", "outboundTag": "relay-out"}
 else:
-    if not DOMAINS:
+    relay_domains = normalize_relay_domains(DOMAINS)
+    if not relay_domains:
         raise ValueError('分流模式但无分流域名')
-    relay_rule = {"type": "field", "domain": DOMAINS, "outboundTag": "relay-out"}
+    relay_rule = {"type": "field", "domain": relay_domains, "outboundTag": "relay-out"}
 
 config['routing']['rules'].insert(0, relay_rule)
 
