@@ -1,0 +1,4 @@
+vless://11111111-1111-4111-8111-111111111111@relay.example.com:443?encryption=none&security=reality&type=tcp&sni=www.microsoft.com&fp=chrome&pbk=relaypubkey&sid=abcd1234&flow=xtls-rprx-vision#Relay-Reality-Vision
+vless://22222222-2222-4222-8222-222222222222@ws-relay.example.com:443?encryption=none&security=tls&type=ws&host=ws-relay.example.com&path=%2Fedge#Relay-WS-TLS
+trojan://legacy-pass@[2001:db8::55]:443?security=tls&sni=trojan-relay.example.com&type=tcp#Relay-Trojan-IPv6
+hysteria2://hy2pass@hy2-relay.example.com:443?sni=hy2-relay.example.com&insecure=1&allowInsecure=1&alpn=h3&mport=25000-25010#Relay-Hy2-MPort

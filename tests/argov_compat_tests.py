@@ -10,10 +10,19 @@ ROOT = Path(__file__).resolve().parent
 FIXTURES = ROOT / "fixtures" / "legacy"
 REQUIRED_FIXTURES = (
     "argov.pre-supply-chain.conf",
+    "argov.fixed-argo.conf",
+    "argov.http-sub.conf",
+    "argov.minimal-old.conf",
+    "argov.quoted-node.conf",
     "argov.users.v1.json",
+    "argov.users.missing-version.json",
+    "argov.users.quota-disabled.json",
+    "argov.users.single-default.json",
     "config.multi-protocol.json",
     "custom_links.txt",
+    "relay_links.txt",
     "warp_domains.txt",
+    "warp_domains.mixed.txt",
 )
 
 
@@ -74,6 +83,30 @@ def assert_legacy_conf(path: Path) -> None:
     require(defaults["CLOUDFLARED_SHA256"] == "", "old configs must default CLOUDFLARED_SHA256 to empty")
 
 
+def assert_conf_variants() -> None:
+    minimal = parse_shell_assignments(FIXTURES / "argov.minimal-old.conf")
+    require(minimal.get("UUID_CUSTOM") == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "minimal old config must preserve UUID_CUSTOM")
+    require(minimal.get("SUB_TOKEN") == "mintoken001", "minimal old config must preserve SUB_TOKEN")
+    for new_key in ("XRAY_VERSION", "XRAY_SHA256", "CLOUDFLARED_VERSION", "CLOUDFLARED_SHA256"):
+        require(new_key not in minimal, f"minimal old config must not predefine {new_key}")
+
+    fixed = parse_shell_assignments(FIXTURES / "argov.fixed-argo.conf")
+    require(fixed.get("ARGO_MODE") == "fixed", "fixed Argo legacy config must keep ARGO_MODE=fixed")
+    require(fixed.get("ARGO_FIXED_DOMAIN") == "fixed.legacy.example.com", "fixed Argo legacy domain must be preserved")
+    require(fixed.get("ARGO_AUTH") == "legacy-fixed-token", "fixed Argo legacy token must be preserved")
+    require(fixed.get("LAST_ARGO_DOMAIN") == "fixed.legacy.example.com", "fixed Argo last domain must stay stable")
+
+    http = parse_shell_assignments(FIXTURES / "argov.http-sub.conf")
+    require(http.get("SUB_DOMAIN") == "", "HTTP subscription legacy config must allow empty SUB_DOMAIN")
+    require(http.get("SUB_PORT") == "8080", "HTTP subscription legacy port must be preserved")
+    require(http.get("SUB_PATH") == "/localsubtoken", "HTTP subscription legacy path must be preserved")
+    require(http.get("CDN_PORT") == "80", "HTTP/CDN legacy port must be preserved")
+
+    quoted = parse_shell_assignments(FIXTURES / "argov.quoted-node.conf")
+    require(quoted.get("NODE_NAME") == "ArgoV 测试 Node's #1", "quoted UTF-8 node names must parse exactly")
+    require(quoted.get("CDN_DOMAIN") == "cdn quoted.example.com", "quoted domains with spaces must parse as one shell value")
+
+
 def assert_users(path: Path) -> None:
     data = json.loads(path.read_text(encoding="utf-8"))
     require(isinstance(data, dict), "users fixture must be a JSON object")
@@ -87,6 +120,24 @@ def assert_users(path: Path) -> None:
         require("quota_bytes" in user, f"user {user.get('name')} must track quota_bytes")
         require("used_up" in user and "used_down" in user, f"user {user.get('name')} must track bidirectional usage")
         require("enabled" in user, f"user {user.get('name')} must track enabled state")
+
+
+def assert_user_variants() -> None:
+    missing_version = json.loads((FIXTURES / "argov.users.missing-version.json").read_text(encoding="utf-8"))
+    require("version" not in missing_version, "missing-version fixture must model pre-version user stores")
+    require(missing_version.get("users", [{}])[0].get("token") == "noversion-token", "pre-version user token must be preserved")
+
+    single = json.loads((FIXTURES / "argov.users.single-default.json").read_text(encoding="utf-8"))
+    require(len(single.get("users", [])) == 1, "single-default fixture must model old one-user installs")
+    require(single["users"][0].get("name") == "default", "single-default fixture must keep default user name")
+    require(single["users"][0].get("quota_bytes") == 0, "single-default fixture must keep unlimited quota")
+
+    quota = json.loads((FIXTURES / "argov.users.quota-disabled.json").read_text(encoding="utf-8"))
+    users = quota.get("users", [])
+    disabled = next((u for u in users if u.get("name") == "disabled-user"), None)
+    exceeded = next((u for u in users if u.get("name") == "quota-exceeded"), None)
+    require(disabled is not None and disabled.get("enabled") is False, "disabled users must remain disabled after migration")
+    require(exceeded is not None and exceeded.get("used_up", 0) + exceeded.get("used_down", 0) > exceeded.get("quota_bytes", 0), "quota-exceeded fixture must model a user over quota")
 
 
 def assert_xray_config(path: Path) -> None:
@@ -112,13 +163,31 @@ def assert_line_fixture(path: Path, minimum: int, expected: set[str]) -> None:
         require(item in items, f"{path.name} must include {item}")
 
 
+def assert_relay_links(path: Path) -> None:
+    lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    require(any(line.startswith("vless://") and "security=reality" in line and "flow=xtls-rprx-vision" in line for line in lines), "relay fixtures must cover VLESS Reality Vision")
+    require(any(line.startswith("vless://") and "type=ws" in line and "security=tls" in line for line in lines), "relay fixtures must cover WS/TLS stream settings")
+    require(any(line.startswith("trojan://") and "@[2001:db8::" in line for line in lines), "relay fixtures must cover Trojan bracketed IPv6 endpoints")
+    require(any(line.startswith("hysteria2://") and "mport=25000-25010" in line for line in lines), "relay fixtures must cover Hysteria2 port hopping")
+
+
+def assert_warp_mixed_domains(path: Path) -> None:
+    lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    require("domain:openai.com" in lines, "WARP mixed fixture must include already-normalized domain matchers")
+    require("*.anthropic.com" in lines, "WARP mixed fixture must include wildcard domains")
+    require("https://chat.example.com/path?q=1" in lines, "WARP mixed fixture must include URL-shaped input")
+    require("full:api.example.com" in lines, "WARP mixed fixture must include full: matchers")
+
+
 def main() -> None:
     require(FIXTURES.is_dir(), "missing tests/fixtures/legacy compatibility samples")
     for name in REQUIRED_FIXTURES:
         require((FIXTURES / name).is_file(), f"missing legacy fixture: {name}")
 
     assert_legacy_conf(FIXTURES / "argov.pre-supply-chain.conf")
+    assert_conf_variants()
     assert_users(FIXTURES / "argov.users.v1.json")
+    assert_user_variants()
     assert_xray_config(FIXTURES / "config.multi-protocol.json")
     assert_line_fixture(
         FIXTURES / "custom_links.txt",
@@ -130,6 +199,8 @@ def main() -> None:
         minimum=5,
         expected={"google.com", "youtube.com", "openai.com"},
     )
+    assert_relay_links(FIXTURES / "relay_links.txt")
+    assert_warp_mixed_domains(FIXTURES / "warp_domains.mixed.txt")
 
 
 if __name__ == "__main__":

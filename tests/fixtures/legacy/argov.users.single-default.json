@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "users": [
+    {
+      "name": "default",
+      "uuid": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      "token": "single-default-token",
+      "quota_bytes": 0,
+      "used_up": 1024,
+      "used_down": 2048,
+      "enabled": true
+    }
+  ]
+}

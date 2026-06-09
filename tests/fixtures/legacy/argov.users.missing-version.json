@@ -1,0 +1,13 @@
+{
+  "users": [
+    {
+      "name": "default",
+      "uuid": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      "token": "noversion-token",
+      "quota_bytes": 0,
+      "used_up": 0,
+      "used_down": 0,
+      "enabled": true
+    }
+  ]
+}

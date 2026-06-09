@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "users": [
+    {
+      "name": "disabled-user",
+      "uuid": "12121212-1212-4212-8212-121212121212",
+      "token": "disabled-legacy-token",
+      "quota_bytes": 1073741824,
+      "used_up": 0,
+      "used_down": 0,
+      "enabled": false
+    },
+    {
+      "name": "quota-exceeded",
+      "uuid": "34343434-3434-4434-8434-343434343434",
+      "token": "quota-exceeded-token",
+      "quota_bytes": 1048576,
+      "used_up": 524288,
+      "used_down": 1048577,
+      "enabled": true
+    }
+  ]
+}
