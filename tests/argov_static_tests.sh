@@ -15,6 +15,7 @@ if [ -z "$PYTHON_BIN" ]; then
   exit 1
 fi
 "$PYTHON_BIN" tests/argov_static_tests.py "$SCRIPT"
+"$PYTHON_BIN" tests/argov_compat_tests.py
 
 if ! grep -q 'StandardOutput=append:${TUNNEL_LOG}' "$SCRIPT"; then
   echo "systemd temp tunnel service must append stdout to TUNNEL_LOG" >&2

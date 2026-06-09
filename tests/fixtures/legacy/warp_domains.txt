@@ -1,0 +1,6 @@
+google.com
+googleapis.com
+youtube.com
+openai.com
+chat.openai.com
+anthropic.com
