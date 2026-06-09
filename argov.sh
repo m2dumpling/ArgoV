@@ -93,6 +93,7 @@ CDN_DOMAINS[13]="cdns.doon.eu.org (综合优选·Doorn)"
 #==============================================================================
 # 工具
 #==============================================================================
+# MODULE: platform and filesystem helpers
 port_in_use_tcp() { (netstat -tlnp 2>/dev/null || ss -tlnp 2>/dev/null || ss -tln 2>/dev/null) | grep -Eq "[:.]$1[[:space:]]" || lsof -iTCP:"$1" -sTCP:LISTEN &>/dev/null; }
 port_in_use_udp() { (ss -lunp 2>/dev/null || ss -lun 2>/dev/null || netstat -ulnp 2>/dev/null || netstat -uln 2>/dev/null) | grep -Eq "[:.]$1[[:space:]]" || lsof -iUDP:"$1" &>/dev/null; }
 port_in_use() { port_in_use_tcp "$1"; }
@@ -256,6 +257,28 @@ secure_work_dir_permissions() {
     chmod 700 "${WORK_DIR}/xray" "${WORK_DIR}/argo" "${WORK_DIR}/qrencode" "${WORK_DIR}/argov-tunnel.sh" "${WORK_DIR}/hy2-hop.sh" "${WORK_DIR}/sub_gen.sh" 2>/dev/null || true
     chmod 600 "${WORK_DIR}/sub.py" "${WORK_DIR}/stats.py" 2>/dev/null || true
 }
+install_ag_wrapper() {
+    local mode="${1:-}"
+    if [ "$mode" = "forward_args" ]; then
+        cat > "$SCRIPT_PATH" << 'ARGOWRAP'
+#!/usr/bin/env bash
+T="/tmp/argov.sh"
+curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 -o "$T" https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh
+[ -s "$T" ] && bash -n "$T" && bash "$T" "$@"
+ARGOWRAP
+    else
+        cat > "$SCRIPT_PATH" << 'ARGOWRAP'
+#!/usr/bin/env bash
+T=$(mktemp /tmp/argov.XXXXXX)
+curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 -o "$T" https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh
+[ -s "$T" ] && bash -n "$T" && bash "$T"
+rm -f "$T"
+ARGOWRAP
+    fi
+    chmod +x "$SCRIPT_PATH"
+}
+
+# MODULE: download and supply-chain helpers
 begin_argov_lock() {
     mkdir -p "$WORK_DIR" 2>/dev/null || true
     exec 9>"${WORK_DIR}/.argov.lock" 2>/dev/null || return 0
@@ -449,6 +472,7 @@ PYEOF
 rand_token() { openssl rand -hex 16 2>/dev/null || printf '%08x%08x%08x%08x' $RANDOM $RANDOM $RANDOM $RANDOM; }
 rand_uuid() { cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen 2>/dev/null || printf '%08x-%04x-%04x-%04x-%012x\n' $RANDOM $RANDOM $RANDOM $RANDOM $RANDOM; }
 py_bin() { command -v python3 || command -v python || true; }
+# MODULE: user quota state
 ensure_users_file() {
     local py uuid token
     py=$(py_bin); [ -z "$py" ] && return 1
@@ -810,6 +834,7 @@ gen_ss2022_pass() {
 }
 
 # --- 持久化 ---
+# MODULE: config persistence
 load_conf() {
     if [ -f "$USER_CONF" ]; then
         if is_safe_conf_file "$USER_CONF"; then
@@ -873,6 +898,7 @@ save_conf() {
 #==============================================================================
 # 链接生成
 #==============================================================================
+# MODULE: subscription generation and serving
 gen_vmess_link() {
     local json; json="{\"v\":\"2\",\"ps\":\"${5:-${NODE_NAME}-VMess}\",\"add\":\"${3:-$(get_cdn)}\",\"port\":\"${4:-$(get_cdn_port)}\",\"id\":\"$1\",\"aid\":\"0\",\"scy\":\"none\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"$2\",\"path\":\"/vmess-argo?ed=2560\",\"tls\":\"tls\",\"sni\":\"$2\",\"alpn\":\"\",\"fp\":\"\"}"
     printf '%s' "vmess://$(printf '%s' "$json" | base64 -w0 2>/dev/null || printf '%s' "$json" | base64 | tr -d '\n')"
@@ -1751,6 +1777,7 @@ show_node() {
 #==============================================================================
 # 服务控制
 #==============================================================================
+# MODULE: service lifecycle
 start_services() {
     yellow_msg "Starting..."
     systemctl start xray argov-tunnel argov-stats 2>/dev/null || true
@@ -2145,6 +2172,7 @@ select_protocols() {
 #==============================================================================
 # 交互式安装
 #==============================================================================
+# MODULE: install and update
 interactive_install() {
     load_conf; clear
     echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
@@ -2344,14 +2372,7 @@ EOF
     fi
     green_msg "  完成"
 
-cat > "$SCRIPT_PATH" << 'ARGOWRAP'
-#!/usr/bin/env bash
-T=$(mktemp /tmp/argov.XXXXXX)
-curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 -o "$T" https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh
-[ -s "$T" ] && bash -n "$T" && bash "$T"
-rm -f "$T"
-ARGOWRAP
-    chmod +x "$SCRIPT_PATH"; save_conf
+    install_ag_wrapper; save_conf
 
     local hd ip; [ "$ARGO_MODE" = "fixed-token" ] && hd="$ARGO_FIXED_DOMAIN" || hd=$(get_argo_domain)
     [ -z "$hd" ] && [ "$ARGO_MODE" != "fixed-token" ] && { sleep 3; hd=$(get_argo_domain); }
@@ -3130,6 +3151,7 @@ echo_relay_status() {
     fi
 }
 
+# MODULE: relay routing
 relay_menu() {
     load_conf
     while true; do
@@ -3576,6 +3598,7 @@ WARP_DOMAIN_FILE="/etc/xray/warp_domains.txt"
 WARP_DEFAULT_DOMAINS="google.com googleapis.com googleusercontent.com gstatic.com youtube.com ytimg.com googlevideo.com ggpht.com google-analytics.com googleadservices.com"
 
 # === WARP 主入口 ===
+# MODULE: WARP routing
 warp_menu() {
     load_conf
     while true; do
@@ -4280,6 +4303,7 @@ manage_protocols() {
     done
 }
 
+# MODULE: menus and entrypoint
 main_menu() {
     load_conf
     secure_work_dir_permissions
@@ -4371,13 +4395,7 @@ migrate_argox_to_argov() {
         start_stats_service
         systemctl start xray argov-tunnel 2>/dev/null
         
-cat > "$SCRIPT_PATH" << 'ARGOWRAP'
-#!/usr/bin/env bash
-T="/tmp/argov.sh"
-curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 -o "$T" https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh
-[ -s "$T" ] && bash -n "$T" && bash "$T" "$@"
-ARGOWRAP
-        chmod +x "$SCRIPT_PATH"
+        install_ag_wrapper forward_args
         green_msg "迁移完成！输入 ag 即可使用全新面板。"
         sleep 2
     fi
