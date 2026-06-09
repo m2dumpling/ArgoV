@@ -2277,19 +2277,23 @@ edit_hy2_protocol() {
     echo -e " ${white}── Brutal 拥塞控制 ──${re}"
     local cur_cong="${HY2_CONGESTION:-}" cur_up="${HY2_UP_MBPS:-}" cur_down="${HY2_DOWN_MBPS:-}"
     local new_cong="$cur_cong" new_up="$cur_up" new_down="$cur_down"
-    echo -e "  ${yellow}当前: ${cyan}$([ -n "$cur_cong" ] && echo "${cur_cong} ↑${cur_up}mbps ↓${cur_down}mbps" || echo "关闭")${re}"
-    echo -e "  ${yellow}Brutal 适合高丢包线路暴力冲带宽${re}"
-    echo -e "  ${yellow}输入 congestion 协议名开启 (如 brutal), 输入 off 关闭${re}"
-    read -p "  拥塞控制 [回车保持]: " hc
-    if [ "$hc" = "off" ] || [ "$hc" = "OFF" ]; then
-        new_cong=""; new_up=""; new_down=""
-    elif [ -n "$hc" ]; then
-        new_cong="$hc"
-        echo -ne "  ${cyan}上行带宽 Mbps [${cur_up:-100}]: ${re}"; read hu
-        [ -n "$hu" ] && new_up="$hu" || new_up="${cur_up:-100}"
-        echo -ne "  ${cyan}下行带宽 Mbps [${cur_down:-100}]: ${re}"; read hd
-        [ -n "$hd" ] && new_down="$hd" || new_down="${cur_down:-100}"
-    fi
+    local cur_label; cur_label=$([ -n "$cur_cong" ] && echo "${cur_cong} ↑${cur_up}mbps ↓${cur_down}mbps" || echo "关闭")
+    echo -e "  ${yellow}当前: ${cyan}${cur_label}${re}"
+    echo ""
+    echo -e "  ${green}1${re}. 关闭 (默认)"
+    echo -e "  ${green}2${re}. brutal (高丢包线路暴力冲带宽)"
+    echo ""
+    local def_opt=1; [ -n "$cur_cong" ] && def_opt=2
+    echo -ne "  ${yellow}请选择 [${def_opt}]:${re} "; read hc
+    case "${hc:-$def_opt}" in
+        1) new_cong=""; new_up=""; new_down="" ;;
+        2) new_cong="brutal"
+           echo -ne "  ${cyan}上行带宽 Mbps [${cur_up:-100}]: ${re}"; read hu
+           [ -n "$hu" ] && new_up="$hu" || new_up="${cur_up:-100}"
+           echo -ne "  ${cyan}下行带宽 Mbps [${cur_down:-100}]: ${re}"; read hd
+           [ -n "$hd" ] && new_down="$hd" || new_down="${cur_down:-100}" ;;
+        *) red_msg "无效，保持原设置"; sleep 1 ;;
+    esac
     if [ -n "$new_cong" ]; then
         echo -e "  → ${green}${new_cong} ↑${new_up}mbps ↓${new_down}mbps${re}\n"
     else
