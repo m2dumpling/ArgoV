@@ -42,6 +42,9 @@ CDN_PORT="${CDN_PORT:-443}"
 REALITY_PORT="${REALITY_PORT:-0}"
 HY2_PORT="${HY2_PORT:-0}"
 HY2_MPORT="${HY2_MPORT:-}"
+HY2_CONGESTION="${HY2_CONGESTION:-}"
+HY2_UP_MBPS="${HY2_UP_MBPS:-}"
+HY2_DOWN_MBPS="${HY2_DOWN_MBPS:-}"
 SS_PORT="${SS_PORT:-0}"
 SUB_PORT="${SUB_PORT:-0}"
 SUB_PATH="${SUB_PATH:-}"
@@ -166,11 +169,17 @@ is_port_range() {
 }
 build_hy2_inbound() {
     local listen_port="$1" sni="$2" auth="$3" email="${4:-argov-default}" mport="$5"
-    if [ -n "$mport" ]; then
-        printf '%s' '{"port":'"${listen_port}"',"listen":"0.0.0.0","protocol":"hysteria","tag":"hy2","settings":{"version":2,"users":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}],"clients":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"alpn":["h3"],"serverName":"'"${sni}"'","certificates":[{"certificateFile":"'"${HY2_CERT_FILE}"'","keyFile":"'"${HY2_KEY_FILE}"'"}]},"hysteriaSettings":{"version":2,"udpIdleTimeout":60},"finalmask":{"quicParams":{"udpHop":{"ports":"'"${mport}"'","interval":30}}}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
-    else
-        printf '%s' '{"port":'"${listen_port}"',"listen":"0.0.0.0","protocol":"hysteria","tag":"hy2","settings":{"version":2,"users":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}],"clients":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"alpn":["h3"],"serverName":"'"${sni}"'","certificates":[{"certificateFile":"'"${HY2_CERT_FILE}"'","keyFile":"'"${HY2_KEY_FILE}"'"}]},"hysteriaSettings":{"version":2,"udpIdleTimeout":60}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
-    fi
+    local congestion="${6:-}" up_bw="${7:-}" down_bw="${8:-}"
+    # 拼装 quicParams
+    local qp=""
+    [ -n "$congestion" ] && qp="${qp}\"congestion\":\"${congestion}\","
+    [ -n "$up_bw" ] && [ "$up_bw" != "0" ] && qp="${qp}\"up\":\"${up_bw} mbps\","
+    [ -n "$down_bw" ] && [ "$down_bw" != "0" ] && qp="${qp}\"down\":\"${down_bw} mbps\","
+    [ -n "$mport" ] && qp="${qp}\"udpHop\":{\"ports\":\"${mport}\",\"interval\":30},"
+    qp="${qp%,}"
+    local fm=""
+    [ -n "$qp" ] && fm=",\"finalmask\":{\"quicParams\":{${qp}}}"
+    printf '%s' '{"port":'"${listen_port}"',"listen":"0.0.0.0","protocol":"hysteria","tag":"hy2","settings":{"version":2,"users":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}],"clients":[{"auth":"'"${auth}"'","level":0,"email":"'"${email}"'"}]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"alpn":["h3"],"serverName":"'"${sni}"'","certificates":[{"certificateFile":"'"${HY2_CERT_FILE}"'","keyFile":"'"${HY2_KEY_FILE}"'"}]},"hysteriaSettings":{"version":2,"udpIdleTimeout":60}$fm},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
 }
 disable_hy2_hop_rules() {
     local listen_port="${1:-$HY2_PORT}" mport dport
@@ -615,7 +624,8 @@ load_conf() {
     CDN_PORT="${CDN_PORT:-443}"; CDN_DOMAIN="${CDN_DOMAIN:-$CDN_DEFAULT}"
     ARGO_MODE="${ARGO_MODE:-temp}"; ARGO_AUTH="${ARGO_AUTH:-}"
     ARGO_FIXED_DOMAIN="${ARGO_FIXED_DOMAIN:-}"; UUID_CUSTOM="${UUID_CUSTOM:-}"; LAST_ARGO_DOMAIN="${LAST_ARGO_DOMAIN:-}"
-    REALITY_PORT="${REALITY_PORT:-0}"; HY2_PORT="${HY2_PORT:-0}"; HY2_MPORT="${HY2_MPORT:-}"; SS_PORT="${SS_PORT:-0}"
+    REALITY_PORT="${REALITY_PORT:-0}"; HY2_PORT="${HY2_PORT:-0}"; HY2_MPORT="${HY2_MPORT:-}"
+    HY2_CONGESTION="${HY2_CONGESTION:-}"; HY2_UP_MBPS="${HY2_UP_MBPS:-}"; HY2_DOWN_MBPS="${HY2_DOWN_MBPS:-}"; SS_PORT="${SS_PORT:-0}"
     SUB_PORT="${SUB_PORT:-0}"; SUB_PATH="${SUB_PATH:-}"
     SUB_DOMAIN="${SUB_DOMAIN:-}"; SUB_TOKEN="${SUB_TOKEN:-}"
     REALITY_SNI="${REALITY_SNI:-www.amazon.com}"; HY2_SNI="${HY2_SNI:-www.bing.com}"; SS_METHOD="${SS_METHOD:-aes-256-gcm}"
@@ -635,7 +645,9 @@ save_conf() {
         save_var VMESS_WS_PORT "$VMESS_WS_PORT"; save_var CDN_PORT "$CDN_PORT"
         save_var CDN_DOMAIN "$CDN_DOMAIN"; save_var ARGO_MODE "$ARGO_MODE"; save_var ARGO_AUTH "$ARGO_AUTH"
         save_var ARGO_FIXED_DOMAIN "$ARGO_FIXED_DOMAIN"; save_var UUID_CUSTOM "$UUID_CUSTOM"
-        save_var REALITY_PORT "$REALITY_PORT"; save_var HY2_PORT "$HY2_PORT"; save_var HY2_MPORT "$HY2_MPORT"; save_var SS_PORT "$SS_PORT"; save_var SUB_PORT "$SUB_PORT"; save_var SUB_PATH "$SUB_PATH"; save_var SUB_DOMAIN "$SUB_DOMAIN"; save_var SUB_TOKEN "$SUB_TOKEN"
+        save_var REALITY_PORT "$REALITY_PORT"; save_var HY2_PORT "$HY2_PORT"; save_var HY2_MPORT "$HY2_MPORT"
+        save_var HY2_CONGESTION "$HY2_CONGESTION"; save_var HY2_UP_MBPS "$HY2_UP_MBPS"; save_var HY2_DOWN_MBPS "$HY2_DOWN_MBPS"
+        save_var SS_PORT "$SS_PORT"; save_var SUB_PORT "$SUB_PORT"; save_var SUB_PATH "$SUB_PATH"; save_var SUB_DOMAIN "$SUB_DOMAIN"; save_var SUB_TOKEN "$SUB_TOKEN"
         save_var REALITY_SNI "$REALITY_SNI"; save_var HY2_SNI "$HY2_SNI"; save_var SS_METHOD "$SS_METHOD"
         save_var ENABLE_REALITY "$ENABLE_REALITY"; save_var ENABLE_HY2 "$ENABLE_HY2"; save_var ENABLE_SS "$ENABLE_SS"
         save_var HY2_CERT_FILE "$HY2_CERT_FILE"; save_var HY2_KEY_FILE "$HY2_KEY_FILE"
@@ -2184,7 +2196,7 @@ build_xray_config() {
     # 5. Hysteria2 (opt)
     if [ "$ENABLE_HY2" = 1 ]; then
         local hy2_inbound
-        hy2_inbound=$(build_hy2_inbound "$HY2_PORT" "$HY2_SNI" "$uuid" "argov-default" "$HY2_MPORT")
+        hy2_inbound=$(build_hy2_inbound "$HY2_PORT" "$HY2_SNI" "$uuid" "argov-default" "$HY2_MPORT" "$HY2_CONGESTION" "$HY2_UP_MBPS" "$HY2_DOWN_MBPS")
         inbounds+=",${hy2_inbound}"
     fi
     # 6. SS (opt)
@@ -2262,20 +2274,44 @@ edit_hy2_protocol() {
     fi
     echo -e "  → ${green}${new_mport:-关闭}${re}\n"
 
+    echo -e " ${white}── Brutal 拥塞控制 ──${re}"
+    local cur_cong="${HY2_CONGESTION:-}" cur_up="${HY2_UP_MBPS:-}" cur_down="${HY2_DOWN_MBPS:-}"
+    local new_cong="$cur_cong" new_up="$cur_up" new_down="$cur_down"
+    echo -e "  ${yellow}当前: ${cyan}$([ -n "$cur_cong" ] && echo "${cur_cong} ↑${cur_up}mbps ↓${cur_down}mbps" || echo "关闭")${re}"
+    echo -e "  ${yellow}Brutal 适合高丢包线路暴力冲带宽${re}"
+    echo -e "  ${yellow}输入 congestion 协议名开启 (如 brutal), 输入 off 关闭${re}"
+    read -p "  拥塞控制 [回车保持]: " hc
+    if [ "$hc" = "off" ] || [ "$hc" = "OFF" ]; then
+        new_cong=""; new_up=""; new_down=""
+    elif [ -n "$hc" ]; then
+        new_cong="$hc"
+        echo -ne "  ${cyan}上行带宽 Mbps [${cur_up:-100}]: ${re}"; read hu
+        [ -n "$hu" ] && new_up="$hu" || new_up="${cur_up:-100}"
+        echo -ne "  ${cyan}下行带宽 Mbps [${cur_down:-100}]: ${re}"; read hd
+        [ -n "$hd" ] && new_down="$hd" || new_down="${cur_down:-100}"
+    fi
+    if [ -n "$new_cong" ]; then
+        echo -e "  → ${green}${new_cong} ↑${new_up}mbps ↓${new_down}mbps${re}\n"
+    else
+        echo -e "  → ${green}关闭${re}\n"
+    fi
+
     echo -e " ${white}确认修改:${re}"
     echo -e "  SNI: ${cyan}${cur_sni}${re} → ${green}${new_sni}${re}"
     echo -e "  端口: ${cyan}${cur_port}${re} → ${green}${new_port}${re}"
     echo -e "  跳跃: ${cyan}${cur_mport:-关闭}${re} → ${green}${new_mport:-关闭}${re}"
+    [ -n "$new_cong" ] && echo -e "  Brutal: ${green}${new_cong} ↑${new_up}mbps ↓${new_down}mbps${re}"
     echo ""
     echo -ne "  ${yellow}确认? (y/n) [y]: ${re}"
     read cf
     [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "已取消。"; return; }
 
-    new_inbound=$(build_hy2_inbound "$new_port" "$new_sni" "$uuid" "argov-default" "$new_mport")
+    new_inbound=$(build_hy2_inbound "$new_port" "$new_sni" "$uuid" "argov-default" "$new_mport" "$new_cong" "$new_up" "$new_down")
     jq --argjson i "$new_inbound" '(.inbounds[]|select(.tag=="hy2"))=$i' "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
     HY2_PORT="$new_port"
     HY2_SNI="$new_sni"
     HY2_MPORT="$new_mport"
+    HY2_CONGESTION="$new_cong"; HY2_UP_MBPS="$new_up"; HY2_DOWN_MBPS="$new_down"
     sync_xray_users || return
     save_conf
     yellow_msg "重启 Xray..."
@@ -3865,7 +3901,7 @@ add_hy2_protocol() {
     HY2_MPORT="$h_mport"
     gen_hy2_cert || { red_msg "Failed to generate Hysteria2 self-signed certificate."; return; }
 
-    new_inbound=$(build_hy2_inbound "$HY2_PORT" "$HY2_SNI" "$uuid" "argov-default" "$HY2_MPORT")
+    new_inbound=$(build_hy2_inbound "$HY2_PORT" "$HY2_SNI" "$uuid" "argov-default" "$HY2_MPORT" "$HY2_CONGESTION" "$HY2_UP_MBPS" "$HY2_DOWN_MBPS")
     jq --argjson i "$new_inbound" '.inbounds += [$i]' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
     ENABLE_HY2=1
     sync_xray_users || return

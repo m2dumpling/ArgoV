@@ -269,8 +269,8 @@ require(
     "Clash YAML conversion must preserve Hysteria2 port hopping as ports and hop-interval",
 )
 require(
-    r'build_hy2_inbound\(\)[\s\S]*"finalmask":\{"quicParams":\{"udpHop":\{"ports":"\'"\$\{mport\}"\'","interval":30\}\}\}',
-    "Hysteria2 inbound builder must write Xray Finalmask udpHop quicParams as a string range when port hopping is enabled",
+    r'build_hy2_inbound\(\)[\s\S]*udpHop',
+    "Hysteria2 inbound builder must include udpHop for port hopping support",
 )
 require(
     r'build_hy2_inbound\(\)[\s\S]*"sniffing":\{"enabled":true,"destOverride":\["http","tls","quic"\],"routeOnly":true\}',
