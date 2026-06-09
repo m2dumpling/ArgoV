@@ -23,14 +23,134 @@ def forbid(pattern: str, message: str, flags: int = 0) -> None:
         fail(message)
 
 
+def require_count(pattern: str, expected: int, message: str, flags: int = 0) -> None:
+    actual = len(re.findall(pattern, text, flags))
+    if actual != expected:
+        fail(f"{message} (expected {expected}, got {actual})")
+
+
 require(
     r'\*\)\s+command systemctl "\$cmd" "\$@"',
     "non-Alpine systemctl wrapper must call command systemctl to avoid recursion",
 )
 require(r"save_var\(\)", "save_conf must use a shell-escaping save_var helper")
 require(
+    r"secure_work_dir_permissions\(\)",
+    "script must have a central permission hardening helper for /etc/xray runtime files",
+)
+require(
+    r"begin_argov_lock\(\)[\s\S]*flock -x[\s\S]*end_argov_lock\(\)[\s\S]*flock -u",
+    "script must provide a flock-based lock helper for state file updates",
+)
+require(
+    r"download_file\(\)[\s\S]*curl -fsSL[\s\S]*--retry[\s\S]*-o \"\$tmp\"[\s\S]*\[ -s \"\$tmp\" \][\s\S]*mv -f \"\$tmp\" \"\$dest\"",
+    "remote downloads must use a temp file, retrying curl, non-empty validation, and atomic replacement",
+)
+require(
+    r"download_script_checked\(\)[\s\S]*download_file[\s\S]*bash -n \"\$dest\"",
+    "downloaded shell scripts must pass bash -n before execution",
+)
+require(
+    r"sha256_file\(\)[\s\S]*sha256sum[\s\S]*shasum -a 256[\s\S]*openssl dgst -sha256",
+    "script must support SHA256 calculation through common Linux/OpenSSL tools",
+)
+require(
+    r"verify_sha256_file\(\)[\s\S]*sha256_file[\s\S]*tr 'A-F' 'a-f'[\s\S]*\[ \"\$actual\" = \"\$expected\" \]",
+    "pinned release hashes must be verified with normalized SHA256 comparison",
+)
+require(
+    r"xray_release_base\(\)[\s\S]*XRAY_VERSION[\s\S]*releases/download/\$\{XRAY_VERSION\}[\s\S]*xray_download_url\(\)[\s\S]*Xray-linux-\$\{arch\}\.zip",
+    "Xray downloads must support optional version pinning without changing the default latest behavior",
+)
+require(
+    r"xray_checksum_url\(\)[\s\S]*Xray-linux-\$\{arch\}\.zip\.dgst",
+    "Xray downloads must know the official per-asset checksum sidecar URL",
+)
+require(
+    r"cloudflared_release_base\(\)[\s\S]*CLOUDFLARED_VERSION[\s\S]*releases/download/\$\{CLOUDFLARED_VERSION\}[\s\S]*cloudflared_download_url\(\)[\s\S]*cloudflared-linux-\$\{arch\}",
+    "cloudflared downloads must support optional version pinning without changing the default latest behavior",
+)
+require(
+    r"download_xray_zip_checked\(\)[\s\S]*download_file \"\$url\" \"\$dest\"[\s\S]*XRAY_SHA256[\s\S]*xray_checksum_url[\s\S]*extract_sha256_from_dgst[\s\S]*verify_sha256_file \"\$dest\"",
+    "Xray downloads must verify pinned SHA256 or the official .dgst sidecar when available",
+)
+require(
+    r"download_cloudflared_checked\(\)[\s\S]*download_file \"\$url\" \"\$dest\"[\s\S]*CLOUDFLARED_SHA256[\s\S]*verify_sha256_file \"\$dest\"",
+    "cloudflared downloads must verify the optional pinned SHA256 when configured",
+)
+require(
+    r"run_warp_menu\(\)[\s\S]*download_script_checked[\s\S]*bash \"\$script\" \"\$mode\"",
+    "WARP helper scripts must be downloaded through checked script execution",
+)
+require(
+    r"save_conf\(\)[\s\S]*begin_argov_lock[\s\S]*mv -f \"\$tmp\" \"\$USER_CONF\"[\s\S]*end_argov_lock",
+    "save_conf must hold the global state lock while replacing argov.conf",
+)
+require(
+    r"ensure_users_file\(\)[\s\S]*begin_argov_lock[\s\S]*os\.replace\(tmp, path\)[\s\S]*end_argov_lock",
+    "ensure_users_file must hold the global state lock while normalizing argov_users.json",
+)
+require(
+    r"sync_xray_users\(\)[\s\S]*begin_argov_lock[\s\S]*os\.replace\(tmp, cfg_path\)[\s\S]*end_argov_lock",
+    "sync_xray_users must hold the global state lock while replacing config.json",
+)
+forbid(
+    r"chmod\s+777\s+\"\$WORK_DIR\"",
+    "/etc/xray must not be made world-writable because it contains configs, generated scripts, and secrets",
+)
+forbid(
+    r"curl -sLfo",
+    "downloads must go through download_file/download_script_checked instead of direct curl -sLfo",
+)
+forbid(
+    r"wget .*--no-check-certificate",
+    "WARP helper downloads must not disable certificate checks",
+)
+require(
+    r"is_safe_conf_file\(\)[\s\S]*^load_conf\(\)[\s\S]*is_safe_conf_file \"\$USER_CONF\"[\s\S]*\. \"\$USER_CONF\"",
+    "load_conf must validate argov.conf before sourcing it for backward compatibility",
+    flags=re.MULTILINE,
+)
+require(
+    r"save_conf\(\)[\s\S]*local tmp[\s\S]*mktemp[\s\S]*mv -f \"\$tmp\" \"\$USER_CONF\"[\s\S]*secure_work_dir_permissions",
+    "save_conf must write argov.conf atomically and restore secure permissions",
+)
+require_count(
+    r"^manage_protocols\(\)",
+    1,
+    "manage_protocols must have exactly one active definition to avoid editing dead code",
+    flags=re.MULTILINE,
+)
+require_count(
+    r"^delete_protocol\(\)",
+    1,
+    "delete_protocol must have exactly one active definition to avoid editing dead code",
+    flags=re.MULTILINE,
+)
+require(
     r"save_var NODE_NAME \"\$NODE_NAME\"",
     "NODE_NAME must be persisted through save_var so quotes cannot break argov.conf",
+)
+for var in ("XRAY_VERSION", "XRAY_SHA256", "CLOUDFLARED_VERSION", "CLOUDFLARED_SHA256"):
+    require(
+        rf"{var}=\"\$\{{{var}:-",
+        f"{var} must have a backward-compatible default in load_conf",
+    )
+    require(
+        rf"save_var {var} \"\${var}\"",
+        f"{var} must be persisted through save_var",
+    )
+    require(
+        rf"is_safe_conf_file\(\)[\s\S]*{var}",
+        f"{var} must be accepted by the safe config whitelist",
+    )
+require(
+    r"do_install\(\)[\s\S]*download_xray_zip_checked \"\$ARCH_ARG\" \"\$\{WORK_DIR\}/xray\.zip\"[\s\S]*download_cloudflared_checked \"\$CF_ARCH\" \"\$\{WORK_DIR\}/argo\"",
+    "initial install must use checked Xray/cloudflared download helpers",
+)
+require(
+    r"update_xray_core\(\)[\s\S]*download_xray_zip_checked \"\$ARCH_ARG\" \"\$utmp\"",
+    "Xray update must use checked Xray download helper",
 )
 require(
     r"get_cdn\(\)[\s\S]*\[\s+-n \"\$v\"\s+\].*\[\s+\"\$v\"\s+!= \"null\"\s+\]",

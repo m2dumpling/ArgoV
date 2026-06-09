@@ -248,6 +248,189 @@ EOF
     fi
 }
 save_var() { printf "%s=%q\n" "$1" "$2"; }
+secure_work_dir_permissions() {
+    [ -d "$WORK_DIR" ] || return 0
+    chmod 755 "$WORK_DIR" 2>/dev/null || true
+    chmod 600 "$USER_CONF" "$ARGOV_USERS_FILE" "$CONFIG_FILE" "$TUNNEL_LOG" "$HY2_KEY_FILE" "${WORK_DIR}/custom_links.txt" "${WORK_DIR}/sub.txt" 2>/dev/null || true
+    chmod 644 "${WORK_DIR}/relay_domains.txt" "${WORK_DIR}/warp_domains.txt" "$HY2_CERT_FILE" 2>/dev/null || true
+    chmod 700 "${WORK_DIR}/xray" "${WORK_DIR}/argo" "${WORK_DIR}/qrencode" "${WORK_DIR}/argov-tunnel.sh" "${WORK_DIR}/hy2-hop.sh" "${WORK_DIR}/sub_gen.sh" 2>/dev/null || true
+    chmod 600 "${WORK_DIR}/sub.py" "${WORK_DIR}/stats.py" 2>/dev/null || true
+}
+begin_argov_lock() {
+    mkdir -p "$WORK_DIR" 2>/dev/null || true
+    exec 9>"${WORK_DIR}/.argov.lock" 2>/dev/null || return 0
+    command -v flock >/dev/null 2>&1 && flock -x 9 2>/dev/null || true
+}
+end_argov_lock() {
+    command -v flock >/dev/null 2>&1 && flock -u 9 2>/dev/null || true
+    exec 9>&- 2>/dev/null || true
+}
+download_file() {
+    local url="$1" dest="$2" tmp
+    tmp=$(mktemp "${dest}.tmp.XXXXXX") || return 1
+    if curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 -o "$tmp" "$url" && [ -s "$tmp" ]; then
+        mv -f "$tmp" "$dest"
+        return $?
+    fi
+    rm -f "$tmp" 2>/dev/null || true
+    return 1
+}
+sha256_file() {
+    local file="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 -r "$file" | awk '{print $1}'
+    else
+        return 1
+    fi
+}
+verify_sha256_file() {
+    local file="$1" expected="$2" actual
+    expected=$(printf '%s' "$expected" | tr -d '[:space:]' | tr 'A-F' 'a-f')
+    [[ "$expected" =~ ^[a-f0-9]{64}$ ]] || return 1
+    actual=$(sha256_file "$file" | tr 'A-F' 'a-f') || return 1
+    [ "$actual" = "$expected" ]
+}
+xray_release_base() {
+    if [ -n "${XRAY_VERSION:-}" ] && [ "$XRAY_VERSION" != "latest" ]; then
+        echo "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}"
+    else
+        echo "https://github.com/XTLS/Xray-core/releases/latest/download"
+    fi
+}
+xray_download_url() {
+    local arch="$1" base
+    base=$(xray_release_base)
+    echo "${base}/Xray-linux-${arch}.zip"
+}
+xray_checksum_url() {
+    local arch="$1" base
+    base=$(xray_release_base)
+    echo "${base}/Xray-linux-${arch}.zip.dgst"
+}
+cloudflared_release_base() {
+    if [ -n "${CLOUDFLARED_VERSION:-}" ] && [ "$CLOUDFLARED_VERSION" != "latest" ]; then
+        echo "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}"
+    else
+        echo "https://github.com/cloudflare/cloudflared/releases/latest/download"
+    fi
+}
+cloudflared_download_url() {
+    local arch="$1" base
+    base=$(cloudflared_release_base)
+    echo "${base}/cloudflared-linux-${arch}"
+}
+extract_sha256_from_dgst() {
+    grep -Eoi '[a-f0-9]{64}' "$1" 2>/dev/null | head -n 1 | tr 'A-F' 'a-f'
+}
+download_xray_zip_checked() {
+    local arch="$1" dest="$2" url dgst expected
+    url=$(xray_download_url "$arch")
+    download_file "$url" "$dest" || return 1
+    if [ -n "${XRAY_SHA256:-}" ]; then
+        verify_sha256_file "$dest" "$XRAY_SHA256" || { rm -f "$dest" 2>/dev/null || true; return 1; }
+        return 0
+    fi
+    dgst="${dest}.dgst"
+    if download_file "$(xray_checksum_url "$arch")" "$dgst"; then
+        expected=$(extract_sha256_from_dgst "$dgst")
+        rm -f "$dgst" 2>/dev/null || true
+        [ -n "$expected" ] || { rm -f "$dest" 2>/dev/null || true; return 1; }
+        verify_sha256_file "$dest" "$expected" || { rm -f "$dest" 2>/dev/null || true; return 1; }
+    else
+        rm -f "$dgst" 2>/dev/null || true
+        yellow_msg "WARNING: Xray checksum sidecar unavailable; set XRAY_SHA256 for strict verification."
+    fi
+    return 0
+}
+download_cloudflared_checked() {
+    local arch="$1" dest="$2" url
+    url=$(cloudflared_download_url "$arch")
+    download_file "$url" "$dest" || return 1
+    if [ -n "${CLOUDFLARED_SHA256:-}" ]; then
+        verify_sha256_file "$dest" "$CLOUDFLARED_SHA256" || { rm -f "$dest" 2>/dev/null || true; return 1; }
+    fi
+}
+download_script_checked() {
+    local url="$1" dest="$2"
+    download_file "$url" "$dest" || return 1
+    bash -n "$dest" >/dev/null 2>&1 || { rm -f "$dest" 2>/dev/null || true; return 1; }
+}
+run_warp_menu() {
+    local mode="$1" script="/tmp/warp_menu.sh"
+    download_script_checked "https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh" "$script" || return 1
+    chmod +x "$script" 2>/dev/null || true
+    bash "$script" "$mode"
+    local rc=$?
+    rm -f "$script" 2>/dev/null || true
+    return "$rc"
+}
+is_safe_conf_value() {
+    local value="$1" quote="" ch next i=0
+    while [ "$i" -lt "${#value}" ]; do
+        ch="${value:i:1}"
+        case "$quote" in
+            single)
+                [ "$ch" = "'" ] && quote=""
+                ;;
+            double)
+                if [ "$ch" = "\\" ]; then
+                    i=$((i+1))
+                elif [ "$ch" = '"' ]; then
+                    quote=""
+                elif [ "$ch" = '$' ] || [ "$ch" = '`' ]; then
+                    return 1
+                fi
+                ;;
+            ansi)
+                if [ "$ch" = "\\" ]; then
+                    i=$((i+1))
+                elif [ "$ch" = "'" ]; then
+                    quote=""
+                fi
+                ;;
+            *)
+                case "$ch" in
+                    "\\") i=$((i+1)) ;;
+                    "'") quote="single" ;;
+                    '"') quote="double" ;;
+                    '$')
+                        next="${value:i+1:1}"
+                        [ "$next" = "'" ] || return 1
+                        quote="ansi"; i=$((i+1))
+                        ;;
+                    '`'|';'|'|'|'&'|'<'|'>'|'('|')'|'{'|'}') return 1 ;;
+                    [[:space:]]) return 1 ;;
+                esac
+                ;;
+        esac
+        i=$((i+1))
+    done
+    [ -z "$quote" ]
+}
+is_safe_conf_file() {
+    local file="$1" line key
+    [ -f "$file" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            ''|'#'*) continue ;;
+        esac
+        [[ "$line" =~ ^[A-Z][A-Z0-9_]*= ]] || return 1
+        key="${line%%=*}"
+        case "$key" in
+            NODE_NAME|ARGO_PORT|VLESS_WS_PORT|VMESS_WS_PORT|CDN_PORT|CDN_DOMAIN|ARGO_MODE|ARGO_AUTH|ARGO_FIXED_DOMAIN|UUID_CUSTOM|REALITY_PORT|HY2_PORT|HY2_MPORT|HY2_CONGESTION|HY2_UP_MBPS|HY2_DOWN_MBPS|SS_PORT|SUB_PORT|SUB_PATH|SUB_DOMAIN|SUB_TOKEN|REALITY_SNI|HY2_SNI|SS_METHOD|ENABLE_REALITY|ENABLE_HY2|ENABLE_SS|HY2_CERT_FILE|HY2_KEY_FILE|REALITY_PRIV|REALITY_PUB|REALITY_SHORTID|LAST_ARGO_DOMAIN|RELAY_ENABLED|RELAY_LINK|RELAY_MODE|XRAY_VERSION|XRAY_SHA256|CLOUDFLARED_VERSION|CLOUDFLARED_SHA256) ;;
+            *) return 1 ;;
+        esac
+        case "$line" in
+            *'$('*|*'${'*) return 1 ;;
+        esac
+        is_safe_conf_value "${line#*=}" || return 1
+    done < "$file"
+    return 0
+}
 json_array_from_file() {
     local file="$1" py
     py=$(command -v python3 || command -v python || true)
@@ -270,9 +453,11 @@ ensure_users_file() {
     local py uuid token
     py=$(py_bin); [ -z "$py" ] && return 1
     mkdir -p "$WORK_DIR" 2>/dev/null
+    secure_work_dir_permissions
     uuid=$(get_uuid); [ -z "$uuid" ] && uuid="${UUID_CUSTOM:-$(rand_uuid)}"
     [ -z "$SUB_TOKEN" ] && SUB_TOKEN=$(rand_token)
     token="$SUB_TOKEN"
+    begin_argov_lock
     "$py" - "$ARGOV_USERS_FILE" "$uuid" "$token" << 'PYEOF'
 import json, os, re, sys, time
 path, uuid, token = sys.argv[1:4]
@@ -333,6 +518,10 @@ with open(tmp, "w", encoding="utf-8") as f:
     f.write("\n")
 os.replace(tmp, path)
 PYEOF
+    local rc=$?
+    end_argov_lock
+    secure_work_dir_permissions
+    return "$rc"
 }
 parse_bytes() {
     local py; py=$(py_bin); [ -z "$py" ] && { echo 0; return; }
@@ -365,6 +554,7 @@ sync_xray_users() {
     [ -f "$CONFIG_FILE" ] || return 0
     ensure_users_file || return 1
     local py; py=$(py_bin); [ -z "$py" ] && return 1
+    begin_argov_lock
     "$py" - "$CONFIG_FILE" "$ARGOV_USERS_FILE" << 'PYEOF'
 import json, os, re, sys
 cfg_path, users_path = sys.argv[1:3]
@@ -448,6 +638,10 @@ with open(tmp, "w", encoding="utf-8") as f:
     f.write("\n")
 os.replace(tmp, cfg_path)
 PYEOF
+    local rc=$?
+    end_argov_lock
+    secure_work_dir_permissions
+    return "$rc"
 }
 get_user_sub_url() {
     local ip="$1" token="$2"
@@ -617,7 +811,13 @@ gen_ss2022_pass() {
 
 # --- 持久化 ---
 load_conf() {
-    [ -f "$USER_CONF" ] && . "$USER_CONF"
+    if [ -f "$USER_CONF" ]; then
+        if is_safe_conf_file "$USER_CONF"; then
+            . "$USER_CONF"
+        else
+            red_msg "检测到异常配置，已跳过加载: $USER_CONF"
+        fi
+    fi
     NODE_NAME="${NODE_NAME:-ArgoV}"
     ARGO_PORT="${ARGO_PORT:-8080}"; VLESS_WS_PORT="${VLESS_WS_PORT:-8081}"
     VMESS_WS_PORT="${VMESS_WS_PORT:-8082}"
@@ -635,9 +835,15 @@ load_conf() {
     REALITY_SHORTID="${REALITY_SHORTID:-}"
     RELAY_ENABLED="${RELAY_ENABLED:-0}"; RELAY_LINK="${RELAY_LINK:-}"
     RELAY_MODE="${RELAY_MODE:-all}"
+    XRAY_VERSION="${XRAY_VERSION:-latest}"; XRAY_SHA256="${XRAY_SHA256:-}"
+    CLOUDFLARED_VERSION="${CLOUDFLARED_VERSION:-latest}"; CLOUDFLARED_SHA256="${CLOUDFLARED_SHA256:-}"
     [ -n "$HY2_MPORT" ] && ! is_port_range "$HY2_MPORT" && HY2_MPORT=""
 }
 save_conf() {
+    mkdir -p "$WORK_DIR" 2>/dev/null
+    local tmp
+    tmp=$(mktemp "${USER_CONF}.tmp.XXXXXX") || return 1
+    begin_argov_lock
     {
         echo "# ArgoV — $(date '+%Y-%m-%d %H:%M:%S')"
         save_var NODE_NAME "$NODE_NAME"
@@ -654,7 +860,14 @@ save_conf() {
         save_var REALITY_PRIV "$REALITY_PRIV"; save_var REALITY_PUB "$REALITY_PUB"
         save_var REALITY_SHORTID "$REALITY_SHORTID"; save_var LAST_ARGO_DOMAIN "$LAST_ARGO_DOMAIN"
         save_var RELAY_ENABLED "$RELAY_ENABLED"; save_var RELAY_LINK "$RELAY_LINK"; save_var RELAY_MODE "$RELAY_MODE"
-    } > "$USER_CONF"
+        save_var XRAY_VERSION "$XRAY_VERSION"; save_var XRAY_SHA256 "$XRAY_SHA256"
+        save_var CLOUDFLARED_VERSION "$CLOUDFLARED_VERSION"; save_var CLOUDFLARED_SHA256 "$CLOUDFLARED_SHA256"
+    } > "$tmp" && mv -f "$tmp" "$USER_CONF"
+    local rc=$?
+    [ "$rc" -ne 0 ] && rm -f "$tmp" 2>/dev/null || true
+    end_argov_lock
+    secure_work_dir_permissions
+    return "$rc"
 }
 
 #==============================================================================
@@ -693,7 +906,7 @@ show_qr() {
 install_qrencode() {
     local qr="${WORK_DIR}/qrencode"; [ -f "$qr" ] && return 0
     local a; case "$(uname -m)" in x86_64) a="amd64" ;; aarch64|arm64) a="arm64" ;; *) return 1 ;; esac
-    curl -sLfo "$qr" "https://github.com/eooce/test/releases/download/${a}/qrencode-linux-${a}" 2>/dev/null; chmod +x "$qr" 2>/dev/null
+    download_file "https://github.com/eooce/test/releases/download/${a}/qrencode-linux-${a}" "$qr" >/dev/null 2>&1 && chmod +x "$qr" 2>/dev/null
 }
 
 #==============================================================================
@@ -2021,14 +2234,13 @@ do_install() {
     elif command -v dnf &>/dev/null; then dnf install -y -q jq unzip curl lsof openssl
     elif command -v apk &>/dev/null; then apk update -q && apk add -q jq unzip curl lsof openssl; fi; green_msg "  完成"
 
-    mkdir -p "$WORK_DIR" && chmod 777 "$WORK_DIR"
+    mkdir -p "$WORK_DIR" && secure_work_dir_permissions
     local ARCH_ARG CF_ARCH; ARCH_ARG=$(detect_arch); CF_ARCH=$(cf_arch)
     [ -z "$ARCH_ARG" ] && { red_msg "不支持 CPU: $(uname -m)"; exit 1; }
 
     yellow_msg "[3/6] 下载..."
-    curl -sLfo "${WORK_DIR}/xray.zip" "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${ARCH_ARG}.zip"
-    curl -sLfo "${WORK_DIR}/argo.tmp" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_ARCH}"
-    [ -s "${WORK_DIR}/argo.tmp" ] && mv -f "${WORK_DIR}/argo.tmp" "${WORK_DIR}/argo"
+    download_xray_zip_checked "$ARCH_ARG" "${WORK_DIR}/xray.zip" || { red_msg "Xray 下载失败，请检查网络或校验配置！"; exit 1; }
+    download_cloudflared_checked "$CF_ARCH" "${WORK_DIR}/argo" || { red_msg "cloudflared 下载失败，请检查网络或校验配置！"; exit 1; }
     unzip -o "${WORK_DIR}/xray.zip" -d "$WORK_DIR">/dev/null 2>&1; chmod +x "${WORK_DIR}/xray" "${WORK_DIR}/argo"; rm -f "${WORK_DIR}/xray.zip"
     install_qrencode; green_msg "  完成"
 
@@ -2132,11 +2344,12 @@ EOF
     fi
     green_msg "  完成"
 
-    cat > "$SCRIPT_PATH" << 'ARGOWRAP'
+cat > "$SCRIPT_PATH" << 'ARGOWRAP'
 #!/usr/bin/env bash
 T=$(mktemp /tmp/argov.XXXXXX)
-curl -sLfo "$T" https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh
-bash "$T"; rm -f "$T"
+curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 -o "$T" https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh
+[ -s "$T" ] && bash -n "$T" && bash "$T"
+rm -f "$T"
 ARGOWRAP
     chmod +x "$SCRIPT_PATH"; save_conf
 
@@ -2345,7 +2558,7 @@ edit_hy2_protocol() {
     echo ""; read -p "  按回车继续..." -r
 }
 
-manage_protocols() {
+legacy_manage_protocols_unused() {
     load_conf
     [ ! -f "$CONFIG_FILE" ] && { red_msg "请先安装！"; return; }
 
@@ -2772,7 +2985,7 @@ add_single_protocol() {
     echo ""; read -p "  按回车返回..." -r
 }
 
-delete_protocol() {
+legacy_delete_protocol_unused() {
     clear
     local has_reality=0 has_ss=0
     grep -qE '"tag"[[:space:]]*:[[:space:]]*"reality"' "$CONFIG_FILE" 2>/dev/null && has_reality=1
@@ -3425,12 +3638,11 @@ warp_auto_install_socks() {
     (ss -tlnp 2>/dev/null || ss -tln 2>/dev/null || netstat -tlnp 2>/dev/null) | grep -q ':40000 ' && return 0
     yellow_msg "WARP SOCKS5 未安装，正在自动部署..."
     echo ""
-    wget -N --no-check-certificate https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh -O /tmp/warp_menu.sh 2>/dev/null
-    if [ -f /tmp/warp_menu.sh ]; then
-        chmod +x /tmp/warp_menu.sh
-        bash /tmp/warp_menu.sh w; local warp_rc=$?
-        rm -f /tmp/warp_menu.sh
+    local warp_rc=0
+    if run_warp_menu w; then
+        warp_rc=0
     else
+        warp_rc=$?
         red_msg "下载 fscarmen WARP 脚本失败，请检查网络"
         echo ""; read -p "  按回车继续..." -r; return 1
     fi
@@ -3466,14 +3678,8 @@ warp_install() {
     echo ""
     yellow_msg "正在拉取并运行 fscarmen/warp 官方安装脚本..."
     echo ""
-    # 下载并运行 warp 菜单脚本，选择模式 w (WireProxy/Socks5)
-    wget -N -q --no-check-certificate https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh -O /tmp/warp_menu.sh 2>/dev/null
-    if [ -f /tmp/warp_menu.sh ]; then
-        chmod +x /tmp/warp_menu.sh
-        # 模式 w = WireProxy/Socks5 模式，默认端口 40000
-        bash /tmp/warp_menu.sh w
-        rm -f /tmp/warp_menu.sh
-    else
+    # 模式 w = WireProxy/Socks5 模式，默认端口 40000
+    if ! run_warp_menu w; then
         red_msg "下载失败，请检查网络连接。"
         echo ""; read -p "  按回车返回..." -r; return
     fi
@@ -3740,15 +3946,13 @@ warp_switch_mode() {
             if [ "$mc" = "1" ] || [ "$mc" = "3" ]; then
                 if ! (ss -tlnp 2>/dev/null || ss -tln 2>/dev/null || netstat -tlnp 2>/dev/null) | grep -q ':40000 '; then
                     yellow_msg "安装 WARP SOCKS5 模式..."
-                    wget -N -q --no-check-certificate https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh -O /tmp/warp_menu.sh 2>/dev/null
-                    [ -f /tmp/warp_menu.sh ] && { chmod +x /tmp/warp_menu.sh; bash /tmp/warp_menu.sh w; rm -f /tmp/warp_menu.sh; }
+                    run_warp_menu w || return 1
                 else green_msg "WARP SOCKS5 已就绪"; fi
             fi
             if [ "$mc" = "2" ] || [ "$mc" = "3" ]; then
                 if ! ip -6 addr show 2>/dev/null | grep -q 'wgcf\|Warp'; then
                     yellow_msg "安装 WARP IPv6 模式..."
-                    wget -N -q --no-check-certificate https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh -O /tmp/warp_menu.sh 2>/dev/null
-                    [ -f /tmp/warp_menu.sh ] && { chmod +x /tmp/warp_menu.sh; bash /tmp/warp_menu.sh 6; rm -f /tmp/warp_menu.sh; }
+                    run_warp_menu 6 || return 1
                 else green_msg "WARP IPv6 已就绪"; fi
             fi
             ;;&
@@ -3848,7 +4052,7 @@ update_xray_core() {
     [ -z "$ARCH_ARG" ] && { red_msg "不支持 CPU: $(uname -m)"; sleep 2; return; }
     
     local utmp="/tmp/xray_update.zip"
-    curl -sLfo "$utmp" "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${ARCH_ARG}.zip"
+    download_xray_zip_checked "$ARCH_ARG" "$utmp"
     if [ -s "$utmp" ]; then
         systemctl stop xray 2>/dev/null
         unzip -o "$utmp" -d "$WORK_DIR" >/dev/null 2>&1
@@ -4078,6 +4282,7 @@ manage_protocols() {
 
 main_menu() {
     load_conf
+    secure_work_dir_permissions
     # 无感升级：旧版 stats.py 无配额阻断逻辑 → 静默重新生成
     if [ -f "${WORK_DIR}/stats.py" ] && ! grep -qF 'disabled and sync_config' "${WORK_DIR}/stats.py" 2>/dev/null; then
         start_stats_service >/dev/null 2>&1 &
@@ -4128,7 +4333,7 @@ main_menu() {
                [ "$cf" = "y" ] || [ "$cf" = "Y" ] && { load_conf; do_install; }; read -p "  按回车返回..." -r ;;
             8) yellow_msg "拉取最新版..."
                local utmp; utmp=$(mktemp /tmp/argov.XXXXXX)
-               curl -sLfo "$utmp" https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh && bash "$utmp" && rm -f "$utmp"
+               download_script_checked https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh "$utmp" && bash "$utmp"; rm -f "$utmp"
                clear; continue ;;
             x|X) update_xray_core ;;
             9) echo -ne "  ${red}⚠ 确定卸载? (y/n): ${re}"; read cf
@@ -4166,11 +4371,11 @@ migrate_argox_to_argov() {
         start_stats_service
         systemctl start xray argov-tunnel 2>/dev/null
         
-        cat > "$SCRIPT_PATH" << 'ARGOWRAP'
+cat > "$SCRIPT_PATH" << 'ARGOWRAP'
 #!/usr/bin/env bash
 T="/tmp/argov.sh"
-curl -sLfo "$T" https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh
-[ -s "$T" ] && bash "$T" "$@"
+curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 -o "$T" https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh
+[ -s "$T" ] && bash -n "$T" && bash "$T" "$@"
 ARGOWRAP
         chmod +x "$SCRIPT_PATH"
         green_msg "迁移完成！输入 ag 即可使用全新面板。"
