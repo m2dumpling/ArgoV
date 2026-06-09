@@ -1,0 +1,7 @@
+# Mixed historical inputs that users may already have in /etc/xray/warp_domains.txt.
+domain:openai.com
+*.anthropic.com
+https://chat.example.com/path?q=1
+full:api.example.com
+keyword:netflix
+geosite:google
