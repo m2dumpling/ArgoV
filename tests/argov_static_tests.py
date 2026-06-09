@@ -273,6 +273,50 @@ require(
     "Hysteria2 inbound builder must write Xray Finalmask udpHop quicParams as a string range when port hopping is enabled",
 )
 require(
+    r'build_hy2_inbound\(\)[\s\S]*"sniffing":\{"enabled":true,"destOverride":\["http","tls","quic"\],"routeOnly":true\}',
+    "Hysteria2 inbound must enable route-only sniffing so server-side domain split rules can match QUIC/TLS destinations",
+)
+require(
+    r'build_xray_config\(\)[\s\S]*"tag":"argo-in"[\s\S]*"sniffing":\{"enabled":true,"destOverride":\["http","tls","quic"\],"routeOnly":true\}[\s\S]*"tag":"vless-ws"[\s\S]*"sniffing":\{"enabled":true,"destOverride":\["http","tls","quic"\],"routeOnly":true\}[\s\S]*"tag":"vmess-ws"[\s\S]*"sniffing":\{"enabled":true,"destOverride":\["http","tls","quic"\],"routeOnly":true\}',
+    "Argo/VLESS WS/VMess WS inbounds must enable route-only sniffing for relay domain split rules",
+)
+require(
+    r'ROUTE_SNIFF_TAGS = \{"argo-in", "vless-ws", "vmess-ws", "reality", "hy2", "ss"\}[\s\S]*inbound\["sniffing"\] = dict\(ROUTE_SNIFFING\)',
+    "existing proxy inbounds must be patched with route-only sniffing during user sync and relay apply",
+)
+require(
+    r'relay_apply\(\)[\s\S]*def enable_route_sniffing\(config\):[\s\S]*with open\(CONFIG, \'r\'\) as f:[\s\S]*config = json\.load\(f\)[\s\S]*enable_route_sniffing\(config\)',
+    "relay apply must patch old configs with route-only sniffing before injecting relay routing rules",
+)
+require(
+    r'relay_apply\(\)[\s\S]*DOMAIN_PREFIXES = \("domain:", "full:", "regexp:", "keyword:", "geosite:", "ext:", "dotless:"\)[\s\S]*def normalize_relay_domains\(items\):[\s\S]*d = "domain:" \+ d\.lstrip\("\."\)[\s\S]*relay_domains = normalize_relay_domains\(DOMAINS\)[\s\S]*relay_rule = \{"type": "field", "domain": relay_domains, "outboundTag": "relay-out"\}',
+    "relay split domains must be normalized to Xray domain matchers so bare domains, wildcards, and URLs route through relay-out reliably",
+)
+require(
+    r'RELAY_LINK_ENV="\$RELAY_LINK" RELAY_MODE_ENV="\$RELAY_MODE" python3',
+    "relay links must be passed to Python through environment variables so quotes in share links cannot break the script",
+)
+require(
+    r"def split_host_port\(server, default_port=443\):[\s\S]*server\.startswith\('\['\)[\s\S]*server\.count\(':'\) > 1",
+    "relay parser must support bracketed IPv6 endpoints without corrupting host:port parsing",
+)
+require(
+    r"def apply_stream\(out, network='tcp', security='none', sni='', qs=None\):[\s\S]*\"realitySettings\"[\s\S]*\"tlsSettings\"[\s\S]*\"wsSettings\"",
+    "relay parser must preserve VLESS/VMess/Trojan transport settings such as WS, TLS, and Reality",
+)
+require(
+    r'network = qs\.get\(\'type\', qs\.get\(\'network\', \[\'tcp\'\]\)\)\[0\][\s\S]*apply_stream\(out, network, security, sni, qs\)',
+    "relay VLESS outbound must honor type/network and stream security parameters instead of assuming plain tcp or ws",
+)
+forbid(
+    r"re\.search\(r'vless://\(\[\^@\]\+\)@\(\[\^:\]\+\):\(\\d\+\)",
+    "relay VLESS parser must not use host regexes that reject IPv6 endpoints",
+)
+forbid(
+    r"re\.search\(r'trojan://\(\[\^@\]\+\)@\(\[\^:\]\+\):\(\\d\+\)",
+    "relay Trojan parser must not use host regexes that reject IPv6 endpoints",
+)
+require(
     r"apply_hy2_hop_rules\(\)[\s\S]*dport=\"\$\{mport//-/:\}\"[\s\S]*-p udp --dport \"\\\$dport\"[\s\S]*--to-ports \"\\\$listen_port\"",
     "Hysteria2 port hopping must install UDP REDIRECT rules to the single Xray listening port with iptables range syntax",
 )
