@@ -285,6 +285,8 @@ def norm_user(u, default_uuid, default_token):
     u["quota_bytes"] = int(u.get("quota_bytes") or 0)
     u["used_up"] = int(u.get("used_up") or 0)
     u["used_down"] = int(u.get("used_down") or 0)
+    u["reset_day"] = int(u.get("reset_day") or 0)
+    u["last_reset_month"] = int(u.get("last_reset_month") or 0)
     u["email"] = u.get("email") or email_for(u["name"])
     u["created_at"] = int(u.get("created_at") or time.time())
     return u
@@ -503,7 +505,8 @@ def fmt_line(u):
     used = int(u.get("used_up") or 0) + int(u.get("used_down") or 0)
     quota = int(u.get("quota_bytes") or 0)
     enabled = "1" if u.get("enabled", True) else "0"
-    print("\t".join([u.get("name",""), enabled, str(used), str(quota), u.get("token","")]))
+    reset_day = str(u.get("reset_day") or 0)
+    print("\t".join([u.get("name",""), enabled, str(used), str(quota), u.get("token",""), reset_day]))
 
 data = load()
 if op == "list":
@@ -557,6 +560,17 @@ elif op == "reset":
     u["used_up"] = 0
     u["used_down"] = 0
     u["enabled"] = True
+elif op == "set-reset-day":
+    name, day = args[:2]
+    u = find(data, name)
+    if not u:
+        raise SystemExit(2)
+    d = int(day)
+    if d < 0 or d > 28:
+        raise SystemExit(4)
+    u["reset_day"] = d
+    if d == 0:
+        u.pop("last_reset_month", None)
 elif op == "delete":
     name = args[0]
     if name == "default":
@@ -1314,10 +1328,31 @@ def restart_xray():
     else:
         subprocess.call(["systemctl", "restart", "xray"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+def bj_now():
+    return time.localtime(time.time() + 8 * 3600)
+
 def poll_once():
     data = load_json(USERS_FILE, {"version": 1, "users": []})
     changed = False
     disabled = False
+
+    # --- 月度流量重置 (北京时区) ---
+    bj = bj_now()
+    current_month = int(time.strftime("%Y%m", bj))
+    current_day = int(time.strftime("%d", bj))
+    for u in data.get("users", []):
+        reset_day = int(u.get("reset_day") or 0)
+        if reset_day < 1:
+            continue
+        last_reset = int(u.get("last_reset_month") or 0)
+        if current_month > last_reset and current_day >= reset_day:
+            u["used_up"] = 0
+            u["used_down"] = 0
+            u["last_reset_month"] = current_month
+            if not u.get("enabled", True):
+                u["enabled"] = True
+            changed = True
+
     for u in data.get("users", []):
         if not u.get("enabled", True):
             continue
@@ -1619,13 +1654,15 @@ manage_users() {
         echo ""
         echo -e "  ${white}ArgoV users and traffic quota${re}"
         echo ""
-        printf "  %-16s %-8s %-14s %-14s %s\n" "name" "state" "used" "quota" "token"
-        printf "  %-16s %-8s %-14s %-14s %s\n" "----" "-----" "----" "-----" "-----"
-        while IFS=$'\t' read -r name enabled used quota token; do
+        printf "  %-16s %-8s %-8s %-14s %-14s %s\n" "name" "state" "reset" "used" "quota" "token"
+        printf "  %-16s %-8s %-8s %-14s %-14s %s\n" "----" "-----" "-----" "----" "-----" "-----"
+        while IFS=$'\t' read -r name enabled used quota token reset_day; do
             [ -z "$name" ] && continue
             local state="off"
             [ "$enabled" = "1" ] && state="on"
-            printf "  %-16s %-8s %-14s %-14s %s\n" "$name" "$state" "$(format_bytes "$used")" "$([ "$quota" = "0" ] && echo unlimited || format_bytes "$quota")" "$token"
+            local reset_label="-"
+            [ "${reset_day:-0}" != "0" ] && [ -n "$reset_day" ] && reset_label="↑${reset_day}"
+            printf "  %-16s %-8s %-8s %-14s %-14s %s\n" "$name" "$state" "$reset_label" "$(format_bytes "$used")" "$([ "$quota" = "0" ] && echo unlimited || format_bytes "$quota")" "$token"
         done < <(user_db_op list 2>/dev/null)
         echo ""
         echo -e "  ${green}1${re}. Add limited user"
@@ -1634,6 +1671,7 @@ manage_users() {
         echo -e "  ${green}4${re}. Set quota"
         echo -e "  ${green}5${re}. Reset usage"
         echo -e "  ${cyan}6${re}. Show subscription URL"
+        echo -e "  ${purple}8${re}. Set reset day"
         echo -e "  ${red}7${re}. Delete user"
         echo -e "  ${red}0${re}. Back"
         echo ""
@@ -1660,7 +1698,7 @@ manage_users() {
                 fi
                 read -p "  Press Enter..." -r
                 ;;
-            2|3|4|5|6|7)
+            2|3|4|5|6|7|8)
                 local name quota quota_bytes token ip line enabled used quota_cur
                 read -p "  User name: " name
                 [ -z "$name" ] && { red_msg "Empty name."; sleep 1; continue; }
@@ -1689,6 +1727,23 @@ EOF
                         echo ""
                         echo -e "  ${green}$(get_user_sub_url "$ip" "$token")${re}"
                         read -p "  Press Enter..." -r
+                        ;;
+                    8)
+                        local cur_day
+                        cur_day=$(user_db_op show "$name" 2>/dev/null | awk -F'\t' '{print $6}' || echo 0)
+                        cur_day="${cur_day:-0}"
+                        echo -e "  ${yellow}每月该日重置流量 (北京时区)${re}"
+                        echo -e "  ${yellow}当前: ${cyan}$([ "$cur_day" = "0" ] && echo "未设置" || echo "每月 ${cur_day} 号")${re}"
+                        read -p "  输入 1-28 (0=关闭): " rday
+                        [ -z "$rday" ] && { yellow_msg "已取消。"; sleep 1; continue; }
+                        if [ "$rday" = "0" ]; then
+                            user_db_op set-reset-day "$name" 0 && green_msg "已关闭自动重置。" || red_msg "Failed."
+                        elif [[ "$rday" =~ ^[0-9]+$ ]] && [ "$rday" -ge 1 ] && [ "$rday" -le 28 ]; then
+                            user_db_op set-reset-day "$name" "$rday" && green_msg "已设置: 每月 ${rday} 号重置。" || red_msg "Failed."
+                        else
+                            red_msg "无效，输入 1-28 或 0 关闭。"
+                        fi
+                        sleep 1
                         ;;
                     7)
                         echo -ne "  Delete ${name}? (y/n): "; read cf
