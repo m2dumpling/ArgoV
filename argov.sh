@@ -969,24 +969,24 @@ edit_subscription() {
         echo -e "  ${cyan}5${re}. 查看完整订阅链接"
         echo ""; echo -e "  ${red}0${re}. 返回"
         echo -e " ${purple}────────────────────────────────────────${re}"
-        read -p "  请选择: " c
+        echo -ne "  请选择: "; read c 
         case "$c" in
             1)
                 if [ -n "$SUB_DOMAIN" ]; then
                     local old_domain="$SUB_DOMAIN"
-                    read -p "  新域名 [${SUB_DOMAIN}]: " nd
+                    echo -ne "  新域名 [${SUB_DOMAIN}]: "; read nd 
                     [ -n "$nd" ] && SUB_DOMAIN="$nd"
                 else
                     echo -e "  ${yellow}输入已指向本机 IP 的域名，将切换到 HTTPS:${re}"
                     echo -e "  ${yellow}⚠ CF 代理仅支持以下端口:${re}"
                     echo -e "  ${cyan}  2096  8443  2053  2083  2087  443${re}"
-                    read -p "  域名: " nd
+                    echo -ne "  域名: "; read nd 
                     [ -z "$nd" ] && { yellow_msg "已取消。"; sleep 1; continue; }
                     SUB_DOMAIN="$nd"
                     if [ "$SUB_PORT" = "0" ]; then
                         echo ""; echo -e "  ${yellow}选择端口:${re}"
                         echo -e "  ${cyan}1${re}. 2096 (默认)  ${cyan}2${re}. 8443  ${cyan}3${re}. 2053  ${cyan}4${re}. 2083  ${cyan}5${re}. 2087  ${cyan}6${re}. 443"
-                        read -p "  [1]: " pc
+                        echo -ne "  [1]: "; read pc 
                         case "${pc:-1}" in
                             2) SUB_PORT=8443 ;; 3) SUB_PORT=2053 ;; 4) SUB_PORT=2083 ;;
                             5) SUB_PORT=2087 ;; 6) SUB_PORT=443 ;; *) SUB_PORT=2096 ;;
@@ -998,7 +998,7 @@ edit_subscription() {
                 save_conf; start_sub_server; green_msg "已更新。"; sleep 1
                 ;;
             2)
-                read -p "  新端口 [${SUB_PORT}]: " np
+                echo -ne "  新端口 [${SUB_PORT}]: "; read np 
                 [ -n "$np" ] && is_port "$np" && SUB_PORT="$np"
                 save_conf; start_sub_server; green_msg "端口: ${SUB_PORT}"; sleep 1
                 ;;
@@ -1891,15 +1891,15 @@ edit_cdn() {
         echo ""
         echo -e "  ${cyan}c${re}. 自定义 (host:port)    ${cyan}p${re}. 仅改端口    ${red}0${re}. 返回"
         echo -e " ${purple}────────────────────────────────────────${re}"
-        read -p "  请选择: " c; local np="$cp"
+        echo -ne "  请选择: "; read c ; local np="$cp"
         case "$c" in
             1) CDN_DOMAIN="cdn.31514926.xyz" ;; 2) CDN_DOMAIN="skk.moe" ;; 3) CDN_DOMAIN="ip.sb" ;;
             4) CDN_DOMAIN="time.is" ;; 5) CDN_DOMAIN="bestcf.top" ;; 6) CDN_DOMAIN="cfip.xxxxxxxx.tk" ;;
             7) CDN_DOMAIN="cf.090227.xyz" ;; 8) CDN_DOMAIN="yidong.19931101.xyz" ;;
             9) CDN_DOMAIN="liantong.19931101.xyz" ;; 10) CDN_DOMAIN="dianxin.19931101.xyz" ;;
             11) CDN_DOMAIN="cdn.2020111.xyz" ;; 12) CDN_DOMAIN="xn--b6gac.eu.org" ;; 13) CDN_DOMAIN="cdns.doon.eu.org" ;;
-            c|C) read -p "  host:port: " raw; [[ "$raw" =~ ^(.+):([0-9]+)$ ]] && { CDN_DOMAIN="${BASH_REMATCH[1]}"; np="${BASH_REMATCH[2]}"; } || CDN_DOMAIN="$raw" ;;
-            p|P) read -p "  端口: " np; CDN_DOMAIN="$cc" ;;
+            c|C) echo -ne "  host:port: "; read raw ; [[ "$raw" =~ ^(.+):([0-9]+)$ ]] && { CDN_DOMAIN="${BASH_REMATCH[1]}"; np="${BASH_REMATCH[2]}"; } || CDN_DOMAIN="$raw" ;;
+            p|P) echo -ne "  端口: "; read np ; CDN_DOMAIN="$cc" ;;
             0) return ;; *) red_msg "无效"; sleep 1; continue ;;
         esac
         [ -n "$CDN_DOMAIN" ] && { CDN_PORT="$np"
@@ -1931,18 +1931,18 @@ change_config() {
         echo -e "  ${green}9${re}. 订阅配置"
         echo -e "  ${red}0${re}. 返回"
         echo -e " ${purple}────────────────────────────────────────${re}"
-        read -p "  请选择: " c
+        echo -ne "  请选择: "; read c 
         case "$c" in
-            1) read -p "  新名称 [${NODE_NAME}]: " n; [ -n "$n" ] && NODE_NAME="$n"; save_conf; green_msg "已更新: ${NODE_NAME}" ;;
-            2) local nu; read -p "  新 UUID (回车生成): " nu; [ -z "$nu" ] && nu=$(cat /proc/sys/kernel/random/uuid)
+            1) echo -ne "  新名称 [${NODE_NAME}]: "; read n ; [ -n "$n" ] && NODE_NAME="$n"; save_conf; green_msg "已更新: ${NODE_NAME}" ;;
+            2) local nu; echo -ne "  新 UUID (回车生成): "; read nu ; [ -z "$nu" ] && nu=$(cat /proc/sys/kernel/random/uuid)
                jq --arg u "$nu" '(.inbounds[].settings.clients[]?|select(.id)|.id)|=$u' "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
                UUID_CUSTOM="$nu"; save_conf; ensure_users_file; sync_xray_users; systemctl restart xray 2>/dev/null; rc-service xray restart 2>/dev/null || true; green_msg "UUID 已更新！${nu}" ;;
             3) switch_argo_tunnel ;;
             4) echo ""; for i in "${!SS_METHODS[@]}"; do echo -e "  ${green}$((i+1))${re}. ${SS_METHODS[$i]}"; done; echo ""
-               read -p "  选择 [默认 aes-256-gcm]: " sm; [ -n "$sm" ] && SS_METHOD="${SS_METHODS[$((sm-1))]:-$SS_METHOD}"
+               echo -ne "  选择 [默认 aes-256-gcm]: "; read sm ; [ -n "$sm" ] && SS_METHOD="${SS_METHODS[$((sm-1))]:-$SS_METHOD}"
                save_conf; green_msg "SS: ${SS_METHOD}" ;;
             5) echo ""; for i in "${!REALITY_SNIS[@]}"; do echo -e "  ${green}$((i+1))${re}. ${REALITY_SNIS[$i]}"; done; echo ""
-               read -p "  选择 [默认 www.amazon.com]: " rs; [ -n "$rs" ] && REALITY_SNI="${REALITY_SNIS[$((rs-1))]:-$REALITY_SNI}"
+               echo -ne "  选择 [默认 www.amazon.com]: "; read rs ; [ -n "$rs" ] && REALITY_SNI="${REALITY_SNIS[$((rs-1))]:-$REALITY_SNI}"
                save_conf; green_msg "Reality SNI: ${REALITY_SNI}" ;;
             6) manage_protocols ;;
             7) show_node ;; 8) restart_services ;; 9) edit_subscription ;; 0) return ;; *) red_msg "无效" ;;
@@ -1988,9 +1988,9 @@ manage_users() {
         case "$c" in
             1)
                 local name quota quota_bytes uuid token ip
-                read -p "  User name (letters/numbers, e.g. friend): " name
+                echo -ne "  User name (letters/numbers, e.g. friend): "; read name 
                 [ -z "$name" ] && { red_msg "Empty name."; sleep 1; continue; }
-                read -p "  Quota, e.g. 200G (0 = unlimited): " quota
+                echo -ne "  Quota, e.g. 200G (0 = unlimited): "; read quota 
                 quota_bytes=$(parse_bytes "${quota:-0}")
                 [ "$quota_bytes" -lt 0 ] && { red_msg "Invalid quota."; sleep 1; continue; }
                 uuid=$(rand_uuid)
@@ -2009,7 +2009,7 @@ manage_users() {
                 ;;
             2|3|4|5|6|7|8)
                 local name quota quota_bytes token ip line enabled used quota_cur
-                read -p "  User name: " name
+                echo -ne "  User name: "; read name 
                 [ -z "$name" ] && { red_msg "Empty name."; sleep 1; continue; }
                 case "$c" in
                     2)
@@ -2019,7 +2019,7 @@ manage_users() {
                         user_db_op set-enabled "$name" 0 && restart_user_runtime && green_msg "Disabled." || red_msg "Cannot disable user."
                         ;;
                     4)
-                        read -p "  New quota, e.g. 200G (0 = unlimited): " quota
+                        echo -ne "  New quota, e.g. 200G (0 = unlimited): "; read quota 
                         quota_bytes=$(parse_bytes "${quota:-0}")
                         [ "$quota_bytes" -lt 0 ] && { red_msg "Invalid quota."; sleep 1; continue; }
                         user_db_op set-quota "$name" "$quota_bytes" && restart_user_runtime && green_msg "Quota updated." || red_msg "Cannot update quota."
@@ -2043,7 +2043,7 @@ EOF
                         cur_day="${cur_day:-0}"
                         echo -e "  ${yellow}每月该日重置流量 (北京时区)${re}"
                         echo -e "  ${yellow}当前: ${cyan}$([ "$cur_day" = "0" ] && echo "未设置" || echo "每月 ${cur_day} 号")${re}"
-                        read -p "  输入 1-28 (0=关闭): " rday
+                        echo -ne "  输入 1-28 (0=关闭): "; read rday 
                         [ -z "$rday" ] && { yellow_msg "已取消。"; sleep 1; continue; }
                         if [ "$rday" = "0" ]; then
                             user_db_op set-reset-day "$name" 0 && green_msg "已关闭自动重置。" || red_msg "Failed."
@@ -2076,10 +2076,10 @@ switch_argo_tunnel() {
     echo -e " ${purple}║${re}       ${yellow}当前: $([ "$ARGO_MODE" = "temp" ] && echo "临时" || echo "固定")${re}"
     echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
     echo ""; echo -e "  ${green}1${re}. 临时隧道     ${green}2${re}. 固定 Token    ${red}0${re}. 返回"
-    read -p "  请选择: " c
+    echo -ne "  请选择: "; read c 
     case "$c" in
         1) ARGO_MODE="temp"; ARGO_AUTH=""; ARGO_FIXED_DOMAIN=""; save_conf; rebuild_tunnel "temp"; restart_services ;;
-        2) read -p "  域名: " ARGO_FIXED_DOMAIN; read -p "  Token: " ARGO_AUTH
+        2) echo -ne "  域名: "; read ARGO_FIXED_DOMAIN; echo -ne "  Token: "; read ARGO_AUTH
            [ -z "$ARGO_FIXED_DOMAIN" ] || [ -z "$ARGO_AUTH" ] && { red_msg "不能为空"; return; }
            ARGO_MODE="fixed-token"; save_conf; rebuild_tunnel "fixed-token"; restart_services; green_msg "已切换: ${ARGO_FIXED_DOMAIN}" ;;
         0) return ;; *) red_msg "无效" ;;
@@ -2185,7 +2185,7 @@ select_protocols() {
         echo -e "  ${yellow}📋 当前: ${green}${sum}${re}"
         echo -e "  ${yellow}💡 输 1/2/3 切换勾选，输 0 进入端口配置${re}"
         echo -e " ${purple}────────────────────────────────────────${re}"
-        read -p "  (1/2/3=切换 / 0=下一步): " c
+        echo -ne "  (1/2/3=切换 / 0=下一步): "; read c 
         case "$c" in
             1) ENABLE_REALITY=$((1-ENABLE_REALITY)); continue ;;
             2) ENABLE_HY2=$((1-ENABLE_HY2)); continue ;;
@@ -2240,27 +2240,27 @@ interactive_install() {
     local sys_type; [ "$IS_ALPINE" = 1 ] && sys_type="Alpine Linux (OpenRC)" || sys_type="Debian/Ubuntu (systemd)"
     echo -e "  ${cyan}🖥 检测到系统: ${green}${sys_type}${re}\n"
 
-    echo -e " ${white}━━━ ① 节点名称 ━━━${re}"; read -p "  [${NODE_NAME}]: " n; [ -n "$n" ] && NODE_NAME="$n"; echo -e "  → ${green}${NODE_NAME}${re}\n"
-    echo -e " ${white}━━━ ② CDN 地址 ━━━${re}"; echo -e "  ${green}1${re}. 默认 ${green}2${re}. 列表选 ${green}3${re}. 自定义"; read -p "  [1]: " ct
+    echo -e " ${white}━━━ ① 节点名称 ━━━${re}"; echo -ne "  [${NODE_NAME}]: "; read n ; [ -n "$n" ] && NODE_NAME="$n"; echo -e "  → ${green}${NODE_NAME}${re}\n"
+    echo -e " ${white}━━━ ② CDN 地址 ━━━${re}"; echo -e "  ${green}1${re}. 默认 ${green}2${re}. 列表选 ${green}3${re}. 自定义"; echo -ne "  [1]: "; read ct 
     case "${ct:-1}" in
-        2) for k in {1..13}; do echo -e "  ${green}${k}${re}. ${CDN_DOMAINS[$k]}"; done; read -p "  序号 [1]: " ci
+        2) for k in {1..13}; do echo -e "  ${green}${k}${re}. ${CDN_DOMAINS[$k]}"; done; echo -ne "  序号 [1]: "; read ci 
            case "${ci:-1}" in
                1) CDN_DOMAIN="cdn.31514926.xyz" ;; 2) CDN_DOMAIN="skk.moe" ;; 3) CDN_DOMAIN="ip.sb" ;;
                4) CDN_DOMAIN="time.is" ;; 5) CDN_DOMAIN="bestcf.top" ;; 6) CDN_DOMAIN="cfip.xxxxxxxx.tk" ;;
                7) CDN_DOMAIN="cf.090227.xyz" ;; 8) CDN_DOMAIN="yidong.19931101.xyz" ;; 9) CDN_DOMAIN="liantong.19931101.xyz" ;;
                10) CDN_DOMAIN="dianxin.19931101.xyz" ;; 11) CDN_DOMAIN="cdn.2020111.xyz" ;; 12) CDN_DOMAIN="xn--b6gac.eu.org" ;;
                13) CDN_DOMAIN="cdns.doon.eu.org" ;; esac ;;
-        3) read -p "  地址: " CDN_DOMAIN; [ -z "$CDN_DOMAIN" ] && CDN_DOMAIN="$CDN_DEFAULT" ;;
+        3) echo -ne "  地址: "; read CDN_DOMAIN; [ -z "$CDN_DOMAIN" ] && CDN_DOMAIN="$CDN_DEFAULT" ;;
     esac; echo -e "  → ${green}${CDN_DOMAIN}${re}\n"
 
-    echo -e " ${white}━━━ ③ 客户端端口 ━━━${re}"; echo -e "  ${yellow}CF: 443 8443 2053 2083 2087 2096${re}"; read -p "  [${CDN_PORT}]: " n; [ -n "$n" ] && CDN_PORT="$n"; echo -e "  → ${green}${CDN_PORT}${re}\n"
-    echo -e " ${white}━━━ ④ UUID ━━━${re}"; read -p "  [自动生成]: " n; [ -n "$n" ] && UUID_CUSTOM="$n"; echo ""
-    echo -e " ${white}━━━ ⑤ Argo 隧道 ━━━${re}"; echo -e "  ${green}1${re}. 临时     ${green}2${re}. 固定 Token"; read -p "  [1]: " tt
-    case "${tt:-1}" in 2) read -p "  域名: " ARGO_FIXED_DOMAIN; read -p "  Token: " ARGO_AUTH
+    echo -e " ${white}━━━ ③ 客户端端口 ━━━${re}"; echo -e "  ${yellow}CF: 443 8443 2053 2083 2087 2096${re}"; echo -ne "  [${CDN_PORT}]: "; read n ; [ -n "$n" ] && CDN_PORT="$n"; echo -e "  → ${green}${CDN_PORT}${re}\n"
+    echo -e " ${white}━━━ ④ UUID ━━━${re}"; echo -ne "  [自动生成]: "; read n ; [ -n "$n" ] && UUID_CUSTOM="$n"; echo ""
+    echo -e " ${white}━━━ ⑤ Argo 隧道 ━━━${re}"; echo -e "  ${green}1${re}. 临时     ${green}2${re}. 固定 Token"; echo -ne "  [1]: "; read tt 
+    case "${tt:-1}" in 2) echo -ne "  域名: "; read ARGO_FIXED_DOMAIN; echo -ne "  Token: "; read ARGO_AUTH
            [ -n "$ARGO_FIXED_DOMAIN" ] && [ -n "$ARGO_AUTH" ] && ARGO_MODE="fixed-token" ;; esac; echo ""
 
     echo -e " ${white}━━━ ⑥ 内部端口 ━━━${re}"; echo -e "  ${cyan}Argo:${ARGO_PORT}  VLESS:${VLESS_WS_PORT}  VMess:${VMESS_WS_PORT}${re}"
-    read -p "  起始端口 [回车跳过]: " bp
+    echo -ne "  起始端口 [回车跳过]: "; read bp 
     if [ -n "$bp" ] && is_port "$bp"; then ARGO_PORT="$bp"; VLESS_WS_PORT=$((bp+1)); VMESS_WS_PORT=$((bp+2)); fi
     echo ""
     echo -e " ${white}━━━ ⑦ 订阅域名（可选）━━━${re}"
@@ -2268,17 +2268,17 @@ interactive_install() {
     echo -e "  ${yellow}使用CF代理端口 2096，DNS开小黄云即可，无需Origin Rules${re}"
     echo -e "  ${yellow}回车跳过则使用 http://IP:端口 格式${re}"
     [ -n "$SUB_DOMAIN" ] && echo -e "  ${cyan}当前: ${SUB_DOMAIN}${re}"
-    read -p "  域名 [回车跳过]: " sd
+    echo -ne "  域名 [回车跳过]: "; read sd 
     [ -n "$sd" ] && SUB_DOMAIN="$sd"
     if [ -n "$SUB_DOMAIN" ]; then
         echo ""
         echo -e "  ${yellow}选择 CF 支持的 HTTPS 端口:${re}"
         echo -e "  ${cyan}1${re}. 2096 (默认)  ${cyan}2${re}. 8443  ${cyan}3${re}. 2053  ${cyan}4${re}. 2083  ${cyan}5${re}. 2087  ${cyan}6${re}. 443  ${cyan}c${re}. 自定义"
-        read -p "  [1]: " pc
+        echo -ne "  [1]: "; read pc 
         case "${pc:-1}" in
             2) SUB_PORT=8443 ;; 3) SUB_PORT=2053 ;; 4) SUB_PORT=2083 ;;
             5) SUB_PORT=2087 ;; 6) SUB_PORT=443 ;;
-            c|C) read -p "  端口: " SUB_PORT ;;
+            c|C) echo -ne "  端口: "; read SUB_PORT ;;
             *) SUB_PORT=2096 ;;
         esac
         if port_in_use "$SUB_PORT"; then
@@ -2531,13 +2531,13 @@ edit_hy2_protocol() {
     echo ""
     echo -e " ${white}── SNI ──${re}"
     echo -e "  ${yellow}当前: ${cyan}${cur_sni}${re}"
-    read -p "  新 SNI [回车保持]: " hs
+    echo -ne "  新 SNI [回车保持]: "; read hs 
     [ -n "$hs" ] && new_sni="$hs"
     echo -e "  → ${green}${new_sni}${re}\n"
 
     echo -e " ${white}── 端口 ──${re}"
     echo -e "  ${yellow}当前: ${cyan}${cur_port}${re} 公网端口"
-    read -p "  新端口 [回车保持]: " hp
+    echo -ne "  新端口 [回车保持]: "; read hp 
     if [ -n "$hp" ]; then
         if ! is_port "$hp"; then
             red_msg "端口无效，保持原端口"
@@ -2553,7 +2553,7 @@ edit_hy2_protocol() {
 
     echo -e " ${white}── 端口跳跃 ──${re}"
     echo -e "  ${yellow}当前: ${cyan}${cur_mport:-关闭}${re}"
-    read -p "  新范围 [回车保持，off 关闭，如 5000-6000]: " hm
+    echo -ne "  新范围 [回车保持，off 关闭，如 5000-6000]: "; read hm 
     if [ "$hm" = "off" ] || [ "$hm" = "OFF" ]; then
         new_mport=""
     elif [ -n "$hm" ]; then
@@ -2739,12 +2739,12 @@ edit_protocol() {
 
             echo -e " ${white}━━━ ① 内部端口 ━━━${re}"
             echo -e "  ${yellow}仅 127.0.0.1，通过 Argo 隧道。当前: ${cyan}${cur_port}${re}"
-            read -p "  新端口 [回车保持]: " np; local new_port="${np:-$cur_port}"
+            echo -ne "  新端口 [回车保持]: "; read np ; local new_port="${np:-$cur_port}"
             echo -e "  → ${green}${new_port}${re}\n"
 
             echo -e " ${white}━━━ ② WS 路径 ━━━${re}"
             echo -e "  ${yellow}当前: ${cyan}${cur_path}${re}"
-            read -p "  新路径 [回车保持]: " npt; local new_path="${npt:-$cur_path}"
+            echo -ne "  新路径 [回车保持]: "; read npt ; local new_path="${npt:-$cur_path}"
             echo -e "  → ${green}${new_path}${re}\n"
 
             echo -e " ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
@@ -2794,26 +2794,26 @@ edit_protocol() {
         ss)
             echo -e " ${white}━━━ ① 加密 ━━━${re}"
             for i in "${!SS_METHODS[@]}"; do local mk=" "; [ "${SS_METHODS[$i]}" = "$new_method" ] && mk="★"; echo -e "  ${green}$((i+1))${re}.${mk} ${SS_METHODS[$i]}"; done
-            echo ""; echo -e "  ${yellow}当前: ${cyan}${new_method}${re}"; read -p "  新加密 [回车保持]: " sm
+            echo ""; echo -e "  ${yellow}当前: ${cyan}${new_method}${re}"; echo -ne "  新加密 [回车保持]: "; read sm 
             if [ -n "$sm" ]; then local si=$((sm-1)); [ "$si" -ge 0 ] 2>/dev/null && [ "$si" -lt "${#SS_METHODS[@]}" ] && new_method="${SS_METHODS[$si]}"; fi
             echo -e "  → ${green}${new_method}${re}\n"
 
             echo -e " ${white}━━━ ② 密码 ━━━${re}"
             echo -e "  ${yellow}当前: ${cyan}$(echo "$cur_pass" | cut -c1-24)...${re}"; echo -e "  ${yellow}回车保持。输入 new 自动生成。${re}"
-            read -p "  新密码 [回车保持]: " np
+            echo -ne "  新密码 [回车保持]: "; read np 
             if [ "$np" = "new" ] || [ "$np" = "NEW" ]; then
                 [[ "$new_method" =~ 2022 ]] && new_pass=$(gen_ss2022_pass "$new_method") || new_pass=$(cat /proc/sys/kernel/random/uuid)
             elif [ -n "$np" ]; then new_pass="$np"; fi
             echo -e "  → ${green}$(echo "$new_pass" | cut -c1-24)...${re}\n"
 
-            echo -e " ${white}━━━ ③ 端口 ━━━${re}"; echo -e "  ${yellow}当前: ${cyan}${cur_port}${re} 公网端口"; read -p "  新端口 [回车保持]: " np2
+            echo -e " ${white}━━━ ③ 端口 ━━━${re}"; echo -e "  ${yellow}当前: ${cyan}${cur_port}${re} 公网端口"; echo -ne "  新端口 [回车保持]: "; read np2
             [ -n "$np2" ] && ! port_in_use "$np2" && new_port="$np2"; [ -n "$np2" ] && port_in_use "$np2" && red_msg "端口占用，保持原端口"
             echo -e "  → ${green}${new_port}${re}\n"
 
             echo -e " ${white}━━━ ④ 网络 ━━━${re}"
             local cur_net; cur_net=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.settings.network//"tcp,udp"' "$CONFIG_FILE" 2>/dev/null)
             echo -e "  ${green}1${re}. tcp,udp  ${green}2${re}. tcp  ${green}3${re}. udp"
-            echo -e "  ${yellow}当前: ${cyan}${cur_net}${re}"; read -p "  选择 [回车保持]: " nn
+            echo -e "  ${yellow}当前: ${cyan}${cur_net}${re}"; echo -ne "  选择 [回车保持]: "; read nn 
             case "${nn:-0}" in 1) cur_net="tcp,udp" ;; 2) cur_net="tcp" ;; 3) cur_net="udp" ;; esac
             local new_net="$cur_net"
             echo -e "  → ${green}${new_net}${re}\n"
@@ -2822,19 +2822,19 @@ edit_protocol() {
             echo -e " ${white}━━━ ① 伪装域名 ━━━${re}"
             for i in "${!REALITY_SNIS[@]}"; do local mk=" "; [ "${REALITY_SNIS[$i]}" = "$new_sni" ] && mk="★"; echo -e "  ${green}$((i+1))${re}.${mk} ${REALITY_SNIS[$i]}"; done
             echo -e "  ${cyan}c${re}. 自定义"
-            echo ""; echo -e "  ${yellow}当前: ${cyan}${new_sni}${re}"; read -p "  新 SNI [回车保持]: " rs
+            echo ""; echo -e "  ${yellow}当前: ${cyan}${new_sni}${re}"; echo -ne "  新 SNI [回车保持]: "; read rs 
             if [ "$rs" = "c" ] || [ "$rs" = "C" ]; then
-                read -p "  输入 SNI: " new_sni; [ -z "$new_sni" ] && new_sni="$cur_sni"
+                echo -ne "  输入 SNI: "; read new_sni ; [ -z "$new_sni" ] && new_sni="$cur_sni"
             elif [ -n "$rs" ]; then local ri=$((rs-1)); [ "$ri" -ge 0 ] 2>/dev/null && [ "$ri" -lt "${#REALITY_SNIS[@]}" ] && new_sni="${REALITY_SNIS[$ri]}"; fi
             echo -e "  → ${green}${new_sni}${re}\n"
 
-            echo -e " ${white}━━━ ② 端口 ━━━${re}"; echo -e "  ${yellow}当前: ${cyan}${cur_port}${re} 公网端口"; read -p "  新端口 [回车保持]: " np2
+            echo -e " ${white}━━━ ② 端口 ━━━${re}"; echo -e "  ${yellow}当前: ${cyan}${cur_port}${re} 公网端口"; echo -ne "  新端口 [回车保持]: "; read np2
             [ -n "$np2" ] && ! port_in_use "$np2" && new_port="$np2"; [ -n "$np2" ] && port_in_use "$np2" && red_msg "端口占用，保持原端口"
             echo -e "  → ${green}${new_port}${re}\n"
 
             echo -e " ${white}━━━ ③ x25519 密钥 ━━━${re}"
             echo -e "  ${yellow}当前: ${cyan}$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.privateKey//empty' "$CONFIG_FILE" 2>/dev/null | cut -c1-24)...${re}"
-            echo -e "  ${yellow}输入 new 重新生成。${re}"; read -p "  [回车保持]: " rk
+            echo -e "  ${yellow}输入 new 重新生成。${re}"; echo -ne "  [回车保持]: "; read rk 
             [ "$rk" = "new" ] || [ "$rk" = "NEW" ] && { gen_reality_keys; echo -e "  → ${green}新密钥已生成${re}"; }; echo ""
 
             echo -e " ${white}━━━ ④ ShortId ━━━${re}"
@@ -2842,7 +2842,7 @@ edit_protocol() {
             [ -z "$cur_sid" ] && cur_sid="(空)"
             echo -e "  ${yellow}当前: ${cyan}${cur_sid}${re}"
             echo -e "  ${yellow}回车保持。输入 new 随机生成。${re}"
-            read -p "  新 ShortId [回车保持]: " nsid
+            echo -ne "  新 ShortId [回车保持]: "; read nsid 
             if [ "$nsid" = "new" ] || [ "$nsid" = "NEW" ]; then
                 gen_reality_shortid
                 echo -e "  → ${green}${REALITY_SHORTID}${re}"
@@ -2855,7 +2855,7 @@ edit_protocol() {
             local cur_fp; cur_fp=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.fingerprint//"chrome"' "$CONFIG_FILE" 2>/dev/null)
             local fps=("chrome" "firefox" "safari" "edge" "random")
             for i in "${!fps[@]}"; do local mk=" "; [ "${fps[$i]}" = "$cur_fp" ] && mk="★"; echo -e "  ${green}$((i+1))${re}.${mk} ${fps[$i]}"; done
-            echo ""; echo -e "  ${yellow}当前: ${cyan}${cur_fp}${re}"; read -p "  新指纹 [回车保持]: " fp
+            echo ""; echo -e "  ${yellow}当前: ${cyan}${cur_fp}${re}"; echo -ne "  新指纹 [回车保持]: "; read fp 
             [ -n "$fp" ] && { local fi=$((fp-1)); [ "$fi" -ge 0 ] 2>/dev/null && [ "$fi" -lt "${#fps[@]}" ] && cur_fp="${fps[$fi]}"; }; new_fp="$cur_fp"
             echo -e "  → ${green}${new_fp}${re}\n"
             ;;
@@ -2926,7 +2926,7 @@ add_single_protocol() {
 
             echo -e " ${white}━━━ ① 加密方式 ━━━${re}"
             for i in "${!SS_METHODS[@]}"; do local mk=" "; [ "${SS_METHODS[$i]}" = "$sm" ] && mk="★"; echo -e "  ${green}$((i+1))${re}.${mk} ${SS_METHODS[$i]}"; done
-            echo ""; echo -e "  ${yellow}当前: ${cyan}${sm}${re}"; read -p "  选择 [回车保持]: " s
+            echo ""; echo -e "  ${yellow}当前: ${cyan}${sm}${re}"; echo -ne "  选择 [回车保持]: "; read s 
             local si=$(( ${s:-0} -1 ))
             [ "$si" -ge 0 ] 2>/dev/null && [ "$si" -lt "${#SS_METHODS[@]}" ] && sm="${SS_METHODS[$si]}"
             echo -e "  → ${green}${sm}${re}\n"
@@ -2936,7 +2936,7 @@ add_single_protocol() {
             [ -z "$sp" ] && sp="$dp"
             echo -e "  ${yellow}当前: ${cyan}$(echo "$sp"|cut -c1-20)...${re}"
             echo -e "  ${yellow}回车保持。输入 new 自动生成。${re}"
-            read -p "  密码 [回车保持]: " s
+            echo -ne "  密码 [回车保持]: "; read s 
             if [ "$s" = "new" ] || [ "$s" = "NEW" ]; then
                 [[ "$sm" =~ 2022 ]] && sp=$(gen_ss2022_pass "$sm") || sp=$(cat /proc/sys/kernel/random/uuid)
             elif [ -n "$s" ]; then sp="$s"; fi
@@ -2944,13 +2944,13 @@ add_single_protocol() {
 
             echo -e " ${white}━━━ ③ 端口 ━━━${re}"
             [ -z "$s_port" ] && { local dpt; dpt=$(find_free_port "${SS_PORT:-0}"); [ "$dpt" = "0" ] && dpt=$(find_free_port "$(shuf -i 10000-60000 -n 1)"); s_port="$dpt"; }
-            echo -e "  ${yellow}当前: ${cyan}${s_port}${re}"; read -p "  端口 [回车保持]: " s
+            echo -e "  ${yellow}当前: ${cyan}${s_port}${re}"; echo -ne "  端口 [回车保持]: "; read s 
             [ -n "$s" ] && ! port_in_use "$s" && s_port="$s"; [ -n "$s" ] && port_in_use "$s" && red_msg "端口占用，保持原端口"
             echo -e "  → ${green}${s_port}${re}\n"
 
             echo -e " ${white}━━━ ④ 网络 ━━━${re}"
             echo -e "  ${green}1${re}. tcp,udp  ${green}2${re}. tcp  ${green}3${re}. udp"
-            echo -e "  ${yellow}当前: ${cyan}${s_net}${re}"; read -p "  选择 [回车保持]: " s
+            echo -e "  ${yellow}当前: ${cyan}${s_net}${re}"; echo -ne "  选择 [回车保持]: "; read s 
             case "${s:-0}" in 1) s_net="tcp,udp" ;; 2) s_net="tcp" ;; 3) s_net="udp" ;; esac
             echo -e "  → ${green}${s_net}${re}\n"
             ;;
@@ -2963,10 +2963,10 @@ add_single_protocol() {
             echo -e " ${white}━━━ ① 伪装域名 (SNI) ━━━${re}"
             for i in "${!REALITY_SNIS[@]}"; do local mk=" "; [ "${REALITY_SNIS[$i]}" = "$r_sni" ] && mk="★"; echo -e "  ${green}$((i+1))${re}.${mk} ${REALITY_SNIS[$i]}"; done
             echo -e "  ${cyan}c${re}. 自定义"; echo ""
-            echo -e "  ${yellow}当前: ${cyan}${r_sni}${re}"; read -p "  选择 [回车保持]: " rs
+            echo -e "  ${yellow}当前: ${cyan}${r_sni}${re}"; echo -ne "  选择 [回车保持]: "; read rs 
             local ri=$(( ${rs:-0} -1 ))
             if [ "$rs" = "c" ] || [ "$rs" = "C" ]; then
-                read -p "  输入 SNI: " r_sni; [ -z "$r_sni" ] && r_sni="www.amazon.com"
+                echo -ne "  输入 SNI: "; read r_sni ; [ -z "$r_sni" ] && r_sni="www.amazon.com"
             elif [ "$ri" -ge 0 ] 2>/dev/null && [ "$ri" -lt "${#REALITY_SNIS[@]}" ]; then
                 r_sni="${REALITY_SNIS[$ri]}"
             fi
@@ -2974,14 +2974,14 @@ add_single_protocol() {
 
             echo -e " ${white}━━━ ② 端口 ━━━${re}"
             [ -z "$r_port" ] && { r_port=$(find_free_port "$(shuf -i 10000-60000 -n 1)"); }
-            echo -e "  ${yellow}当前: ${cyan}${r_port}${re}"; read -p "  端口 [回车保持]: " s
+            echo -e "  ${yellow}当前: ${cyan}${r_port}${re}"; echo -ne "  端口 [回车保持]: "; read s 
             [ -n "$s" ] && ! port_in_use "$s" && r_port="$s"; [ -n "$s" ] && port_in_use "$s" && red_msg "端口占用，保持原端口"
             echo -e "  → ${green}${r_port}${re}\n"
 
             echo -e " ${white}━━━ ③ ShortId ━━━${re}"
             [ -z "$r_sid" ] && { r_sid=$(openssl rand -hex 4 2>/dev/null || printf '%08x' $((RANDOM*RANDOM))); }
             echo -e "  ${yellow}8位十六进制，客户端需匹配。${re}"
-            echo -e "  ${yellow}当前: ${cyan}${r_sid}${re}"; read -p "  ShortId [回车保持]: " s
+            echo -e "  ${yellow}当前: ${cyan}${r_sid}${re}"; echo -ne "  ShortId [回车保持]: "; read s 
             if [ "$s" = "new" ] || [ "$s" = "NEW" ]; then
                 r_sid=$(openssl rand -hex 4 2>/dev/null || printf '%08x' $((RANDOM*RANDOM)))
             elif [ -n "$s" ]; then r_sid="$s"; fi
@@ -2994,21 +2994,21 @@ add_single_protocol() {
             echo -e "  ${yellow}私钥: ${cyan}$(echo "${REALITY_PRIV}"|cut -c1-24)...${re}"
             echo -e "  ${yellow}公钥: ${cyan}$(echo "${REALITY_PUB}"|cut -c1-24)...${re}"
             echo -e "  ${yellow}回车保持。输入 new 重新生成。${re}"
-            read -p "  [回车保持]: " s
+            echo -ne "  [回车保持]: "; read s 
             [ "$s" = "new" ] || [ "$s" = "NEW" ] && { gen_reality_keys; echo -e "  → ${green}新密钥已生成${re}"; }
             echo -e "  → ${green}$(echo "${REALITY_PUB}"|cut -c1-24)...${re}\n"
 
             echo -e " ${white}━━━ ⑤ 指纹 (Fingerprint) ━━━${re}"
             local fps=("chrome" "firefox" "safari" "edge" "random")
             for i in "${!fps[@]}"; do local mk=" "; [ "${fps[$i]}" = "$r_fp" ] && mk="★"; echo -e "  ${green}$((i+1))${re}.${mk} ${fps[$i]}"; done
-            echo ""; echo -e "  ${yellow}当前: ${cyan}${r_fp}${re}"; read -p "  选择 [回车保持]: " s
+            echo ""; echo -e "  ${yellow}当前: ${cyan}${r_fp}${re}"; echo -ne "  选择 [回车保持]: "; read s 
             local fi=$(( ${s:-0} -1 ))
             [ "$fi" -ge 0 ] 2>/dev/null && [ "$fi" -lt "${#fps[@]}" ] && r_fp="${fps[$fi]}"
             echo -e "  → ${green}${r_fp}${re}\n"
 
             echo -e " ${white}━━━ ⑥ 流控 (Flow) ━━━${re}"
             echo -e "  ${green}1${re}. xtls-rprx-vision"
-            echo ""; echo -e "  ${yellow}当前: ${cyan}xtls-rprx-vision${re}"; read -p "  [回车保持]: " s
+            echo ""; echo -e "  ${yellow}当前: ${cyan}xtls-rprx-vision${re}"; echo -ne "  [回车保持]: "; read s 
             echo -e "  → ${green}xtls-rprx-vision${re}\n"
             ;;
     esac
@@ -3077,7 +3077,7 @@ legacy_delete_protocol_unused() {
     [ "$has_reality" = 1 ] && dd=$((dd+1)) && echo -e "  ${red}${dd}${re}. VLESS Reality"
     [ "$has_ss" = 1 ] && dd=$((dd+1)) && echo -e "  ${red}${dd}${re}. Shadowsocks"
     echo -e "  ${cyan}0${re}. 返回"; echo -e " ${purple}────────────────────────────────────────${re}"
-    read -p "  选择: " dc; [ "$dc" = "0" ] && return
+    echo -ne "  选择: "; read dc ; [ "$dc" = "0" ] && return
 
     local del_tag=""
     [ "$dc" = "1" ] && [ "$has_reality" = 1 ] && del_tag="reality"
@@ -3109,7 +3109,7 @@ add_custom_link() {
     echo ""
     echo -e "  ${cyan}示例: hy2://password@1.2.3.4:443?sni=xxx.com&insecure=0#Name${re}"
     echo ""
-    read -p "  链接: " link
+    echo -ne "  链接: "; read link 
     [ -z "$link" ] && { yellow_msg "已取消。"; sleep 1; return; }
     # 防粘连：每次只能粘贴一个链接
     local url_count; url_count=$(echo "$link" | grep -o '://' | wc -l)
@@ -3160,11 +3160,11 @@ view_delete_custom_links() {
         echo ""
         echo -e "  ${red}d${re}. 删除指定序号    ${red}da${re}. 清空全部    ${cyan}0${re}. 返回"
         echo -e " ${purple}────────────────────────────────────────${re}"
-        read -p "  请选择: " c
+        echo -ne "  请选择: "; read c 
         case "$c" in
             0) return ;;
             d|D)
-                read -p "  删除序号 (多个用逗号分隔，如 1,3): " nums
+                echo -ne "  删除序号 (多个用逗号分隔，如 1,3): "; read nums 
                 [ -z "$nums" ] && { yellow_msg "已取消。"; continue; }
                 IFS=',' read -ra indices <<< "$nums"
                 # 重建文件
@@ -3234,7 +3234,7 @@ relay_menu() {
         fi
         echo ""; echo -e "  ${cyan}0${re}. 返回"
         echo -e " ${purple}────────────────────────────────────────${re}"
-        read -p "  请选择: " c
+        echo -ne "  请选择: "; read c 
         case "$c" in
             r1|R1)
                 echo ""; echo -e " ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
@@ -3251,7 +3251,7 @@ relay_menu() {
                 echo -e "  ${cyan}也支持: vless://  vmess://  trojan://${re}"
                 echo -e " ${purple}────────────────────────────────────────${re}"
                 echo ""
-                read -p "  粘贴链接: " link
+                echo -ne "  粘贴链接: "; read link 
                 [ -z "$link" ] && { yellow_msg "已取消。"; sleep 1; continue; }
                 # 基础校验
                 if ! echo "$link" | grep -qE '^(ss|vless|vmess|trojan)://'; then
@@ -3314,9 +3314,9 @@ relay_manage_domains() {
         echo ""
         echo -e "  ${green}1${re}. 添加域名    ${red}2${re}. 删除序号    ${red}da${re}. 清空全部    ${cyan}0${re}. 返回"
         echo -e " ${purple}────────────────────────────────────────${re}"
-        read -p "  请选择: " c
+        echo -ne "  请选择: "; read c 
         case "$c" in
-            1) echo ""; echo -e "  ${yellow}多个用逗号分隔:${re}"; read -p "  > " input
+            1) echo ""; echo -e "  ${yellow}多个用逗号分隔:${re}"; echo -ne "  > "; read input 
                [ -z "$input" ] && continue
                touch "$RELAY_DOMAIN_FILE"
                IFS=',' read -ra DOMS <<< "$input"
@@ -3327,7 +3327,7 @@ relay_manage_domains() {
                green_msg "已更新。"; sleep 1
                ;;
             2) echo ""; echo -e "  ${yellow}输入要删除的序号，空格分隔 (如 5 6 8):${re}"
-               read -p "  > " input
+               echo -ne "  > "; read input 
                [ -z "$input" ] && { yellow_msg "已取消。"; sleep 1; continue; }
                # 重建文件
                local new_doms=() idx=0
@@ -3697,7 +3697,7 @@ warp_menu() {
         echo -e "  ${red}0${re}. 返回主菜单"
         echo ""
         echo -e " ${purple}────────────────────────────────────────${re}"
-        read -p "  请选择: " wc
+        echo -ne "  请选择: "; read wc 
 
         case "$wc" in
             1) warp_auto_install_socks || continue; warp_add_defaults
@@ -3794,7 +3794,7 @@ warp_add_custom() {
     echo -e "  ${yellow}请输入要分流的域名，多个用逗号或空格分隔:${re}"
     echo -e "  ${cyan}示例: twitter.com, instagram.com, openai.com${re}"
     echo ""
-    read -p "  > " input
+    echo -ne "  > "; read input 
     [ -z "$input" ] && { yellow_msg "已取消。"; sleep 1; return; }
 
     # 分割逗号或空格
@@ -3825,7 +3825,7 @@ warp_remove_domain() {
     nl -w2 -s'. ' "$WARP_DOMAIN_FILE"
     echo ""
     echo -e "  ${yellow}输入要删除的序号 (多个用逗号分隔)，或输入域名本身:${re}"
-    read -p "  > " input
+    echo -ne "  > "; read input 
     [ -z "$input" ] && { yellow_msg "已取消。"; sleep 1; return; }
 
     # 读取域名到数组
@@ -3879,7 +3879,7 @@ warp_view_clear() {
         echo ""
         echo -e "  ${red}c${re}. 清空全部    ${cyan}0${re}. 返回"
         echo -e " ${purple}────────────────────────────────────────${re}"
-        read -p "  请选择: " vc
+        echo -ne "  请选择: "; read vc 
         case "$vc" in
             c|C) echo ""; echo -ne "  ${red}确认清空? (y/n): ${re}"; read cf
                  [ "$cf" = "y" ] || [ "$cf" = "Y" ] && { > "$WARP_DOMAIN_FILE"; green_msg "已清空。"; } ;;
@@ -4006,7 +4006,7 @@ warp_switch_mode() {
     echo -e "  ${red}0${re}. 返回"
     echo ""
     echo -e " ${purple}────────────────────────────────────────${re}"
-    read -p "  请选择: " mc; [ "$mc" = "0" ] && return
+    echo -ne "  请选择: "; read mc ; [ "$mc" = "0" ] && return
 
     # 检查 Python3
     if ! command -v python3 &>/dev/null; then
@@ -4161,11 +4161,11 @@ add_hy2_protocol() {
     echo -e " ${purple}Add Hysteria2${re}"
     echo ""
     echo -e "  Default SNI: ${cyan}${h_sni}${re}"
-    read -p "  SNI [enter keep]: " hs
+    echo -ne "  SNI [enter keep]: "; read hs 
     [ -n "$hs" ] && h_sni="$hs"
 
     echo -e "  Random port: ${cyan}${h_port}${re}"
-    read -p "  Port [enter keep]: " hp
+    echo -ne "  Port [enter keep]: "; read hp 
     if [ -n "$hp" ]; then
         if ! is_port "$hp"; then
             red_msg "Invalid port, keep random port."
@@ -4176,7 +4176,7 @@ add_hy2_protocol() {
         fi
     fi
 
-    read -p "  Port hopping range [enter disable, e.g. 5000-6000]: " hm
+    echo -ne "  Port hopping range [enter disable, e.g. 5000-6000]: "; read hm 
     if [ -n "$hm" ]; then
         if is_port_range "$hm"; then
             h_mport="$hm"
@@ -4218,7 +4218,7 @@ add_hy2_protocol() {
     green_msg "Hysteria2 added."
     [ -n "$ip" ] && echo -e "  ${green}$(gen_hy2_link "$uuid" "$ip" "$HY2_PORT" "$HY2_SNI" "${NODE_NAME}-Hy2" "$HY2_MPORT")${re}"
     echo ""
-    read -p "  Press Enter to continue..." -r
+    echo -ne "  Press Enter to continue..."; read -r
 }
 
 delete_protocol() {
@@ -4402,7 +4402,7 @@ agg_menu() {
         case "$c" in
             g1|G1)
                 echo ""; echo -e "  ${yellow}粘贴其他 VPS 的订阅 URL:${re}"
-                read -p "  URL: " url
+                echo -ne "  URL: "; read url 
                 [ -z "$url" ] && { yellow_msg "已取消。"; sleep 1; continue; }
                 if ! echo "$url" | grep -qE '^https?://'; then
                     red_msg "无效 URL"; sleep 1; continue
@@ -4414,7 +4414,7 @@ agg_menu() {
                 ;;
             g2|G2)
                 [ "$count" = 0 ] && { yellow_msg "无源可删。"; sleep 1; continue; }
-                echo ""; read -p "  输入序号删除 (多选空格分隔): " nums
+                echo ""; echo -ne "  输入序号删除 (多选空格分隔): "; read nums 
                 [ -z "$nums" ] && { yellow_msg "已取消。"; sleep 1; continue; }
                 local idx=0 new=()
                 while IFS= read -r line; do
