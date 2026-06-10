@@ -444,7 +444,7 @@ is_safe_conf_file() {
         [[ "$line" =~ ^[A-Z][A-Z0-9_]*= ]] || return 1
         key="${line%%=*}"
         case "$key" in
-            NODE_NAME|ARGO_PORT|VLESS_WS_PORT|VMESS_WS_PORT|CDN_PORT|CDN_DOMAIN|ARGO_MODE|ARGO_AUTH|ARGO_FIXED_DOMAIN|UUID_CUSTOM|REALITY_PORT|HY2_PORT|HY2_MPORT|HY2_CONGESTION|HY2_UP_MBPS|HY2_DOWN_MBPS|SS_PORT|SUB_PORT|SUB_PATH|SUB_DOMAIN|SUB_TOKEN|REALITY_SNI|HY2_SNI|SS_METHOD|ENABLE_REALITY|ENABLE_HY2|ENABLE_SS|HY2_CERT_FILE|HY2_KEY_FILE|REALITY_PRIV|REALITY_PUB|REALITY_SHORTID|LAST_ARGO_DOMAIN|RELAY_ENABLED|RELAY_LINK|RELAY_MODE|XRAY_VERSION|XRAY_SHA256|CLOUDFLARED_VERSION|CLOUDFLARED_SHA256) ;;
+            NODE_NAME|ARGO_PORT|VLESS_WS_PORT|VMESS_WS_PORT|CDN_PORT|CDN_DOMAIN|ARGO_MODE|ARGO_AUTH|ARGO_FIXED_DOMAIN|UUID_CUSTOM|REALITY_PORT|HY2_PORT|HY2_MPORT|HY2_CONGESTION|HY2_UP_MBPS|HY2_DOWN_MBPS|SS_PORT|SUB_PORT|SUB_PATH|SUB_DOMAIN|SUB_TOKEN|REALITY_SNI|HY2_SNI|SS_METHOD|ENABLE_REALITY|ENABLE_HY2|ENABLE_SS|HY2_CERT_FILE|HY2_KEY_FILE|REALITY_PRIV|REALITY_PUB|REALITY_SHORTID|LAST_ARGO_DOMAIN|RELAY_ENABLED|RELAY_LINK|RELAY_MODE|XRAY_VERSION|XRAY_SHA256|CLOUDFLARED_VERSION|CLOUDFLARED_SHA256|AGG_TOKEN) ;;
             *) return 1 ;;
         esac
         case "$line" in
@@ -1021,7 +1021,7 @@ edit_subscription() {
                 SUB_PATH="/${SUB_TOKEN}"; save_conf
                 start_sub_server; green_msg "新 Token: ${SUB_TOKEN}"; sleep 1
                 ;;
-            5) echo ""; echo -e "  ${green}$(get_sub_url 2>/dev/null)${re}"; echo ""; read -p "  按回车继续..." -r ;;
+            5) echo ""; echo -e "  ${green}$(get_sub_url 2>/dev/null)${re}"; echo ""; echo -ne "  按回车继续..."; read -r ;;
             0) return ;;
             *) red_msg "无效"; sleep 1 ;;
         esac
@@ -1946,7 +1946,7 @@ change_config() {
                save_conf; green_msg "Reality SNI: ${REALITY_SNI}" ;;
             6) manage_protocols ;;
             7) show_node ;; 8) restart_services ;; 9) edit_subscription ;; 0) return ;; *) red_msg "无效" ;;
-        esac; read -p "  按回车继续..." -r
+        esac; echo -ne "  按回车继续..."; read -r
     done
 }
 
@@ -1984,7 +1984,7 @@ manage_users() {
         echo -e "  ${red}7${re}. Delete user"
         echo -e "  ${red}0${re}. Back"
         echo ""
-        read -p "  Select: " c
+        echo -ne "  Select: "; read c
         case "$c" in
             1)
                 local name quota quota_bytes uuid token ip
@@ -2005,7 +2005,7 @@ manage_users() {
                 else
                     red_msg "User already exists or cannot be added."
                 fi
-                read -p "  Press Enter..." -r
+                echo -ne "  Press Enter..."; read -r
                 ;;
             2|3|4|5|6|7|8)
                 local name quota quota_bytes token ip line enabled used quota_cur
@@ -2035,7 +2035,7 @@ EOF
                         ip=$(get_ip)
                         echo ""
                         echo -e "  ${green}$(get_user_sub_url "$ip" "$token")${re}"
-                        read -p "  Press Enter..." -r
+                        echo -ne "  Press Enter..."; read -r
                         ;;
                     8)
                         local cur_day
@@ -2633,7 +2633,7 @@ edit_hy2_protocol() {
     get_status
     green_msg "完成"
     [ -n "$ip" ] && echo -e "  ${green}$(gen_hy2_link "$uuid" "$ip" "$new_port" "$new_sni" "${NODE_NAME}-Hy2" "$new_mport")${re}"
-    echo ""; read -p "  按回车继续..." -r
+    echo ""; echo -ne "  按回车继续..."; read -r
 }
 
 legacy_manage_protocols_unused() {
@@ -2700,7 +2700,7 @@ legacy_manage_protocols_unused() {
         [ "$has_reality" = 1 ] || [ "$has_ss" = 1 ] && echo "" && echo -e "  ${red}d${re}. 删除可选节点"
         echo ""; echo -e "  ${red}0${re}. 返回"
         echo -e " ${purple}────────────────────────────────────────${re}"
-        read -p "  请输入: " ac; [ "$ac" = "0" ] && return
+        echo -ne "  请输入: "; read ac; [ "$ac" = "0" ] && return
 
         case "$ac" in
             e1) edit_protocol "vless-ws" "VLESS + Argo" ;;
@@ -2766,7 +2766,7 @@ edit_protocol() {
                "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
             [ "$tag" = "vless-ws" ] && VLESS_WS_PORT="$new_port" || VMESS_WS_PORT="$new_port"
             save_conf; yellow_msg "重启 Xray..."; systemctl restart xray 2>/dev/null; sleep 2; get_status; green_msg "完成"
-            echo ""; read -p "  按回车继续..." -r
+            echo ""; echo -ne "  按回车继续..."; read -r
             return ;;
         reality)
             cur_port=$(jq -r '.inbounds[]|select(.tag=="reality")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
@@ -2906,7 +2906,7 @@ edit_protocol() {
         ss) [ -n "$ip" ] && echo -e "  ${green}$(gen_ss_link "$new_method" "$new_pass" "$ip" "$new_port" "${NODE_NAME}-SS")${re}" ;;
         reality) [ -n "$ip" ] && echo -e "  ${green}$(gen_reality_link "$uuid" "$ip" "$new_port" "$new_sni" "$REALITY_PUB" "$REALITY_SHORTID")${re}" ;; 
     esac
-    echo ""; read -p "  按回车继续..." -r
+    echo ""; echo -ne "  按回车继续..."; read -r
 }
 
 add_single_protocol() {
@@ -3060,7 +3060,7 @@ add_single_protocol() {
         ss) [ -n "$ip" ] && echo -e "  ${green}$(gen_ss_link "$sm" "$sp" "$ip" "$s_port" "${NODE_NAME}-SS")${re}" ;;
         reality) [ -n "$ip" ] && echo -e "  ${green}$(gen_reality_link "$uuid" "$ip" "$r_port" "$r_sni" "$REALITY_PUB" "$REALITY_SHORTID")${re}" ;;
     esac
-    echo ""; read -p "  按回车返回..." -r
+    echo ""; echo -ne "  按回车返回..."; read -r
 }
 
 legacy_delete_protocol_unused() {
@@ -3068,7 +3068,7 @@ legacy_delete_protocol_unused() {
     local has_reality=0 has_ss=0
     grep -qE '"tag"[[:space:]]*:[[:space:]]*"reality"' "$CONFIG_FILE" 2>/dev/null && has_reality=1
     grep -q '"shadowsocks"' "$CONFIG_FILE" 2>/dev/null && has_ss=1
-    [ $((has_reality+has_ss)) = 0 ] && { echo ""; green_msg "无可删除。"; echo ""; read -p "  按回车返回..." -r; return; }
+    [ $((has_reality+has_ss)) = 0 ] && { echo ""; green_msg "无可删除。"; echo ""; echo -ne "  按回车返回..."; read -r; return; }
 
     echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
     echo -e " ${purple}║${re}         ${red}删除节点${re}                          ${purple}║${re}"
@@ -3090,7 +3090,7 @@ legacy_delete_protocol_unused() {
     [ "$del_tag" = "reality" ] && ENABLE_REALITY=0
     [ "$del_tag" = "ss" ] && ENABLE_SS=0
     save_conf; systemctl restart xray 2>/dev/null; sleep 1; green_msg "已删除。"
-    echo ""; read -p "  按回车返回..." -r
+    echo ""; echo -ne "  按回车返回..."; read -r
 }
 
 #==============================================================================
@@ -3271,7 +3271,7 @@ relay_menu() {
                 save_conf; green_msg "模式: $([ "$RELAY_MODE" = "all" ] && echo "全部流量中继" || echo "分流模式")"
                 if [ "$RELAY_ENABLED" = "1" ] && [ -n "$RELAY_LINK" ]; then
                     echo -ne "  ${yellow}立即应用新路由规则? (y/n) [y]: ${re}"; read cf
-                    [ "$cf" != "n" ] && [ "$cf" != "N" ] && { RELAY_ENABLED=1; relay_apply; echo ""; read -p "  按回车返回..." -r; } || yellow_msg "已保存，别忘了按 r4 应用！"
+                    [ "$cf" != "n" ] && [ "$cf" != "N" ] && { RELAY_ENABLED=1; relay_apply; echo ""; echo -ne "  按回车返回..."; read -r; } || yellow_msg "已保存，别忘了按 r4 应用！"
                 fi
                 ;;
             r3|R3)
@@ -3279,18 +3279,18 @@ relay_menu() {
                 relay_manage_domains
                 if [ "$RELAY_ENABLED" = "1" ] && [ -n "$RELAY_LINK" ]; then
                     echo -ne "  ${yellow}域名已更新，立即应用路由规则? (y/n) [y]: ${re}"; read cf
-                    [ "$cf" != "n" ] && [ "$cf" != "N" ] && { RELAY_ENABLED=1; relay_apply; echo ""; read -p "  按回车返回..." -r; }
+                    [ "$cf" != "n" ] && [ "$cf" != "N" ] && { RELAY_ENABLED=1; relay_apply; echo ""; echo -ne "  按回车返回..."; read -r; }
                 fi
                 ;;
             r4|R4)
                 if [ -z "$RELAY_LINK" ]; then red_msg "请先设置落地节点 (r1)"; sleep 1; continue; fi
-                RELAY_ENABLED=1; save_conf; relay_apply; echo ""; read -p "  按回车返回..." -r
+                RELAY_ENABLED=1; save_conf; relay_apply; echo ""; echo -ne "  按回车返回..."; read -r
                 ;;
             r5|R5)
                 [ "$RELAY_ENABLED" != "1" ] && { yellow_msg "中继未启用。"; sleep 1; continue; }
                 echo -ne "  ${red}确认关闭? (y/n): ${re}"; read cf
                 [ "$cf" != "y" ] && [ "$cf" != "Y" ] && { yellow_msg "已取消。"; sleep 1; continue; }
-                relay_clear; echo ""; read -p "  按回车返回..." -r
+                relay_clear; echo ""; echo -ne "  按回车返回..."; read -r
                 ;;
             0) return ;;
             *) red_msg "无效"; sleep 1 ;;
@@ -3724,7 +3724,7 @@ warp_auto_install_socks() {
     else
         warp_rc=$?
         red_msg "下载 fscarmen WARP 脚本失败，请检查网络"
-        echo ""; read -p "  按回车继续..." -r; return 1
+        echo ""; echo -ne "  按回车继续..."; read -r; return 1
     fi
     echo ""; sleep 3
     if (ss -tlnp 2>/dev/null || ss -tln 2>/dev/null || netstat -tlnp 2>/dev/null) | grep -q ':40000 '; then
@@ -3743,7 +3743,7 @@ warp_auto_install_socks() {
             echo -e "  ${cyan}2${re}. 查看日志: ${green}journalctl -u wireproxy -n 10${re}"
             echo -e "  ${cyan}3${re}. 检查端口: ${green}ss -tlnp | grep 40000${re}"
         fi
-        echo ""; read -p "  按回车继续..." -r
+        echo ""; echo -ne "  按回车继续..."; read -r
         return 1
     fi
 }
@@ -3761,7 +3761,7 @@ warp_install() {
     # 模式 w = WireProxy/Socks5 模式，默认端口 40000
     if ! run_warp_menu w; then
         red_msg "下载失败，请检查网络连接。"
-        echo ""; read -p "  按回车返回..." -r; return
+        echo ""; echo -ne "  按回车返回..."; read -r; return
     fi
 
     # 验证安装
@@ -3771,7 +3771,7 @@ warp_install() {
     else
         yellow_msg "安装完成，但未检测到 40000 端口。请手动检查 warp 服务状态。"
     fi
-    echo ""; read -p "  按回车继续..." -r
+    echo ""; echo -ne "  按回车继续..."; read -r
 }
 
 # === 注入默认 Google/YouTube 域名组 ===
@@ -3785,7 +3785,7 @@ warp_add_defaults() {
         fi
     done
     green_msg "已注入 ${added} 个默认域名 (Google/YouTube 系列)"
-    echo ""; read -p "  按回车继续..." -r
+    echo ""; echo -ne "  按回车继续..."; read -r
 }
 
 # === 手动添加自定义域名 ===
@@ -3813,12 +3813,12 @@ warp_add_custom() {
         fi
     done
     green_msg "共添加 ${added} 个域名"
-    echo ""; read -p "  按回车继续..." -r
+    echo ""; echo -ne "  按回车继续..."; read -r
 }
 
 # === 删除指定域名 ===
 warp_remove_domain() {
-    [ ! -f "$WARP_DOMAIN_FILE" ] || [ ! -s "$WARP_DOMAIN_FILE" ] && { yellow_msg "分流域名列表为空。"; echo ""; read -p "  按回车返回..." -r; return; }
+    [ ! -f "$WARP_DOMAIN_FILE" ] || [ ! -s "$WARP_DOMAIN_FILE" ] && { yellow_msg "分流域名列表为空。"; echo ""; echo -ne "  按回车返回..."; read -r; return; }
 
     echo ""
     echo -e "  ${white}当前分流域名:${re}"
@@ -3857,7 +3857,7 @@ warp_remove_domain() {
         [ "$keep" = 1 ] && echo "$line" >> "$WARP_DOMAIN_FILE"
     done
     green_msg "已删除 ${removed} 个域名"
-    echo ""; read -p "  按回车继续..." -r
+    echo ""; echo -ne "  按回车继续..."; read -r
 }
 
 # === 查看/清空列表 ===
@@ -3886,13 +3886,13 @@ warp_view_clear() {
             0) return ;;
             *) red_msg "无效"; sleep 1; continue ;;
         esac
-        read -p "  按回车返回..." -r
+        echo -ne "  按回车返回..."; read -r
     done
 }
 
 # === 核心：使用 Python3 安全改写 config.json，应用 WARP 分流 ===
 warp_apply_routing() {
-    [ ! -f "$WARP_DOMAIN_FILE" ] || [ ! -s "$WARP_DOMAIN_FILE" ] && { yellow_msg "分流域名列表为空，请先添加域名。"; echo ""; read -p "  按回车返回..." -r; return; }
+    [ ! -f "$WARP_DOMAIN_FILE" ] || [ ! -s "$WARP_DOMAIN_FILE" ] && { yellow_msg "分流域名列表为空，请先添加域名。"; echo ""; echo -ne "  按回车返回..."; read -r; return; }
     # 自动安装 WARP（如未安装）
     warp_auto_install_socks || return
 
@@ -3906,7 +3906,7 @@ warp_apply_routing() {
     # 检查 Python3 可用性
     if ! command -v python3 &>/dev/null; then
         red_msg "未检测到 Python3，请先安装: apt install python3"
-        echo ""; read -p "  按回车返回..." -r; return
+        echo ""; echo -ne "  按回车返回..."; read -r; return
     fi
 
     # 读取域名列表
@@ -3977,7 +3977,7 @@ PYEOF
         red_msg "JSON 写入不合法！自动回滚备份。"
         cp "${CONFIG_FILE}.bak" "$CONFIG_FILE"
     fi
-    echo ""; read -p "  按回车返回..." -r
+    echo ""; echo -ne "  按回车返回..."; read -r
 }
 
 # === 切换分流模式：SOCKS5 ↔ IPv6 直连（二选一）===
@@ -4011,7 +4011,7 @@ warp_switch_mode() {
     # 检查 Python3
     if ! command -v python3 &>/dev/null; then
         red_msg "未检测到 Python3，请先安装: apt install python3"
-        echo ""; read -p "  按回车返回..." -r; return
+        echo ""; echo -ne "  按回车返回..."; read -r; return
     fi
 
     # 确保有域名列表
@@ -4042,7 +4042,7 @@ warp_switch_mode() {
         *) red_msg "无效"; return ;;
     esac
 
-    echo ""; read -p "  按回车返回..." -r
+    echo ""; echo -ne "  按回车返回..."; read -r
 }
 
 # === Python3 分流写入（统一入口）===
@@ -4235,7 +4235,7 @@ delete_protocol() {
     [ "$has_hy2" = 1 ] && echo -e "  ${green}2${re}. Hysteria2"
     [ "$has_ss" = 1 ] && echo -e "  ${green}3${re}. Shadowsocks"
     echo -e "  ${red}0${re}. Back"
-    read -p "  Select: " choice
+    echo -ne "  Select: "; read choice
 
     case "$choice" in
         1) [ "$has_reality" = 1 ] || return; tag="reality"; label="Reality"; ENABLE_REALITY=0; REALITY_PORT=0 ;;
@@ -4340,7 +4340,7 @@ manage_protocols() {
         [ "$has_reality" = 1 ] || [ "$has_hy2" = 1 ] || [ "$has_ss" = 1 ] && echo "" && echo -e "  ${red}d${re}. 删除可选节点"
         echo ""; echo -e "  ${red}0${re}. 返回"
         echo -e " ${purple}────────────────────────────────────────${re}"
-        read -p "  请输入: " ac; [ "$ac" = "0" ] && return
+        echo -ne "  请输入: "; read ac; [ "$ac" = "0" ] && return
 
         case "$ac" in
             e1) edit_protocol "vless-ws" "VLESS + Argo" ;;
@@ -4432,7 +4432,7 @@ agg_menu() {
                 ;;
             g3|G3)
                 echo ""; echo -e "  ${green}${agg_url}${re}"; echo ""
-                read -p "  按回车返回..." -r
+                echo -ne "  按回车返回..."; read -r
                 ;;
             0) return ;;
             *) red_msg "无效"; sleep 1 ;;
@@ -4483,16 +4483,16 @@ main_menu() {
         echo -e "  ${cyan}8${re}. 🆙 更新管理脚本      ${red}9${re}. 🗑️  彻底卸载系统"
         echo -e "  ${purple}x${re}. 🚀 更新 Xray 内核    ${cyan}0${re}. 🚪 安全退出"
         echo -e " ${purple}───────────────────────────────────────────────${re}"
-        read -p "  请输入 (0-9 / a / u / x / w / r / g): " c
+        echo -ne "  请输入 (0-9 / a / u / x / w / r / g): "; read c
         case "$c" in
-            1) show_node; read -p "  按回车返回..." -r ;;
-            2) edit_cdn; read -p "  按回车返回..." -r ;;
+            1) show_node; echo -ne "  按回车返回..."; read -r ;;
+            2) edit_cdn; echo -ne "  按回车返回..."; read -r ;;
             3) change_config ;;
             a|A) manage_protocols ;;
             u|U) manage_users ;;
             4) start_services; sleep 1 ;; 5) stop_services; sleep 1 ;; 6) restart_services; sleep 1 ;;
             7) echo -ne "  ${yellow}重新安装? (y/n): ${re}"; read cf
-               [ "$cf" = "y" ] || [ "$cf" = "Y" ] && { load_conf; do_install; }; read -p "  按回车返回..." -r ;;
+               [ "$cf" = "y" ] || [ "$cf" = "Y" ] && { load_conf; do_install; }; echo -ne "  按回车返回..."; read -r ;;
             8) yellow_msg "拉取最新版..."
                local utmp; utmp=$(mktemp /tmp/argov.XXXXXX)
                download_script_checked https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh "$utmp" && bash "$utmp"; rm -f "$utmp"
