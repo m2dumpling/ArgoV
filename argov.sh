@@ -4371,24 +4371,28 @@ agg_menu() {
         echo -e " ${purple}║${re}      ${white}聚合订阅 (Aggregated Sub)${re}           ${purple}║${re}"
         echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
         echo ""
+
         local agg_url
         [ -n "$SUB_DOMAIN" ] && agg_url="https://${SUB_DOMAIN}:${SUB_PORT}/agg?token=${AGG_TOKEN}" || agg_url="http://$(get_ip 2>/dev/null):${SUB_PORT}/agg?token=${AGG_TOKEN}"
-        echo -e "  ${yellow}Token${re}: ${cyan}${AGG_TOKEN}${re}"
-        echo -e "  ${yellow}URL${re}: ${green}${agg_url}${re}"
+        echo -e " ${purple}── 📡 总订阅 (导入客户端) ──${re}"
+        echo -e "  ${green}${agg_url}${re}"
         echo ""
 
         local count=0
         [ -f "${WORK_DIR}/agg_sources.txt" ] && count=$(grep -c '[^[:space:]]' "${WORK_DIR}/agg_sources.txt" 2>/dev/null || echo 0)
         [ -z "$count" ] && count=0
-        echo -e "  ${yellow}源订阅${re}: ${cyan}${count}${re} 个"
-        if [ "$count" -gt 0 ]; then
+        echo -e " ${purple}── 📥 子订阅 (其他 VPS/机场) ──${re}"
+        if [ "$count" -eq 0 ]; then
+            echo -e "  ${yellow}(空, 通过 g1 添加)${re}"
+        else
             nl -w2 -s'. ' "${WORK_DIR}/agg_sources.txt" 2>/dev/null
             echo ""
         fi
+        echo -e "  ${yellow}共 ${cyan}${count}${re} 个子订阅 + 本机 = 聚合后客户端总节点"
         echo ""
-        echo -e "  ${green}g1${re}. 添加源订阅 URL"
-        [ "$count" -gt 0 ] && echo -e "  ${red}g2${re}. 删除源"
-        echo -e "  ${cyan}g3${re}. 查看聚合链接"
+        echo -e "  ${green}g1${re}. 添加子订阅 (粘贴其他 VPS 的 /sub?token=xxx)"
+        [ "$count" -gt 0 ] && echo -e "  ${red}g2${re}. 删除子订阅"
+        echo -e "  ${cyan}g3${re}. 查看总订阅链接"
         echo ""; echo -e "  ${red}0${re}. 返回"
         echo -e " ${purple}────────────────────────────────────────${re}"
         echo -ne "  Select: "; read c
