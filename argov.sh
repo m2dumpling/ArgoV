@@ -962,11 +962,12 @@ edit_subscription() {
             echo -e "  ${green}2${re}. 修改端口 — ${cyan}${SUB_PORT}${re}"
             echo -e "  ${green}3${re}. 切换为 HTTP 模式"
         else
-            echo -e "  ${green}1${re}. 添加域名 (HTTP → HTTPS)"
+            echo -e "  ${green}1${re}. 添加域名 (HTTP → HTTPS, 自动选端口)"
             echo -e "  ${green}2${re}. 修改端口 — ${cyan}${SUB_PORT}${re}"
         fi
-        echo -e "  ${green}4${re}. 重新生成 Token"
-        echo -e "  ${cyan}5${re}. 查看完整订阅链接"
+        echo -e "  ${green}4${re}. 随机生成 Token"
+        echo -e "  ${purple}5${re}. 自定义 Token (手动输入)"
+        echo -e "  ${cyan}6${re}. 查看完整订阅链接"
         echo ""; echo -e "  ${red}0${re}. 返回"
         echo -e " ${purple}────────────────────────────────────────${re}"
         echo -ne "  请选择: "; read c 
@@ -978,20 +979,17 @@ edit_subscription() {
                     [ -n "$nd" ] && SUB_DOMAIN="$nd"
                 else
                     echo -e "  ${yellow}输入已指向本机 IP 的域名，将切换到 HTTPS:${re}"
-                    echo -e "  ${yellow}⚠ CF 代理仅支持以下端口:${re}"
-                    echo -e "  ${cyan}  2096  8443  2053  2083  2087  443${re}"
-                    echo -ne "  域名: "; read nd 
+                    echo -e "  ${yellow}⚠ CF 代理仅支持以下端口，请选择:${re}"
+                    echo -ne "  域名: "; read nd
                     [ -z "$nd" ] && { yellow_msg "已取消。"; sleep 1; continue; }
                     SUB_DOMAIN="$nd"
-                    if [ "$SUB_PORT" = "0" ]; then
-                        echo ""; echo -e "  ${yellow}选择端口:${re}"
-                        echo -e "  ${cyan}1${re}. 2096 (默认)  ${cyan}2${re}. 8443  ${cyan}3${re}. 2053  ${cyan}4${re}. 2083  ${cyan}5${re}. 2087  ${cyan}6${re}. 443"
-                        echo -ne "  [1]: "; read pc 
-                        case "${pc:-1}" in
-                            2) SUB_PORT=8443 ;; 3) SUB_PORT=2053 ;; 4) SUB_PORT=2083 ;;
-                            5) SUB_PORT=2087 ;; 6) SUB_PORT=443 ;; *) SUB_PORT=2096 ;;
-                        esac
-                    fi
+                    echo ""; echo -e "  ${yellow}选择 CF HTTPS 端口:${re}"
+                    echo -e "  ${cyan}1${re}. 2096 (默认)  ${cyan}2${re}. 8443  ${cyan}3${re}. 2053  ${cyan}4${re}. 2083  ${cyan}5${re}. 2087  ${cyan}6${re}. 443"
+                    echo -ne "  [1]: "; read pc
+                    case "${pc:-1}" in
+                        2) SUB_PORT=8443 ;; 3) SUB_PORT=2053 ;; 4) SUB_PORT=2083 ;;
+                        5) SUB_PORT=2087 ;; 6) SUB_PORT=443 ;; *) SUB_PORT=2096 ;;
+                    esac
                 fi
                 # 域名变了 → 删旧证书让 start_sub_server 重新生成
                 [ -n "$old_domain" ] && [ "$old_domain" != "$SUB_DOMAIN" ] && rm -f "${WORK_DIR}/sub_cert.pem" "${WORK_DIR}/sub_key.pem"
@@ -1021,7 +1019,13 @@ edit_subscription() {
                 SUB_PATH="/${SUB_TOKEN}"; save_conf
                 start_sub_server; green_msg "新 Token: ${SUB_TOKEN}"; sleep 1
                 ;;
-            5) echo ""; echo -e "  ${green}$(get_sub_url 2>/dev/null)${re}"; echo ""; echo -ne "  按回车继续..."; read -r ;;
+            5)
+                echo -ne "  ${yellow}输入自定义 Token (留空取消):${re} "; read ct
+                [ -z "$ct" ] && { yellow_msg "已取消。"; sleep 1; continue; }
+                SUB_TOKEN="$ct"; SUB_PATH="/${SUB_TOKEN}"; save_conf
+                start_sub_server; green_msg "Token: ${SUB_TOKEN}"; sleep 1
+                ;;
+            6) echo ""; echo -e "  ${green}$(get_sub_url 2>/dev/null)${re}"; echo ""; echo -ne "  按回车继续..."; read -r ;;
             0) return ;;
             *) red_msg "无效"; sleep 1 ;;
         esac
