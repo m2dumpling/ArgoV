@@ -852,7 +852,7 @@ load_conf() {
     REALITY_PORT="${REALITY_PORT:-0}"; HY2_PORT="${HY2_PORT:-0}"; HY2_MPORT="${HY2_MPORT:-}"
     HY2_CONGESTION="${HY2_CONGESTION:-}"; HY2_UP_MBPS="${HY2_UP_MBPS:-}"; HY2_DOWN_MBPS="${HY2_DOWN_MBPS:-}"; SS_PORT="${SS_PORT:-0}"
     SUB_PORT="${SUB_PORT:-0}"; SUB_PATH="${SUB_PATH:-}"
-    SUB_DOMAIN="${SUB_DOMAIN:-}"; SUB_TOKEN="${SUB_TOKEN:-}"
+    SUB_DOMAIN="${SUB_DOMAIN:-}"; SUB_TOKEN="${SUB_TOKEN:-}"; AGG_TOKEN="${AGG_TOKEN:-}"
     REALITY_SNI="${REALITY_SNI:-www.amazon.com}"; HY2_SNI="${HY2_SNI:-www.bing.com}"; SS_METHOD="${SS_METHOD:-aes-256-gcm}"
     ENABLE_REALITY="${ENABLE_REALITY:-0}"; ENABLE_HY2="${ENABLE_HY2:-0}"; ENABLE_SS="${ENABLE_SS:-0}"
     HY2_CERT_FILE="${HY2_CERT_FILE:-/etc/xray/argov-hy2.crt}"; HY2_KEY_FILE="${HY2_KEY_FILE:-/etc/xray/argov-hy2.key}"
@@ -878,7 +878,7 @@ save_conf() {
         save_var ARGO_FIXED_DOMAIN "$ARGO_FIXED_DOMAIN"; save_var UUID_CUSTOM "$UUID_CUSTOM"
         save_var REALITY_PORT "$REALITY_PORT"; save_var HY2_PORT "$HY2_PORT"; save_var HY2_MPORT "$HY2_MPORT"
         save_var HY2_CONGESTION "$HY2_CONGESTION"; save_var HY2_UP_MBPS "$HY2_UP_MBPS"; save_var HY2_DOWN_MBPS "$HY2_DOWN_MBPS"
-        save_var SS_PORT "$SS_PORT"; save_var SUB_PORT "$SUB_PORT"; save_var SUB_PATH "$SUB_PATH"; save_var SUB_DOMAIN "$SUB_DOMAIN"; save_var SUB_TOKEN "$SUB_TOKEN"
+        save_var SS_PORT "$SS_PORT"; save_var SUB_PORT "$SUB_PORT"; save_var SUB_PATH "$SUB_PATH"; save_var SUB_DOMAIN "$SUB_DOMAIN"; save_var SUB_TOKEN "$SUB_TOKEN"; save_var AGG_TOKEN "$AGG_TOKEN"
         save_var REALITY_SNI "$REALITY_SNI"; save_var HY2_SNI "$HY2_SNI"; save_var SS_METHOD "$SS_METHOD"
         save_var ENABLE_REALITY "$ENABLE_REALITY"; save_var ENABLE_HY2 "$ENABLE_HY2"; save_var ENABLE_SS "$ENABLE_SS"
         save_var HY2_CERT_FILE "$HY2_CERT_FILE"; save_var HY2_KEY_FILE "$HY2_KEY_FILE"
@@ -1323,7 +1323,26 @@ class H(BaseHTTPRequestHandler):
                 s.send_response(500)
                 s.send_header('Connection', 'close')
                 s.end_headers()
-        else: 
+        elif req_path == '/agg':
+            tok = qs.get('token', [None])[0]
+            if tok == '${AGG_TOKEN}':
+                try:
+                    with open('${WORK_DIR}/agg_raw.txt', 'rb') as f:
+                        agg = f.read()
+                    s.send_response(200)
+                    s.send_header('Content-Type','text/plain; charset=utf-8')
+                    s.send_header('Content-Length', str(len(agg)))
+                    s.send_header('Connection', 'close')
+                    s.end_headers(); s.wfile.write(agg)
+                except:
+                    s.send_response(500)
+                    s.send_header('Connection', 'close')
+                    s.end_headers()
+            else:
+                s.send_response(404)
+                s.send_header('Connection', 'close')
+                s.end_headers()
+        else:
             s.send_response(404)
             s.send_header('Connection', 'close')
             s.end_headers()
@@ -1338,6 +1357,11 @@ def bg_refresh():
             toks=list(CACHE.keys())
         for tok in toks:
             refresh_cache(tok)
+        # 聚合订阅刷新
+        if os.path.exists('${WORK_DIR}/agg_gen.sh'):
+            try:
+                subprocess.run(['${WORK_DIR}/agg_gen.sh'], timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except: pass
 threading.Thread(target=bg_refresh,daemon=True).start()
 
 import ssl, os
@@ -1424,6 +1448,36 @@ printf '%s' "$out"
 SUBEOF
     chmod +x "${WORK_DIR}/sub_gen.sh"
     bash "${WORK_DIR}/sub_gen.sh" "$SUB_TOKEN" >/dev/null 2>&1 || true
+
+    # 聚合订阅脚本
+    cat > "${WORK_DIR}/agg_gen.sh" << 'AGGEOF'
+#!/usr/bin/env bash
+SOURCES=/etc/xray/agg_sources.txt
+OUTPUT=/etc/xray/agg_raw.txt
+TIMEOUT=8
+all=""
+# 本地节点
+if [ -f /etc/xray/sub.txt ]; then
+    local_decoded=$(base64 -d /etc/xray/sub.txt 2>/dev/null || true)
+    [ -n "$local_decoded" ] && all+="$local_decoded"$'\n'
+fi
+# 拉取源订阅
+if [ -f "$SOURCES" ]; then
+    while IFS= read -r u; do
+        [ -z "$u" ] && continue
+        raw=$(curl -sL --max-time "$TIMEOUT" "$u" 2>/dev/null)
+        [ -z "$raw" ] && continue
+        d=$(echo "$raw" | base64 -d 2>/dev/null || true)
+        [ -n "$d" ] && all+="$d"$'\n'
+    done < "$SOURCES"
+fi
+# 去重编码
+echo "$all" | grep -v '^$' | sort -u | base64 -w0 2>/dev/null > "$OUTPUT" || {
+    echo "$all" | grep -v '^$' | sort -u | base64 | tr -d '\n' > "$OUTPUT"
+}
+AGGEOF
+    chmod +x "${WORK_DIR}/agg_gen.sh"
+    [ -z "$AGG_TOKEN" ] && AGG_TOKEN=$(rand_token) && save_conf
 
     if [ "$IS_ALPINE" = 1 ]; then
         cat > /etc/init.d/argov-sub << EOF
@@ -4303,6 +4357,82 @@ manage_protocols() {
     done
 }
 
+#==============================================================================
+# 聚合订阅
+#==============================================================================
+agg_menu() {
+    load_conf
+    [ -z "$AGG_TOKEN" ] && AGG_TOKEN=$(rand_token) && save_conf
+    [ ! -f "${WORK_DIR}/agg_gen.sh" ] && start_sub_server >/dev/null 2>&1 &
+
+    while true; do
+        clear
+        echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
+        echo -e " ${purple}║${re}      ${white}聚合订阅 (Aggregated Sub)${re}           ${purple}║${re}"
+        echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
+        echo ""
+        local agg_url
+        [ -n "$SUB_DOMAIN" ] && agg_url="https://${SUB_DOMAIN}:${SUB_PORT}/agg?token=${AGG_TOKEN}" || agg_url="http://$(get_ip 2>/dev/null):${SUB_PORT}/agg?token=${AGG_TOKEN}"
+        echo -e "  ${yellow}Token${re}: ${cyan}${AGG_TOKEN}${re}"
+        echo -e "  ${yellow}URL${re}: ${green}${agg_url}${re}"
+        echo ""
+
+        local count=0
+        [ -f "${WORK_DIR}/agg_sources.txt" ] && count=$(grep -c '[^[:space:]]' "${WORK_DIR}/agg_sources.txt" 2>/dev/null || echo 0)
+        [ -z "$count" ] && count=0
+        echo -e "  ${yellow}源订阅${re}: ${cyan}${count}${re} 个"
+        if [ "$count" -gt 0 ]; then
+            nl -w2 -s'. ' "${WORK_DIR}/agg_sources.txt" 2>/dev/null
+            echo ""
+        fi
+        echo ""
+        echo -e "  ${green}g1${re}. 添加源订阅 URL"
+        [ "$count" -gt 0 ] && echo -e "  ${red}g2${re}. 删除源"
+        echo -e "  ${cyan}g3${re}. 查看聚合链接"
+        echo ""; echo -e "  ${red}0${re}. 返回"
+        echo -e " ${purple}────────────────────────────────────────${re}"
+        echo -ne "  Select: "; read c
+        case "$c" in
+            g1|G1)
+                echo ""; echo -e "  ${yellow}粘贴其他 VPS 的订阅 URL:${re}"
+                read -p "  URL: " url
+                [ -z "$url" ] && { yellow_msg "已取消。"; sleep 1; continue; }
+                if ! echo "$url" | grep -qE '^https?://'; then
+                    red_msg "无效 URL"; sleep 1; continue
+                fi
+                touch "${WORK_DIR}/agg_sources.txt"
+                echo "$url" >> "${WORK_DIR}/agg_sources.txt"
+                green_msg "已添加。"; bash "${WORK_DIR}/agg_gen.sh" 2>/dev/null &
+                sleep 1
+                ;;
+            g2|G2)
+                [ "$count" = 0 ] && { yellow_msg "无源可删。"; sleep 1; continue; }
+                echo ""; read -p "  输入序号删除 (多选空格分隔): " nums
+                [ -z "$nums" ] && { yellow_msg "已取消。"; sleep 1; continue; }
+                local idx=0 new=()
+                while IFS= read -r line; do
+                    [ -z "$(echo "$line" | tr -d '[:space:]')" ] && continue
+                    idx=$((idx+1))
+                    local keep=1
+                    for n in $nums; do
+                        [ "$n" = "$idx" ] && { keep=0; break; }
+                    done
+                    [ "$keep" = 1 ] && new+=("$line")
+                done < "${WORK_DIR}/agg_sources.txt"
+                printf '%s\n' "${new[@]}" > "${WORK_DIR}/agg_sources.txt"
+                green_msg "已删除。"; bash "${WORK_DIR}/agg_gen.sh" 2>/dev/null &
+                sleep 1
+                ;;
+            g3|G3)
+                echo ""; echo -e "  ${green}${agg_url}${re}"; echo ""
+                read -p "  按回车返回..." -r
+                ;;
+            0) return ;;
+            *) red_msg "无效"; sleep 1 ;;
+        esac
+    done
+}
+
 # MODULE: menus and entrypoint
 main_menu() {
     load_conf
@@ -4338,6 +4468,7 @@ main_menu() {
         echo ""
         echo -e " ${purple}──────────────── ✦ 进阶路由 ✦ ────────────────${re}"
         echo -e "  ${purple}w${re}. 🌐 独立 WARP 分流     ${purple}r${re}. 🔀 落地节点中继"
+        echo -e "  ${purple}g${re}. 📡 聚合订阅 (Aggregation)"
         echo ""
         echo -e " ${purple}──────────────── ✦ 状态运维 ✦ ────────────────${re}"
         echo -e "  ${green}4${re}. ▶️  启动系统         ${red}5${re}. ⏹️  停止系统"
@@ -4345,7 +4476,7 @@ main_menu() {
         echo -e "  ${cyan}8${re}. 🆙 更新管理脚本      ${red}9${re}. 🗑️  彻底卸载系统"
         echo -e "  ${purple}x${re}. 🚀 更新 Xray 内核    ${cyan}0${re}. 🚪 安全退出"
         echo -e " ${purple}───────────────────────────────────────────────${re}"
-        read -p "  请输入 (0-9 / a / u / x / w / r): " c
+        read -p "  请输入 (0-9 / a / u / x / w / r / g): " c
         case "$c" in
             1) show_node; read -p "  按回车返回..." -r ;;
             2) edit_cdn; read -p "  按回车返回..." -r ;;
@@ -4369,6 +4500,7 @@ main_menu() {
                    systemctl daemon-reload; green_msg "卸载完成。"; fi ;;
             w|W) warp_menu ;;
             r|R) relay_menu ;;
+            g|G) agg_menu ;;
             0) clear; break ;;
             *) red_msg "无效 (0-9 / a / u / x / w / r)"; sleep 1 ;;
         esac
