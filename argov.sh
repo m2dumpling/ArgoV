@@ -1408,8 +1408,8 @@ get_domain() {
 b64() { printf '%s' "$1" | base64 -w0 2>/dev/null || printf '%s' "$1" | base64 | tr -d '\n'; }
 [ -f "$USERS" ] || exit 1
 # 默认用户永远有效（即使被误禁用）；其他用户需 enabled=true
-UQ='if ($tok == "" or $tok == $def) then (.users[]|select(.name=="default")) else (.users[]|select(.token==$tok and (.enabled//true))) end'
-USER_JSON=$($JQ -c --arg tok "$USER_TOKEN" --arg def "${SUB_TOKEN:-}" "$UQ" "$USERS" 2>/dev/null | head -n 1)
+UQ='if ($tok == "" or $tok == $dtok) then (.users[]|select(.name=="default")) else (.users[]|select(.token==$tok and (.enabled//true))) end'
+USER_JSON=$($JQ -c --arg tok "$USER_TOKEN" --arg dtok "${SUB_TOKEN:-}" "$UQ" "$USERS" 2>/dev/null | head -n 1)
 [ -z "$USER_JSON" ] && exit 1
 uuid=$(printf '%s' "$USER_JSON" | $JQ -r '.uuid//empty')
 user_name=$(printf '%s' "$USER_JSON" | $JQ -r '.name//"user"')

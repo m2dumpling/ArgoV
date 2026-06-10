@@ -98,7 +98,7 @@ def assert_subscription_server_contract(text: str) -> None:
 def assert_sub_generator_contract(text: str) -> None:
     sub_gen = extract_block(text, "cat > \"${WORK_DIR}/sub_gen.sh\" << 'SUBEOF'", "SUBEOF")
     require("USER_TOKEN=\"${1:-}\"" in sub_gen, "sub_gen must accept an explicit per-user token")
-    require("($tok == \"\" or $tok == $def)" in sub_gen, "empty/default token must resolve to default user")
+    require("($tok == \"\" or $tok == $dtok)" in sub_gen, "empty/default token must resolve to default user")
     require(".users[]|select(.token==$tok and (.enabled//true))" in sub_gen, "per-user token lookup must ignore disabled users")
     require(re.search(r'if \[ "\$IS_DEFAULT_USER" = "1" \]; then\s+INCLUDE_CUSTOM=1\s+fi', sub_gen), "only default subscription may include custom links")
     require("[ \"$IS_DEFAULT_USER\" = \"1\" ] && printf '%s' \"$out\" > /etc/xray/sub.txt" in sub_gen, "only default subscription may refresh global sub.txt")
