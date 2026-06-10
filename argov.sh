@@ -1289,7 +1289,7 @@ def refresh_cache(token):
 def get_cache(token):
     with CACHE_LOCK:
         item = CACHE.get(token)
-    return item or refresh_cache(token)
+    return item or (refresh_cache(token) if token else None)
 
 class ThreadedServer(ThreadingMixIn, HTTPServer):
     allow_reuse_address=True; daemon_threads=True
@@ -1332,13 +1332,19 @@ class H(BaseHTTPRequestHandler):
             tok = qs.get('token', [None])[0]
             if tok == '${AGG_TOKEN}':
                 try:
-                    with open('${WORK_DIR}/agg_raw.txt', 'rb') as f:
-                        agg = f.read()
-                    s.send_response(200)
-                    s.send_header('Content-Type','text/plain; charset=utf-8')
-                    s.send_header('Content-Length', str(len(agg)))
-                    s.send_header('Connection', 'close')
-                    s.end_headers(); s.wfile.write(agg)
+                    if not os.path.exists('${WORK_DIR}/agg_raw.txt'):
+                        s.send_response(503)
+                        s.send_header('Content-Type','text/plain; charset=utf-8')
+                        s.send_header('Connection', 'close')
+                        s.end_headers(); s.wfile.write(b'waiting for first sync...')
+                    else:
+                        with open('${WORK_DIR}/agg_raw.txt', 'rb') as f:
+                            agg = f.read()
+                        s.send_response(200)
+                        s.send_header('Content-Type','text/plain; charset=utf-8')
+                        s.send_header('Content-Length', str(len(agg)))
+                        s.send_header('Connection', 'close')
+                        s.end_headers(); s.wfile.write(agg)
                 except:
                     s.send_response(500)
                     s.send_header('Connection', 'close')
@@ -1401,7 +1407,9 @@ get_domain() {
 }
 b64() { printf '%s' "$1" | base64 -w0 2>/dev/null || printf '%s' "$1" | base64 | tr -d '\n'; }
 [ -f "$USERS" ] || exit 1
-USER_JSON=$($JQ -c --arg tok "$USER_TOKEN" --arg def "${SUB_TOKEN:-}" 'if ($tok == "" or $tok == $def) then (.users[]|select(.name=="default" and (.enabled//true))) else (.users[]|select(.token==$tok and (.enabled//true))) end' "$USERS" 2>/dev/null | head -n 1)
+# 默认用户永远有效（即使被误禁用）；其他用户需 enabled=true
+UQ='if ($tok == "" or $tok == $def) then (.users[]|select(.name=="default")) else (.users[]|select(.token==$tok and (.enabled//true))) end'
+USER_JSON=$($JQ -c --arg tok "$USER_TOKEN" --arg def "${SUB_TOKEN:-}" "$UQ" "$USERS" 2>/dev/null | head -n 1)
 [ -z "$USER_JSON" ] && exit 1
 uuid=$(printf '%s' "$USER_JSON" | $JQ -r '.uuid//empty')
 user_name=$(printf '%s' "$USER_JSON" | $JQ -r '.name//"user"')
