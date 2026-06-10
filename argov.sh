@@ -1274,10 +1274,8 @@ def resolve_token(path, qs):
 
 def refresh_cache(token):
     try:
-        subprocess.run([GEN_SCRIPT, token], timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        # sub_gen.sh writes to file, read it back
-        with open('${WORK_DIR}/sub.txt', 'rb') as f:
-            raw = f.read()
+        result = subprocess.run([GEN_SCRIPT, token], capture_output=True, timeout=15)
+        raw = result.stdout
         if not raw:
             return None
         raw_lines = base64.b64decode(raw).decode('utf-8', errors='ignore').splitlines()
