@@ -1467,7 +1467,7 @@ SUBEOF
 #!/usr/bin/env bash
 SOURCES=/etc/xray/agg_sources.txt
 OUTPUT=/etc/xray/agg_raw.txt
-TIMEOUT=8
+TIMEOUT=12
 all=""
 # 本地节点
 if [ -f /etc/xray/sub.txt ]; then
@@ -1478,7 +1478,7 @@ fi
 if [ -f "$SOURCES" ]; then
     while IFS= read -r u; do
         [ -z "$u" ] && continue
-        raw=$(curl -sL --max-time "$TIMEOUT" "$u" 2>/dev/null)
+        raw=$(curl -skL --max-time "$TIMEOUT" "$u" 2>/dev/null)
         [ -z "$raw" ] && continue
         d=$(echo "$raw" | base64 -d 2>/dev/null || true)
         [ -n "$d" ] && all+="$d"$'\n'
