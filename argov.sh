@@ -1457,6 +1457,48 @@ if $JQ -e '.inbounds[]|select(.tag=="hy2")' "$CFG" >/dev/null 2>&1 && [ -n "$ip"
 fi
 out=$(printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n')
 [ "$IS_DEFAULT_USER" = "1" ] && printf '%s' "$out" > /etc/xray/sub.txt
+
+if [ "$IS_DEFAULT_USER" != "1" ]; then
+    quota=$(printf '%s' "$USER_JSON" | $JQ -r '.quota_bytes//0')
+    used_up=$(printf '%s' "$USER_JSON" | $JQ -r '.used_up//0')
+    used_down=$(printf '%s' "$USER_JSON" | $JQ -r '.used_down//0')
+    reset_day=$(printf '%s' "$USER_JSON" | $JQ -r '.reset_day//0')
+    
+    used_total=$((used_up + used_down))
+    
+    format_bytes() {
+        local b=$1
+        if [ -z "$b" ] || [ "$b" -eq 0 ]; then echo "0 B"; return; fi
+        if [ "$b" -ge 1073741824 ]; then awk "BEGIN {printf \"%.2f GB\", $b/1073741824}"; return; fi
+        if [ "$b" -ge 1048576 ]; then awk "BEGIN {printf \"%.2f MB\", $b/1048576}"; return; fi
+        if [ "$b" -ge 1024 ]; then awk "BEGIN {printf \"%.2f KB\", $b/1024}"; return; fi
+        echo "${b} B"
+    }
+    
+    if [ "$quota" -gt 0 ]; then
+        rem=$((quota - used_total))
+        [ "$rem" -lt 0 ] && rem=0
+        rem_str=$(format_bytes "$rem")
+    else
+        rem_str="无限"
+    fi
+    
+    fake_nodes="vless://00000000-0000-0000-0000-000000000000@127.0.0.1:443?encryption=none&security=tls&type=ws#🎯剩余流量: ${rem_str}"$'\n'
+    
+    if [ "$reset_day" -gt 0 ]; then
+        d=$(date +%d | sed 's/^0*//')
+        if [ "$d" -le "$reset_day" ]; then
+            days=$((reset_day - d))
+        else
+            days=$((30 - d + reset_day))
+        fi
+        fake_nodes+="vless://00000000-0000-0000-0000-000000000000@127.0.0.1:443?encryption=none&security=tls&type=ws#距离下次重置剩余: ${days} 天"$'\n'
+    fi
+    
+    links="${fake_nodes}${links}"
+    out=$(printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n')
+fi
+
 printf '%s' "$out"
 SUBEOF
     chmod +x "${WORK_DIR}/sub_gen.sh"
