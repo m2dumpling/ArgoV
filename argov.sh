@@ -263,14 +263,14 @@ install_ag_wrapper() {
         cat > "$SCRIPT_PATH" << 'ARGOWRAP'
 #!/usr/bin/env bash
 T="/tmp/argov.sh"
-curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 -o "$T" https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh
+curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 -o "$T" "https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh?t=\$(date +%s)"
 [ -s "$T" ] && bash -n "$T" && bash "$T" "$@"
 ARGOWRAP
     else
         cat > "$SCRIPT_PATH" << 'ARGOWRAP'
 #!/usr/bin/env bash
 T=$(mktemp /tmp/argov.XXXXXX)
-curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 -o "$T" https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh
+curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 -o "$T" "https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh?t=\$(date +%s)"
 [ -s "$T" ] && bash -n "$T" && bash "$T"
 rm -f "$T"
 ARGOWRAP
@@ -4505,7 +4505,7 @@ main_menu() {
                [ "$cf" = "y" ] || [ "$cf" = "Y" ] && { load_conf; do_install; }; echo -ne "  按回车返回..."; read -r ;;
             8) yellow_msg "拉取最新版..."
                local utmp; utmp=$(mktemp /tmp/argov.XXXXXX)
-               download_script_checked https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh "$utmp" && bash "$utmp"; rm -f "$utmp"
+               download_script_checked "https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh?t=\$(date +%s)" "$utmp" && bash "$utmp"; rm -f "$utmp"
                clear; continue ;;
             x|X) update_xray_core ;;
             9) echo -ne "  ${red}⚠ 确定卸载? (y/n): ${re}"; read cf
