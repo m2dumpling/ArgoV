@@ -67,9 +67,9 @@ SS_METHODS=("aes-128-gcm" "aes-256-gcm" "chacha20-ietf-poly1305" "xchacha20-ietf
 SS_METHOD="${SS_METHOD:-aes-256-gcm}"
 
 # --- Reality SNI ---
-REALITY_SNIS=("www.amazon.com" "www.ebay.com" "www.paypal.com" "www.cloudflare.com"
-              "dash.cloudflare.com" "aws.amazon.com" "addons.mozilla.org" "www.microsoft.com")
-REALITY_SNI="${REALITY_SNI:-www.amazon.com}"
+REALITY_SNIS=("www.tesla.com" "www.nvidia.com" "www.amazon.com" "www.ebay.com"
+              "www.paypal.com" "aws.amazon.com" "addons.mozilla.org" "www.microsoft.com")
+REALITY_SNI="${REALITY_SNI:-www.tesla.com}"
 HY2_SNI="${HY2_SNI:-www.bing.com}"
 HY2_CERT_FILE="${HY2_CERT_FILE:-/etc/xray/argov-hy2.crt}"
 HY2_KEY_FILE="${HY2_KEY_FILE:-/etc/xray/argov-hy2.key}"
@@ -853,7 +853,7 @@ load_conf() {
     HY2_CONGESTION="${HY2_CONGESTION:-}"; HY2_UP_MBPS="${HY2_UP_MBPS:-}"; HY2_DOWN_MBPS="${HY2_DOWN_MBPS:-}"; SS_PORT="${SS_PORT:-0}"
     SUB_PORT="${SUB_PORT:-0}"; SUB_PATH="${SUB_PATH:-}"
     SUB_DOMAIN="${SUB_DOMAIN:-}"; SUB_TOKEN="${SUB_TOKEN:-}"; AGG_TOKEN="${AGG_TOKEN:-}"
-    REALITY_SNI="${REALITY_SNI:-www.amazon.com}"; HY2_SNI="${HY2_SNI:-www.bing.com}"; SS_METHOD="${SS_METHOD:-aes-256-gcm}"
+    REALITY_SNI="${REALITY_SNI:-www.tesla.com}"; HY2_SNI="${HY2_SNI:-www.bing.com}"; SS_METHOD="${SS_METHOD:-aes-256-gcm}"
     ENABLE_REALITY="${ENABLE_REALITY:-0}"; ENABLE_HY2="${ENABLE_HY2:-0}"; ENABLE_SS="${ENABLE_SS:-0}"
     HY2_CERT_FILE="${HY2_CERT_FILE:-/etc/xray/argov-hy2.crt}"; HY2_KEY_FILE="${HY2_KEY_FILE:-/etc/xray/argov-hy2.key}"
     REALITY_PRIV="${REALITY_PRIV:-}"; REALITY_PUB="${REALITY_PUB:-}"
@@ -1994,7 +1994,7 @@ change_config() {
                echo -ne "  选择 [默认 aes-256-gcm]: "; read sm ; [ -n "$sm" ] && SS_METHOD="${SS_METHODS[$((sm-1))]:-$SS_METHOD}"
                save_conf; green_msg "SS: ${SS_METHOD}" ;;
             5) echo ""; for i in "${!REALITY_SNIS[@]}"; do echo -e "  ${green}$((i+1))${re}. ${REALITY_SNIS[$i]}"; done; echo ""
-               echo -ne "  选择 [默认 www.amazon.com]: "; read rs ; [ -n "$rs" ] && REALITY_SNI="${REALITY_SNIS[$((rs-1))]:-$REALITY_SNI}"
+               echo -ne "  选择 [默认 www.tesla.com]: "; read rs ; [ -n "$rs" ] && REALITY_SNI="${REALITY_SNIS[$((rs-1))]:-$REALITY_SNI}"
                save_conf; green_msg "Reality SNI: ${REALITY_SNI}" ;;
             6) manage_protocols ;;
             7) show_node ;; 8) restart_services ;; 9) edit_subscription ;; 0) return ;; *) red_msg "无效" ;;
@@ -3018,7 +3018,7 @@ add_single_protocol() {
             echo -e "  ${yellow}当前: ${cyan}${r_sni}${re}"; echo -ne "  选择 [回车保持]: "; read rs 
             local ri=$(( ${rs:-0} -1 ))
             if [ "$rs" = "c" ] || [ "$rs" = "C" ]; then
-                echo -ne "  输入 SNI: "; read r_sni ; [ -z "$r_sni" ] && r_sni="www.amazon.com"
+                echo -ne "  输入 SNI: "; read r_sni ; [ -z "$r_sni" ] && r_sni="www.tesla.com"
             elif [ "$ri" -ge 0 ] 2>/dev/null && [ "$ri" -lt "${#REALITY_SNIS[@]}" ]; then
                 r_sni="${REALITY_SNIS[$ri]}"
             fi
