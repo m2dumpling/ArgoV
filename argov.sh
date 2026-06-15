@@ -1274,17 +1274,24 @@ def resolve_token(path, qs):
 
 def refresh_cache(token):
     try:
-        result = subprocess.run([GEN_SCRIPT, token], capture_output=True, timeout=15)
-        raw = result.stdout
+        raw = b''
+        for attempt in (1, 2):
+            result = subprocess.run([GEN_SCRIPT, token], capture_output=True, timeout=15)
+            raw = result.stdout
+            if raw:
+                break
+            time.sleep(2)
         if not raw:
-            return None
+            with CACHE_LOCK:
+                return CACHE.get(token)  # 失败保留旧缓存
         raw_lines = base64.b64decode(raw).decode('utf-8', errors='ignore').splitlines()
         clash = build_clash(raw_lines).encode('utf-8')
         with CACHE_LOCK:
             CACHE[token] = (raw, clash)
         return CACHE[token]
     except:
-        return None
+        with CACHE_LOCK:
+            return CACHE.get(token)  # 异常保留旧缓存
 
 def get_cache(token):
     with CACHE_LOCK:
@@ -1364,15 +1371,15 @@ refresh_cache('${SUB_TOKEN}')
 def bg_refresh():
     while True:
         time.sleep(10)
+        # 聚合订阅刷新（先跑，不阻塞 token 刷新）
+        if os.path.exists('${WORK_DIR}/agg_gen.sh'):
+            try:
+                subprocess.run(['${WORK_DIR}/agg_gen.sh'], timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except: pass
         with CACHE_LOCK:
             toks=list(CACHE.keys())
         for tok in toks:
             refresh_cache(tok)
-        # 聚合订阅刷新
-        if os.path.exists('${WORK_DIR}/agg_gen.sh'):
-            try:
-                subprocess.run(['${WORK_DIR}/agg_gen.sh'], timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except: pass
 threading.Thread(target=bg_refresh,daemon=True).start()
 
 import ssl, os
@@ -1399,9 +1406,9 @@ NODE_NAME="${NODE_NAME:-ArgoV}"; MODE="${ARGO_MODE:-temp}"; FIXED="${ARGO_FIXED_
 CDN_PORT="${CDN_PORT:-443}"
 get_domain() {
     local d
-    [ -f "$LOG" ] && for i in 1 2 3; do
+    [ -f "$LOG" ] && for i in 1 2 3 4 5; do
         d=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' "$LOG" | tail -1)
-        [ -n "$d" ] && echo "$d" && return; sleep 1
+        [ -n "$d" ] && echo "$d" && return; sleep 2
     done
     echo "$LAST_ARGO_DOMAIN"
 }
