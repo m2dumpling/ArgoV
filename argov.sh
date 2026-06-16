@@ -1296,7 +1296,13 @@ def refresh_cache(token):
 def get_cache(token):
     with CACHE_LOCK:
         item = CACHE.get(token)
-    return item or (refresh_cache(token) if token else None)
+    if item:
+        return item
+    # 缓存未命中 → 不阻塞请求，后台异步刷新；临时返回默认用户缓存
+    if token:
+        threading.Thread(target=lambda: refresh_cache(token), daemon=True).start()
+    with CACHE_LOCK:
+        return CACHE.get(token) or CACHE.get('${SUB_TOKEN}')
 
 class ThreadedServer(ThreadingMixIn, HTTPServer):
     allow_reuse_address=True; daemon_threads=True
