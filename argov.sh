@@ -1033,6 +1033,7 @@ edit_subscription() {
 }
 
 start_sub_server() {
+    [ -z "$AGG_TOKEN" ] && AGG_TOKEN=$(rand_token) && save_conf
     if [ "$SUB_PORT" = "0" ]; then
         [ -n "$SUB_DOMAIN" ] && SUB_PORT=2096 || SUB_PORT=$(find_free_port "$(shuf -i 20000-50000 -n 1)")
     fi
