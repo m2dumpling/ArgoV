@@ -4561,6 +4561,7 @@ main_menu() {
             8) yellow_msg "拉取最新版..."
                local utmp; utmp=$(mktemp /tmp/argov.XXXXXX)
                download_script_checked "https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh?t=\$(date +%s)" "$utmp" && bash "$utmp"; rm -f "$utmp"
+               start_sub_server >/dev/null 2>&1 &
                clear; continue ;;
             x|X) update_xray_core ;;
             9) echo -ne "  ${red}⚠ 确定卸载? (y/n): ${re}"; read cf
