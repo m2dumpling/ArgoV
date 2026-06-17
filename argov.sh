@@ -32,7 +32,7 @@ TUNNEL_LOG="/etc/xray/argo.log"
 WORK_DIR="/etc/xray"
 ARGOV_USERS_FILE="/etc/xray/argov_users.json"
 SCRIPT_PATH="/usr/bin/ag"
-CDN_DEFAULT="cdn.31514926.xyz"
+CDN_DEFAULT="xx.cloudflare.182682.xyz"
 
 # --- 端口 ---
 ARGO_PORT="${ARGO_PORT:-8080}"
@@ -89,6 +89,7 @@ CDN_DOMAINS[10]="dianxin.19931101.xyz (电信专线)"
 CDN_DOMAINS[11]="cdn.2020111.xyz (综合优选)"
 CDN_DOMAINS[12]="xn--b6gac.eu.org (综合优选·中东)"
 CDN_DOMAINS[13]="cdns.doon.eu.org (综合优选·Doorn)"
+CDN_DOMAINS[14]="xx.cloudflare.182682.xyz (综合优选·默认)"
 
 #==============================================================================
 # 工具
@@ -1434,7 +1435,7 @@ INCLUDE_CUSTOM=0
 if [ "$IS_DEFAULT_USER" = "1" ]; then
     INCLUDE_CUSTOM=1
 fi
-cdn=$($JQ -r '.current_cdn//"cdn.31514926.xyz"' "$CFG")
+cdn=$($JQ -r '.current_cdn//"xx.cloudflare.182682.xyz"' "$CFG")
 cp=$($JQ -r '.current_cdn_port//443' "$CFG")
 hd=$(get_domain)
 ip=""; for s in ifconfig.me icanhazip.com checkip.amazonaws.com api.ipify.org; do
@@ -1953,7 +1954,7 @@ edit_cdn() {
         echo ""; echo -e "  ${white}── 运营商专线 ──${re}"
         for k in 8 9 10; do echo -e "  ${green}${k}${re}. ${CDN_DOMAINS[$k]}"; done
         echo ""; echo -e "  ${white}── 其他 ──${re}"
-        for k in 11 12 13; do echo -e "  ${green}${k}${re}. ${CDN_DOMAINS[$k]}"; done
+        for k in 11 12 13 14; do echo -e "  ${green}${k}${re}. ${CDN_DOMAINS[$k]}"; done
         echo ""
         echo -e "  ${cyan}c${re}. 自定义 (host:port)    ${cyan}p${re}. 仅改端口    ${red}0${re}. 返回"
         echo -e " ${purple}────────────────────────────────────────${re}"
@@ -1963,7 +1964,7 @@ edit_cdn() {
             4) CDN_DOMAIN="time.is" ;; 5) CDN_DOMAIN="bestcf.top" ;; 6) CDN_DOMAIN="cfip.xxxxxxxx.tk" ;;
             7) CDN_DOMAIN="cf.090227.xyz" ;; 8) CDN_DOMAIN="yidong.19931101.xyz" ;;
             9) CDN_DOMAIN="liantong.19931101.xyz" ;; 10) CDN_DOMAIN="dianxin.19931101.xyz" ;;
-            11) CDN_DOMAIN="cdn.2020111.xyz" ;; 12) CDN_DOMAIN="xn--b6gac.eu.org" ;; 13) CDN_DOMAIN="cdns.doon.eu.org" ;;
+            11) CDN_DOMAIN="cdn.2020111.xyz" ;; 12) CDN_DOMAIN="xn--b6gac.eu.org" ;; 13) CDN_DOMAIN="cdns.doon.eu.org" ;; 14) CDN_DOMAIN="xx.cloudflare.182682.xyz" ;;
             c|C) echo -ne "  host:port: "; read raw ; [[ "$raw" =~ ^(.+):([0-9]+)$ ]] && { CDN_DOMAIN="${BASH_REMATCH[1]}"; np="${BASH_REMATCH[2]}"; } || CDN_DOMAIN="$raw" ;;
             p|P) echo -ne "  端口: "; read np ; CDN_DOMAIN="$cc" ;;
             0) return ;; *) red_msg "无效"; sleep 1; continue ;;
@@ -2309,13 +2310,13 @@ interactive_install() {
     echo -e " ${white}━━━ ① 节点名称 ━━━${re}"; echo -ne "  [${NODE_NAME}]: "; read n ; [ -n "$n" ] && NODE_NAME="$n"; echo -e "  → ${green}${NODE_NAME}${re}\n"
     echo -e " ${white}━━━ ② CDN 地址 ━━━${re}"; echo -e "  ${green}1${re}. 默认 ${green}2${re}. 列表选 ${green}3${re}. 自定义"; echo -ne "  [1]: "; read ct 
     case "${ct:-1}" in
-        2) for k in {1..13}; do echo -e "  ${green}${k}${re}. ${CDN_DOMAINS[$k]}"; done; echo -ne "  序号 [1]: "; read ci 
-           case "${ci:-1}" in
+        2) for k in {1..14}; do echo -e "  ${green}${k}${re}. ${CDN_DOMAINS[$k]}"; done; echo -ne "  序号 [14]: "; read ci
+           case "${ci:-14}" in
                1) CDN_DOMAIN="cdn.31514926.xyz" ;; 2) CDN_DOMAIN="skk.moe" ;; 3) CDN_DOMAIN="ip.sb" ;;
                4) CDN_DOMAIN="time.is" ;; 5) CDN_DOMAIN="bestcf.top" ;; 6) CDN_DOMAIN="cfip.xxxxxxxx.tk" ;;
                7) CDN_DOMAIN="cf.090227.xyz" ;; 8) CDN_DOMAIN="yidong.19931101.xyz" ;; 9) CDN_DOMAIN="liantong.19931101.xyz" ;;
                10) CDN_DOMAIN="dianxin.19931101.xyz" ;; 11) CDN_DOMAIN="cdn.2020111.xyz" ;; 12) CDN_DOMAIN="xn--b6gac.eu.org" ;;
-               13) CDN_DOMAIN="cdns.doon.eu.org" ;; esac ;;
+               13) CDN_DOMAIN="cdns.doon.eu.org" ;; 14) CDN_DOMAIN="xx.cloudflare.182682.xyz" ;; esac ;;
         3) echo -ne "  地址: "; read CDN_DOMAIN; [ -z "$CDN_DOMAIN" ] && CDN_DOMAIN="$CDN_DEFAULT" ;;
     esac; echo -e "  → ${green}${CDN_DOMAIN}${re}\n"
 
