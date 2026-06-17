@@ -76,20 +76,20 @@ HY2_KEY_FILE="${HY2_KEY_FILE:-/etc/xray/argov-hy2.key}"
 
 # --- CDN 池 ---
 declare -A CDN_DOMAINS
-CDN_DOMAINS[1]="cdn.31514926.xyz (三网通用)"
-CDN_DOMAINS[2]="skk.moe (三网通用·泛用测速)"
-CDN_DOMAINS[3]="ip.sb (三网通用·IP检测站)"
-CDN_DOMAINS[4]="time.is (三网通用·时间站)"
-CDN_DOMAINS[5]="bestcf.top (三网通用·优选站)"
-CDN_DOMAINS[6]="cfip.xxxxxxxx.tk (三网通用)"
-CDN_DOMAINS[7]="cf.090227.xyz (三网通用)"
-CDN_DOMAINS[8]="yidong.19931101.xyz (移动专线)"
-CDN_DOMAINS[9]="liantong.19931101.xyz (联通专线)"
-CDN_DOMAINS[10]="dianxin.19931101.xyz (电信专线)"
-CDN_DOMAINS[11]="cdn.2020111.xyz (综合优选)"
-CDN_DOMAINS[12]="xn--b6gac.eu.org (综合优选·中东)"
-CDN_DOMAINS[13]="cdns.doon.eu.org (综合优选·Doorn)"
-CDN_DOMAINS[14]="xx.cloudflare.182682.xyz (综合优选·默认)"
+CDN_DOMAINS[1]="xx.cloudflare.182682.xyz (三网通用·默认)"
+CDN_DOMAINS[2]="bestcf.top (三网通用·优选站)"
+CDN_DOMAINS[3]="cdn.31514926.xyz (三网通用)"
+CDN_DOMAINS[4]="skk.moe (三网通用·泛用测速)"
+CDN_DOMAINS[5]="ip.sb (三网通用·IP检测站)"
+CDN_DOMAINS[6]="time.is (三网通用·时间站)"
+CDN_DOMAINS[7]="cfip.xxxxxxxx.tk (三网通用)"
+CDN_DOMAINS[8]="cf.090227.xyz (三网通用)"
+CDN_DOMAINS[9]="yidong.19931101.xyz (移动专线)"
+CDN_DOMAINS[10]="liantong.19931101.xyz (联通专线)"
+CDN_DOMAINS[11]="dianxin.19931101.xyz (电信专线)"
+CDN_DOMAINS[12]="cdn.2020111.xyz (综合优选)"
+CDN_DOMAINS[13]="xn--b6gac.eu.org (综合优选·中东)"
+CDN_DOMAINS[14]="cdns.doon.eu.org (综合优选·Doorn)"
 
 #==============================================================================
 # 工具
@@ -1950,21 +1950,21 @@ edit_cdn() {
         echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
         echo ""
         echo -e "  ${white}── 三网通用 ──${re}"
-        for k in 1 2 3 4 5 6 7; do echo -e "  ${green}${k}${re}. ${CDN_DOMAINS[$k]}"; done
+        for k in 1 2 3 4 5 6 7 8; do echo -e "  ${green}${k}${re}. ${CDN_DOMAINS[$k]}"; done
         echo ""; echo -e "  ${white}── 运营商专线 ──${re}"
-        for k in 8 9 10; do echo -e "  ${green}${k}${re}. ${CDN_DOMAINS[$k]}"; done
+        for k in 9 10 11; do echo -e "  ${green}${k}${re}. ${CDN_DOMAINS[$k]}"; done
         echo ""; echo -e "  ${white}── 其他 ──${re}"
-        for k in 11 12 13 14; do echo -e "  ${green}${k}${re}. ${CDN_DOMAINS[$k]}"; done
+        for k in 12 13 14; do echo -e "  ${green}${k}${re}. ${CDN_DOMAINS[$k]}"; done
         echo ""
         echo -e "  ${cyan}c${re}. 自定义 (host:port)    ${cyan}p${re}. 仅改端口    ${red}0${re}. 返回"
         echo -e " ${purple}────────────────────────────────────────${re}"
         echo -ne "  请选择: "; read c ; local np="$cp"
         case "$c" in
-            1) CDN_DOMAIN="cdn.31514926.xyz" ;; 2) CDN_DOMAIN="skk.moe" ;; 3) CDN_DOMAIN="ip.sb" ;;
-            4) CDN_DOMAIN="time.is" ;; 5) CDN_DOMAIN="bestcf.top" ;; 6) CDN_DOMAIN="cfip.xxxxxxxx.tk" ;;
-            7) CDN_DOMAIN="cf.090227.xyz" ;; 8) CDN_DOMAIN="yidong.19931101.xyz" ;;
-            9) CDN_DOMAIN="liantong.19931101.xyz" ;; 10) CDN_DOMAIN="dianxin.19931101.xyz" ;;
-            11) CDN_DOMAIN="cdn.2020111.xyz" ;; 12) CDN_DOMAIN="xn--b6gac.eu.org" ;; 13) CDN_DOMAIN="cdns.doon.eu.org" ;; 14) CDN_DOMAIN="xx.cloudflare.182682.xyz" ;;
+            1) CDN_DOMAIN="xx.cloudflare.182682.xyz" ;; 2) CDN_DOMAIN="bestcf.top" ;; 3) CDN_DOMAIN="cdn.31514926.xyz" ;;
+            4) CDN_DOMAIN="skk.moe" ;; 5) CDN_DOMAIN="ip.sb" ;; 6) CDN_DOMAIN="time.is" ;;
+            7) CDN_DOMAIN="cfip.xxxxxxxx.tk" ;; 8) CDN_DOMAIN="cf.090227.xyz" ;;
+            9) CDN_DOMAIN="yidong.19931101.xyz" ;; 10) CDN_DOMAIN="liantong.19931101.xyz" ;;
+            11) CDN_DOMAIN="dianxin.19931101.xyz" ;; 12) CDN_DOMAIN="cdn.2020111.xyz" ;; 13) CDN_DOMAIN="xn--b6gac.eu.org" ;; 14) CDN_DOMAIN="cdns.doon.eu.org" ;;
             c|C) echo -ne "  host:port: "; read raw ; [[ "$raw" =~ ^(.+):([0-9]+)$ ]] && { CDN_DOMAIN="${BASH_REMATCH[1]}"; np="${BASH_REMATCH[2]}"; } || CDN_DOMAIN="$raw" ;;
             p|P) echo -ne "  端口: "; read np ; CDN_DOMAIN="$cc" ;;
             0) return ;; *) red_msg "无效"; sleep 1; continue ;;
@@ -2312,11 +2312,11 @@ interactive_install() {
     case "${ct:-1}" in
         2) for k in {1..14}; do echo -e "  ${green}${k}${re}. ${CDN_DOMAINS[$k]}"; done; echo -ne "  序号 [14]: "; read ci
            case "${ci:-14}" in
-               1) CDN_DOMAIN="cdn.31514926.xyz" ;; 2) CDN_DOMAIN="skk.moe" ;; 3) CDN_DOMAIN="ip.sb" ;;
-               4) CDN_DOMAIN="time.is" ;; 5) CDN_DOMAIN="bestcf.top" ;; 6) CDN_DOMAIN="cfip.xxxxxxxx.tk" ;;
-               7) CDN_DOMAIN="cf.090227.xyz" ;; 8) CDN_DOMAIN="yidong.19931101.xyz" ;; 9) CDN_DOMAIN="liantong.19931101.xyz" ;;
-               10) CDN_DOMAIN="dianxin.19931101.xyz" ;; 11) CDN_DOMAIN="cdn.2020111.xyz" ;; 12) CDN_DOMAIN="xn--b6gac.eu.org" ;;
-               13) CDN_DOMAIN="cdns.doon.eu.org" ;; 14) CDN_DOMAIN="xx.cloudflare.182682.xyz" ;; esac ;;
+               1) CDN_DOMAIN="xx.cloudflare.182682.xyz" ;; 2) CDN_DOMAIN="bestcf.top" ;; 3) CDN_DOMAIN="cdn.31514926.xyz" ;;
+               4) CDN_DOMAIN="skk.moe" ;; 5) CDN_DOMAIN="ip.sb" ;; 6) CDN_DOMAIN="time.is" ;;
+               7) CDN_DOMAIN="cfip.xxxxxxxx.tk" ;; 8) CDN_DOMAIN="cf.090227.xyz" ;; 9) CDN_DOMAIN="yidong.19931101.xyz" ;;
+               10) CDN_DOMAIN="liantong.19931101.xyz" ;; 11) CDN_DOMAIN="dianxin.19931101.xyz" ;; 12) CDN_DOMAIN="cdn.2020111.xyz" ;; 13) CDN_DOMAIN="xn--b6gac.eu.org" ;;
+               14) CDN_DOMAIN="cdns.doon.eu.org" ;; esac ;;
         3) echo -ne "  地址: "; read CDN_DOMAIN; [ -z "$CDN_DOMAIN" ] && CDN_DOMAIN="$CDN_DEFAULT" ;;
     esac; echo -e "  → ${green}${CDN_DOMAIN}${re}\n"
 
