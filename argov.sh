@@ -95,8 +95,15 @@ CDN_DOMAINS[14]="cdns.doon.eu.org (综合优选·Doorn)"
 # 工具
 #==============================================================================
 # MODULE: platform and filesystem helpers
-port_in_use_tcp() { (netstat -tlnp 2>/dev/null || ss -tlnp 2>/dev/null || ss -tln 2>/dev/null) | grep -Eq "[:.]$1[[:space:]]" || lsof -iTCP:"$1" -sTCP:LISTEN &>/dev/null; }
-port_in_use_udp() { (ss -lunp 2>/dev/null || ss -lun 2>/dev/null || netstat -ulnp 2>/dev/null || netstat -uln 2>/dev/null) | grep -Eq "[:.]$1[[:space:]]" || lsof -iUDP:"$1" &>/dev/null; }
+# 零内存端口检测: /proc/net/* 无需外部进程
+port_in_use_tcp() {
+    local p; p=$(printf '%04X' "$1" 2>/dev/null) || return 1
+    grep -qE "^[[:space:]]*[0-9]+:[[:space:]]*[0-9A-F]{8}:${p}[[:space:]]+[0-9A-F]{8}:0000[[:space:]]+0A" /proc/net/tcp /proc/net/tcp6 2>/dev/null
+}
+port_in_use_udp() {
+    local p; p=$(printf '%04X' "$1" 2>/dev/null) || return 1
+    grep -qE "^[[:space:]]*[0-9]+:[[:space:]]*[0-9A-F]{8}:${p}[[:space:]]+[0-9A-F]{8}:0000[[:space:]]+07" /proc/net/udp /proc/net/udp6 2>/dev/null
+}
 port_in_use() { port_in_use_tcp "$1"; }
 port_in_use_any() { port_in_use_tcp "$1" || port_in_use_udp "$1"; }
 find_free_port() { local p="$1"; while port_in_use "$p" && [ "$p" -lt 65535 ]; do p=$((p+1)); done; echo "$p"; }
@@ -2384,7 +2391,7 @@ do_install() {
     if command -v apt &>/dev/null; then DEBIAN_FRONTEND=noninteractive apt-get update -y -qq && apt-get install -y -qq jq unzip curl lsof openssl
     elif command -v yum &>/dev/null; then yum install -y -q jq unzip curl lsof openssl
     elif command -v dnf &>/dev/null; then dnf install -y -q jq unzip curl lsof openssl
-    elif command -v apk &>/dev/null; then apk update -q && apk add -q jq unzip curl lsof openssl; fi; green_msg "  完成"
+    elif command -v apk &>/dev/null; then apk update -q && apk add -q jq unzip curl lsof openssl iproute2; fi; green_msg "  完成"
 
     mkdir -p "$WORK_DIR" && secure_work_dir_permissions
     local ARCH_ARG CF_ARCH; ARCH_ARG=$(detect_arch); CF_ARCH=$(cf_arch)
