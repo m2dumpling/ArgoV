@@ -365,8 +365,8 @@ require(
     "Hysteria2 port hopping range must be persisted separately from the listening port",
 )
 require(
-    r"port_in_use_udp\(\)[\s\S]*ss -lunp",
-    "Hysteria2 UDP ports must be checked with UDP listeners, not only TCP listeners",
+    r"port_in_use_udp\(\)[\s\S]*proc/net/udp",
+    "port_in_use_udp must check UDP via /proc/net/udp (zero-process, memory-safe)",
 )
 require(
     r"port_in_use_any\(\)[\s\S]*port_in_use_tcp \"\$1\"[\s\S]*port_in_use_udp \"\$1\"",
