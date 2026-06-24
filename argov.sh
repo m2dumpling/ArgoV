@@ -271,14 +271,14 @@ install_ag_wrapper() {
         cat > "$SCRIPT_PATH" << 'ARGOWRAP'
 #!/usr/bin/env bash
 T="/tmp/argov.sh"
-curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 -o "$T" "https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh?r=$RANDOM$RANDOM"
+curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 -o "$T" "https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh?r=$RANDOM$RANDOM" || curl -fsSL --retry 3 -o "$T" "https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh"
 [ -s "$T" ] && bash -n "$T" && bash "$T" "$@"
 ARGOWRAP
     else
         cat > "$SCRIPT_PATH" << 'ARGOWRAP'
 #!/usr/bin/env bash
 T=$(mktemp /tmp/argov.XXXXXX)
-curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 -o "$T" "https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh?r=$RANDOM$RANDOM"
+curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 -o "$T" "https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh?r=$RANDOM$RANDOM" || curl -fsSL --retry 3 -o "$T" "https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh"
 [ -s "$T" ] && bash -n "$T" && bash "$T"
 rm -f "$T"
 ARGOWRAP
