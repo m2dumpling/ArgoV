@@ -34,6 +34,10 @@ ARGOV_USERS_FILE="/etc/xray/argov_users.json"
 SCRIPT_PATH="/usr/bin/ag"
 CDN_DEFAULT="xx.cloudflare.182682.xyz"
 
+# --- Sing-box 常量 ---
+SB_WORK_DIR="/etc/sing-box"
+SB_CONFIG_FILE="${SB_WORK_DIR}/config.json"
+
 # --- 端口 ---
 ARGO_PORT="${ARGO_PORT:-8080}"
 VLESS_WS_PORT="${VLESS_WS_PORT:-8081}"
@@ -112,6 +116,11 @@ detect_arch() {
     case "$(uname -m)" in
         x86_64) echo "64" ;; i686|i386) echo "32" ;;
         aarch64|arm64) echo "arm64-v8a" ;; armv7l) echo "arm32-v7a" ;; *) echo "" ;; esac
+}
+detect_sb_arch() {
+    case "$(uname -m)" in
+        x86_64) echo "amd64" ;; aarch64|arm64) echo "arm64" ;;
+        armv7l) echo "armv7" ;; i686|i386) echo "386" ;; *) echo "amd64" ;; esac
 }
 cf_arch() {
     case "$(uname -m)" in
@@ -256,6 +265,142 @@ EOF
         systemctl enable argov-hy2-hop 2>/dev/null || true
     fi
 }
+build_singbox_config() {
+    mkdir -p "$SB_WORK_DIR" 2>/dev/null
+    local tmp_inbounds; tmp_inbounds=$(mktemp -t sbin.XXXXXX)
+    local need_comma=false
+
+    # HY2 inbound
+    if [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ -n "${SB_HY2_PORT:-}" ]; then
+        cat >> "$tmp_inbounds" << SBHY2
+    {
+      "type": "hysteria2",
+      "tag": "sb-hy2",
+      "listen": "::",
+      "listen_port": ${SB_HY2_PORT},
+      "users": [ { "password": "${SB_HY2_PSK:-}" } ],
+      "tls": {
+        "enabled": true,
+        "alpn": ["h3"],
+        "certificate_path": "${SB_CERT_FILE}",
+        "key_path": "${SB_KEY_FILE}"
+      }
+    }
+SBHY2
+        need_comma=true
+    fi
+
+    # TUIC inbound
+    if [ "${SB_TUIC_ENABLE:-false}" = "true" ] && [ -n "${SB_TUIC_PORT:-}" ]; then
+        $need_comma && echo "," >> "$tmp_inbounds"
+        cat >> "$tmp_inbounds" << SBTUIC
+    {
+      "type": "tuic",
+      "tag": "sb-tuic",
+      "listen": "::",
+      "listen_port": ${SB_TUIC_PORT},
+      "users": [ { "uuid": "${SB_TUIC_UUID:-}", "password": "${SB_TUIC_PSK:-}" } ],
+      "congestion_control": "bbr",
+      "tls": {
+        "enabled": true,
+        "alpn": ["h3"],
+        "certificate_path": "${SB_CERT_FILE}",
+        "key_path": "${SB_KEY_FILE}"
+      }
+    }
+SBTUIC
+        need_comma=true
+    fi
+
+    # AnyTLS Reality inbound
+    if [ "${SB_ANYTLS_ENABLE:-false}" = "true" ] && [ -n "${SB_ANYTLS_PORT:-}" ]; then
+        $need_comma && echo "," >> "$tmp_inbounds"
+        cat >> "$tmp_inbounds" << SBANYTLS
+    {
+      "type": "anytls",
+      "tag": "sb-anytls",
+      "listen": "::",
+      "listen_port": ${SB_ANYTLS_PORT},
+      "users": [ { "name": "${SB_ANYTLS_USER:-argov}", "password": "${SB_ANYTLS_PSK:-}" } ],
+      "padding_scheme": [],
+      "tls": {
+        "enabled": true,
+        "server_name": "${SB_SNI}",
+        "reality": {
+          "enabled": true,
+          "handshake": { "server": "${SB_SNI}", "server_port": 443 },
+          "private_key": "${SB_REALITY_PRIV}",
+          "short_id": ["${SB_REALITY_SID}"]
+        }
+      }
+    }
+SBANYTLS
+        need_comma=true
+    fi
+
+    # VLESS Reality inbound (Sing-box)
+    if [ "${SB_REALITY_ENABLE:-false}" = "true" ] && [ -n "${SB_REALITY_PORT:-}" ]; then
+        $need_comma && echo "," >> "$tmp_inbounds"
+        cat >> "$tmp_inbounds" << SBVLESS
+    {
+      "type": "vless",
+      "tag": "sb-reality",
+      "listen": "::",
+      "listen_port": ${SB_REALITY_PORT},
+      "users": [ { "uuid": "${UUID_CUSTOM:-$(get_uuid)}", "flow": "xtls-rprx-vision" } ],
+      "tls": {
+        "enabled": true,
+        "server_name": "${SB_SNI}",
+        "reality": {
+          "enabled": true,
+          "handshake": { "server": "${SB_SNI}", "server_port": 443 },
+          "private_key": "${SB_REALITY_PRIV}",
+          "short_id": ["${SB_REALITY_SID}"]
+        }
+      }
+    }
+SBVLESS
+        need_comma=true
+    fi
+
+    # SS inbound (Sing-box)
+    if [ "${SB_SS_ENABLE:-false}" = "true" ] && [ -n "${SB_SS_PORT:-}" ]; then
+        $need_comma && echo "," >> "$tmp_inbounds"
+        cat >> "$tmp_inbounds" << SBSS
+    {
+      "type": "shadowsocks",
+      "tag": "sb-ss",
+      "listen": "::",
+      "listen_port": ${SB_SS_PORT},
+      "method": "${SS_METHOD:-aes-256-gcm}",
+      "password": "${SB_SS_PSK:-}"
+    }
+SBSS
+        need_comma=true
+    fi
+
+    # 拼接完整 config.json
+    cat > "$SB_CONFIG_FILE" << 'SBCONFIGHEAD'
+{
+  "log": { "level": "info", "timestamp": true },
+  "ntp": { "enabled": true, "server": "time.apple.com", "server_port": 123, "interval": "30m" },
+  "inbounds": [
+SBCONFIGHEAD
+    cat "$tmp_inbounds" >> "$SB_CONFIG_FILE"
+    cat >> "$SB_CONFIG_FILE" << 'SBCONFIGTAIL'
+  ],
+  "outbounds": [
+    { "type": "direct", "tag": "direct-out" }
+  ]
+}
+SBCONFIGTAIL
+    rm -f "$tmp_inbounds" 2>/dev/null
+
+    # 验证
+    if command -v sing-box >/dev/null 2>&1; then
+        sing-box check -c "$SB_CONFIG_FILE" >/dev/null 2>&1 || yellow_msg "Sing-box 配置验证警告"
+    fi
+}
 save_var() { printf "%s=%q\n" "$1" "$2"; }
 secure_work_dir_permissions() {
     [ -d "$WORK_DIR" ] || return 0
@@ -284,6 +429,164 @@ rm -f "$T"
 ARGOWRAP
     fi
     chmod +x "$SCRIPT_PATH"
+}
+
+#==============================================================================
+# Sing-box 内核管理
+#==============================================================================
+sb_start()   { systemctl start sing-box 2>/dev/null || rc-service sing-box start 2>/dev/null || true; }
+sb_stop()    { systemctl stop sing-box 2>/dev/null || rc-service sing-box stop 2>/dev/null || true; }
+sb_restart() { systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || true; }
+sb_status() {
+    if [ "$IS_ALPINE" = 1 ]; then
+        (rc-service sing-box status 2>/dev/null | grep -qE "started|crashed" || pgrep -x sing-box &>/dev/null) && return 0 || return 1
+    else
+        systemctl is-active sing-box 2>/dev/null && return 0 || return 1
+    fi
+}
+sb_is_installed() { command -v sing-box >/dev/null 2>&1; }
+
+install_singbox() {
+    yellow_msg "安装 Sing-box..."
+    if sb_is_installed; then
+        local cur_ver; cur_ver=$(sing-box version 2>/dev/null | head -1 || echo "unknown")
+        green_msg "Sing-box 已安装: $cur_ver"
+        return 0
+    fi
+    local sb_arch; sb_arch=$(detect_sb_arch)
+    if [ "$IS_ALPINE" = 1 ]; then
+        apk update || { red_msg "apk update 失败"; return 1; }
+        apk add --no-cache sing-box 2>/dev/null || {
+            apk add --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community sing-box || { red_msg "Sing-box 安装失败"; return 1; }
+        }
+    else
+        bash <(curl -fsSL https://sing-box.app/install.sh) || {
+            # 手动下载备选
+            local sb_url="https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-${sb_arch}.tar.gz"
+            local sb_tmp; sb_tmp=$(mktemp -t singbox.XXXXXX)
+            curl -fsSL --retry 3 -o "$sb_tmp" "$sb_url" || { red_msg "Sing-box 下载失败"; rm -f "$sb_tmp" 2>/dev/null; return 1; }
+            tar xzf "$sb_tmp" -C /usr/bin/ sing-box 2>/dev/null || { red_msg "解压失败"; rm -f "$sb_tmp" 2>/dev/null; return 1; }
+            chmod +x /usr/bin/sing-box 2>/dev/null
+            rm -f "$sb_tmp" 2>/dev/null
+        }
+    fi
+    if ! sb_is_installed; then
+        red_msg "Sing-box 安装后未找到可执行文件"
+        return 1
+    fi
+    local sb_ver; sb_ver=$(sing-box version 2>/dev/null | head -1 || echo "unknown")
+    green_msg "Sing-box 安装成功: $sb_ver"
+
+    # 创建服务定义
+    mkdir -p "$SB_WORK_DIR" "$SB_WORK_DIR/certs" 2>/dev/null
+    if [ "$IS_ALPINE" = 1 ]; then
+        cat > /etc/init.d/sing-box << 'SBOPENRC'
+#!/sbin/openrc-run
+name="sing-box"
+description="Sing-box Service"
+supervisor="supervise-daemon"
+command="/usr/bin/sing-box"
+command_args="run -c /etc/sing-box/config.json"
+pidfile="/run/${RC_SVCNAME}.pid"
+command_background="yes"
+output_log="/var/log/sing-box.log"
+error_log="/var/log/sing-box.err"
+depend() { need net; after firewall; }
+start_pre() { checkpath --directory --mode 0755 /var/log /run; }
+SBOPENRC
+        chmod +x /etc/init.d/sing-box
+        rc-update add sing-box default 2>/dev/null || true
+    else
+        cat > /etc/systemd/system/sing-box.service << 'SBSYSTEMD'
+[Unit]
+Description=Sing-box Service
+After=network.target
+[Service]
+Type=simple
+ExecStart=/usr/bin/sing-box run -c /etc/sing-box/config.json
+Restart=on-failure
+RestartSec=10s
+LimitNOFILE=1048576
+[Install]
+WantedBy=multi-user.target
+SBSYSTEMD
+        systemctl daemon-reload
+        systemctl enable sing-box 2>/dev/null || true
+    fi
+    SB_ENABLE=true
+    save_conf
+    green_msg "Sing-box 服务已配置"
+}
+
+generate_singbox_cert() {
+    local sni="${SB_SNI:-www.bing.com}"
+    mkdir -p "${SB_CERT_FILE%/*}" 2>/dev/null
+    if [ -f "$SB_CERT_FILE" ] && [ -f "$SB_KEY_FILE" ]; then
+        # 检查证书是否过期
+        openssl x509 -in "$SB_CERT_FILE" -checkend 86400 >/dev/null 2>&1 && return 0
+    fi
+    openssl req -x509 -newkey rsa:2048 -days 3650 -nodes \
+        -keyout "$SB_KEY_FILE" -out "$SB_CERT_FILE" \
+        -subj "/CN=${sni}" -addext "subjectAltName=DNS:${sni}" 2>/dev/null || {
+        red_msg "Sing-box 证书生成失败"; return 1
+    }
+    SB_CERT_FILE="$SB_CERT_FILE"; SB_KEY_FILE="$SB_KEY_FILE"
+}
+
+#==============================================================================
+# iptables 统一流量统计 (内核无关)
+#==============================================================================
+setup_traffic_counters() {
+    # 收集所有监听端口
+    local ports=""
+    [ -n "${ARGO_PORT:-}" ] && [ "${ARGO_PORT:-}" != "0" ] && ports="$ports $ARGO_PORT"
+    [ -n "${VLESS_WS_PORT:-}" ] && [ "${VLESS_WS_PORT:-}" != "0" ] && ports="$ports $VLESS_WS_PORT"
+    [ -n "${VMESS_WS_PORT:-}" ] && [ "${VMESS_WS_PORT:-}" != "0" ] && ports="$ports $VMESS_WS_PORT"
+    [ -n "${REALITY_PORT:-}" ] && [ "${REALITY_PORT:-}" != "0" ] && ports="$ports $REALITY_PORT"
+    [ -n "${HY2_PORT:-}" ] && [ "${HY2_PORT:-}" != "0" ] && ports="$ports $HY2_PORT"
+    [ -n "${SS_PORT:-}" ] && [ "${SS_PORT:-}" != "0" ] && ports="$ports $SS_PORT"
+    [ -n "${SB_HY2_PORT:-}" ] && [ "${SB_HY2_PORT:-}" != "0" ] && ports="$ports $SB_HY2_PORT"
+    [ -n "${SB_TUIC_PORT:-}" ] && [ "${SB_TUIC_PORT:-}" != "0" ] && ports="$ports $SB_TUIC_PORT"
+    [ -n "${SB_ANYTLS_PORT:-}" ] && [ "${SB_ANYTLS_PORT:-}" != "0" ] && ports="$ports $SB_ANYTLS_PORT"
+    [ -n "${SB_REALITY_PORT:-}" ] && [ "${SB_REALITY_PORT:-}" != "0" ] && ports="$ports $SB_REALITY_PORT"
+    [ -n "${SB_SS_PORT:-}" ] && [ "${SB_SS_PORT:-}" != "0" ] && ports="$ports $SB_SS_PORT"
+
+    # 清掉旧计数规则
+    while iptables -L INPUT -n --line-numbers 2>/dev/null | grep -q "argov-traffic"; do
+        local ln; ln=$(iptables -L INPUT -n --line-numbers 2>/dev/null | grep "argov-traffic" | head -1 | awk '{print $1}')
+        [ -n "$ln" ] && iptables -D INPUT "$ln" 2>/dev/null || break
+    done
+    while iptables -L OUTPUT -n --line-numbers 2>/dev/null | grep -q "argov-traffic"; do
+        local ln; ln=$(iptables -L OUTPUT -n --line-numbers 2>/dev/null | grep "argov-traffic" | head -1 | awk '{print $1}')
+        [ -n "$ln" ] && iptables -D OUTPUT "$ln" 2>/dev/null || break
+    done
+
+    # 对每个端口挂 INPUT/OUTPUT 计数规则
+    for p in $ports; do
+        iptables -I INPUT -p tcp --dport "$p" -m comment --comment "argov-traffic-in" 2>/dev/null || true
+        iptables -I INPUT -p udp --dport "$p" -m comment --comment "argov-traffic-in" 2>/dev/null || true
+        iptables -I OUTPUT -p tcp --sport "$p" -m comment --comment "argov-traffic-out" 2>/dev/null || true
+        iptables -I OUTPUT -p udp --sport "$p" -m comment --comment "argov-traffic-out" 2>/dev/null || true
+    done
+}
+
+collect_traffic() {
+    local tin=0 tout=0
+    tin=$(iptables -L INPUT -v -n -x 2>/dev/null | awk '/argov-traffic-in/{sum+=$2}END{print sum+0}')
+    tout=$(iptables -L OUTPUT -v -n -x 2>/dev/null | awk '/argov-traffic-out/{sum+=$2}END{print sum+0}')
+    TRAFFIC_IN="$tin"; TRAFFIC_OUT="$tout"
+    echo "TRAFFIC_IN=$tin" > "${WORK_DIR}/.traffic_counters"
+    echo "TRAFFIC_OUT=$tout" >> "${WORK_DIR}/.traffic_counters"
+}
+
+reset_traffic_counters() {
+    while iptables -L INPUT -n --line-numbers 2>/dev/null | grep -q "argov-traffic"; do
+        local ln; ln=$(iptables -L INPUT -n --line-numbers 2>/dev/null | grep "argov-traffic" | head -1 | awk '{print $1}')
+        [ -n "$ln" ] && iptables -D INPUT "$ln" 2>/dev/null || break
+    done
+    setup_traffic_counters
+    TRAFFIC_IN=0; TRAFFIC_OUT=0
+    save_conf
 }
 
 # MODULE: download and supply-chain helpers
@@ -452,7 +755,7 @@ is_safe_conf_file() {
         [[ "$line" =~ ^[A-Z][A-Z0-9_]*= ]] || return 1
         key="${line%%=*}"
         case "$key" in
-            NODE_NAME|ARGO_PORT|VLESS_WS_PORT|VMESS_WS_PORT|CDN_PORT|CDN_DOMAIN|ARGO_MODE|ARGO_AUTH|ARGO_FIXED_DOMAIN|UUID_CUSTOM|REALITY_PORT|HY2_PORT|HY2_MPORT|HY2_CONGESTION|HY2_UP_MBPS|HY2_DOWN_MBPS|SS_PORT|SUB_PORT|SUB_PATH|SUB_DOMAIN|SUB_TOKEN|REALITY_SNI|HY2_SNI|SS_METHOD|ENABLE_REALITY|ENABLE_HY2|ENABLE_SS|HY2_CERT_FILE|HY2_KEY_FILE|REALITY_PRIV|REALITY_PUB|REALITY_SHORTID|LAST_ARGO_DOMAIN|RELAY_ENABLED|RELAY_LINK|RELAY_MODE|XRAY_VERSION|XRAY_SHA256|CLOUDFLARED_VERSION|CLOUDFLARED_SHA256|AGG_TOKEN) ;;
+            NODE_NAME|ARGO_PORT|VLESS_WS_PORT|VMESS_WS_PORT|CDN_PORT|CDN_DOMAIN|ARGO_MODE|ARGO_AUTH|ARGO_FIXED_DOMAIN|UUID_CUSTOM|REALITY_PORT|HY2_PORT|HY2_MPORT|HY2_CONGESTION|HY2_UP_MBPS|HY2_DOWN_MBPS|SS_PORT|SUB_PORT|SUB_PATH|SUB_DOMAIN|SUB_TOKEN|REALITY_SNI|HY2_SNI|SS_METHOD|ENABLE_REALITY|ENABLE_HY2|ENABLE_SS|HY2_CERT_FILE|HY2_KEY_FILE|REALITY_PRIV|REALITY_PUB|REALITY_SHORTID|LAST_ARGO_DOMAIN|RELAY_ENABLED|RELAY_LINK|RELAY_MODE|XRAY_VERSION|XRAY_SHA256|CLOUDFLARED_VERSION|CLOUDFLARED_SHA256|AGG_TOKEN|SB_ENABLE|SB_VERSION|SB_HY2_ENABLE|SB_TUIC_ENABLE|SB_ANYTLS_ENABLE|SB_REALITY_ENABLE|SB_SS_ENABLE|SB_HY2_PORT|SB_TUIC_PORT|SB_ANYTLS_PORT|SB_REALITY_PORT|SB_SS_PORT|SB_REALITY_PRIV|SB_REALITY_PUB|SB_REALITY_SID|SB_ANYTLS_PSK|SB_TUIC_UUID|SB_TUIC_PSK|SB_SNI|SB_CERT_FILE|SB_KEY_FILE|TRAFFIC_IN|TRAFFIC_OUT) ;;
             *) return 1 ;;
         esac
         case "$line" in
@@ -870,6 +1173,17 @@ load_conf() {
     RELAY_MODE="${RELAY_MODE:-all}"
     XRAY_VERSION="${XRAY_VERSION:-latest}"; XRAY_SHA256="${XRAY_SHA256:-}"
     CLOUDFLARED_VERSION="${CLOUDFLARED_VERSION:-latest}"; CLOUDFLARED_SHA256="${CLOUDFLARED_SHA256:-}"
+    # Sing-box defaults
+    SB_ENABLE="${SB_ENABLE:-false}"; SB_VERSION="${SB_VERSION:-}"
+    SB_HY2_ENABLE="${SB_HY2_ENABLE:-false}"; SB_TUIC_ENABLE="${SB_TUIC_ENABLE:-false}"; SB_ANYTLS_ENABLE="${SB_ANYTLS_ENABLE:-false}"
+    SB_REALITY_ENABLE="${SB_REALITY_ENABLE:-false}"; SB_SS_ENABLE="${SB_SS_ENABLE:-false}"
+    SB_HY2_PORT="${SB_HY2_PORT:-}"; SB_TUIC_PORT="${SB_TUIC_PORT:-}"; SB_ANYTLS_PORT="${SB_ANYTLS_PORT:-}"
+    SB_REALITY_PORT="${SB_REALITY_PORT:-}"; SB_SS_PORT="${SB_SS_PORT:-}"
+    SB_REALITY_PRIV="${SB_REALITY_PRIV:-}"; SB_REALITY_PUB="${SB_REALITY_PUB:-}"; SB_REALITY_SID="${SB_REALITY_SID:-}"
+    SB_ANYTLS_PSK="${SB_ANYTLS_PSK:-}"; SB_TUIC_UUID="${SB_TUIC_UUID:-}"; SB_TUIC_PSK="${SB_TUIC_PSK:-}"
+    SB_SNI="${SB_SNI:-addons.mozilla.org}"
+    SB_CERT_FILE="${SB_CERT_FILE:-/etc/sing-box/certs/fullchain.pem}"; SB_KEY_FILE="${SB_KEY_FILE:-/etc/sing-box/certs/privkey.pem}"
+    TRAFFIC_IN="${TRAFFIC_IN:-0}"; TRAFFIC_OUT="${TRAFFIC_OUT:-0}"
     [ -n "$HY2_MPORT" ] && ! is_port_range "$HY2_MPORT" && HY2_MPORT=""
 }
 save_conf() {
@@ -895,6 +1209,16 @@ save_conf() {
         save_var RELAY_ENABLED "$RELAY_ENABLED"; save_var RELAY_LINK "$RELAY_LINK"; save_var RELAY_MODE "$RELAY_MODE"
         save_var XRAY_VERSION "$XRAY_VERSION"; save_var XRAY_SHA256 "$XRAY_SHA256"
         save_var CLOUDFLARED_VERSION "$CLOUDFLARED_VERSION"; save_var CLOUDFLARED_SHA256 "$CLOUDFLARED_SHA256"
+        # Sing-box
+        save_var SB_ENABLE "$SB_ENABLE"; save_var SB_VERSION "$SB_VERSION"
+        save_var SB_HY2_ENABLE "$SB_HY2_ENABLE"; save_var SB_TUIC_ENABLE "$SB_TUIC_ENABLE"
+        save_var SB_ANYTLS_ENABLE "$SB_ANYTLS_ENABLE"; save_var SB_REALITY_ENABLE "$SB_REALITY_ENABLE"; save_var SB_SS_ENABLE "$SB_SS_ENABLE"
+        save_var SB_HY2_PORT "$SB_HY2_PORT"; save_var SB_TUIC_PORT "$SB_TUIC_PORT"; save_var SB_ANYTLS_PORT "$SB_ANYTLS_PORT"
+        save_var SB_REALITY_PORT "$SB_REALITY_PORT"; save_var SB_SS_PORT "$SB_SS_PORT"
+        save_var SB_REALITY_PRIV "$SB_REALITY_PRIV"; save_var SB_REALITY_PUB "$SB_REALITY_PUB"; save_var SB_REALITY_SID "$SB_REALITY_SID"
+        save_var SB_ANYTLS_PSK "$SB_ANYTLS_PSK"; save_var SB_TUIC_UUID "$SB_TUIC_UUID"; save_var SB_TUIC_PSK "$SB_TUIC_PSK"
+        save_var SB_SNI "$SB_SNI"; save_var SB_CERT_FILE "$SB_CERT_FILE"; save_var SB_KEY_FILE "$SB_KEY_FILE"
+        save_var TRAFFIC_IN "$TRAFFIC_IN"; save_var TRAFFIC_OUT "$TRAFFIC_OUT"
     } > "$tmp" && mv -f "$tmp" "$USER_CONF"
     local rc=$?
     [ "$rc" -ne 0 ] && rm -f "$tmp" 2>/dev/null || true
@@ -929,6 +1253,34 @@ gen_hy2_link() {
     local qs="sni=$4&insecure=1&allowInsecure=1&alpn=h3"
     [ -n "$mport" ] && qs="${qs}&mport=${mport}"
     printf '%s' "hysteria2://$1@$2:$3?${qs}#${5:-${NODE_NAME}-Hy2}"
+}
+
+# Sing-box 链接生成
+gen_sb_hy2_link() {
+    # $1=pass $2=host $3=port $4=sni $5=name
+    local name="${5:-${NODE_NAME}-HY2}"
+    printf '%s' "hy2://$1@$2:$3?sni=${4}&alpn=h3&insecure=1#${name}"
+}
+gen_sb_tuic_link() {
+    # $1=uuid $2=pass $3=host $4=port $5=sni $6=name
+    local name="${6:-${NODE_NAME}-TUIC}"
+    printf '%s' "tuic://$1:$2@$3:$4?congestion_control=bbr&alpn=h3&sni=${5}&insecure=1#${name}"
+}
+gen_sb_anytls_link() {
+    # $1=pass $2=host $3=port $4=sni $5=pbk $6=sid $7=name
+    local name="${7:-${NODE_NAME}-AnyTLS}"
+    printf '%s' "anytls://$1@$2:$3?security=reality&sni=${4}&fp=chrome&pbk=${5}&sid=${6}#${name}"
+}
+gen_sb_reality_link() {
+    # $1=uuid $2=host $3=port $4=sni $5=pbk $6=sid $7=name
+    local name="${7:-${NODE_NAME}-Reality}"
+    printf '%s' "vless://$1@$2:$3?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${4}&pbk=${5}&fp=chrome&sid=${6}#${name}"
+}
+gen_sb_ss_link() {
+    # $1=method $2=pass $3=host $4=port $5=name
+    local b64; b64=$(printf '%s' "$1:$2" | base64 -w0 2>/dev/null || printf '%s' "$1:$2" | base64 | tr -d '\n')
+    local name="${5:-${NODE_NAME}-SS}"
+    printf '%s' "ss://${b64}@$3:$4#${name}"
 }
 
 show_qr() {
@@ -1180,7 +1532,34 @@ def build_clash(lines):
                 if mport:
                     p["ports"] = mport
                     p["hop-interval"] = 30
-            
+            elif l.startswith("tuic://"):
+                link = l[7:]
+                name = "TUIC"
+                if "#" in link: link, name = link.split("#", 1)
+                base, q = link.split("?", 1) if "?" in link else (link, "")
+                qs = urllib.parse.parse_qs(q)
+                userinfo, server = base.split("@", 1)
+                uid, pwd = userinfo.split(":", 1) if ":" in userinfo else (userinfo, "")
+                host, port = split_host_port(server)
+                p = {"name": urllib.parse.unquote(name), "type": "tuic", "server": host, "port": port, "uuid": urllib.parse.unquote(uid), "password": urllib.parse.unquote(pwd), "udp": True}
+                if qs.get("sni", [""])[0]: p["sni"] = qs.get("sni", [""])[0]
+                if qs.get("alpn", [""])[0]: p["alpn"] = [i for i in qs.get("alpn", [""])[0].split(",") if i]
+                if qs.get("insecure", [""])[0] or qs.get("skip-cert-verify", [""])[0]:
+                    p["skip-cert-verify"] = bool_qs(qs.get("insecure", qs.get("skip-cert-verify", ["false"]))[0])
+                if qs.get("congestion_control", [""])[0]: p["congestion-control"] = qs.get("congestion_control", [""])[0]
+            elif l.startswith("anytls://"):
+                link = l[9:]
+                name = "AnyTLS"
+                if "#" in link: link, name = link.split("#", 1)
+                base, q = link.split("?", 1) if "?" in link else (link, "")
+                qs = urllib.parse.parse_qs(q)
+                pwd, server = base.split("@", 1)
+                host, port = split_host_port(server)
+                p = {"name": urllib.parse.unquote(name), "type": "anytls", "server": host, "port": port, "password": urllib.parse.unquote(pwd), "udp": True}
+                if qs.get("sni", [""])[0]: p["sni"] = qs.get("sni", [""])[0]
+                if qs.get("fp", [""])[0]: p["client-fingerprint"] = qs.get("fp", [""])[0]
+                if qs.get("pbk", [""])[0]: p["reality-opts"] = {"public-key": qs.get("pbk", [""])[0], "short-id": qs.get("sid", [""])[0]}
+
             if p:
                 proxies.append(p)
                 names.append(p["name"])
@@ -1476,6 +1855,36 @@ if $JQ -e '.inbounds[]|select(.tag=="hy2")' "$CFG" >/dev/null 2>&1 && [ -n "$ip"
     hmport=$($JQ -r '.inbounds[]|select(.tag=="hy2")|(.streamSettings.finalmask.quicParams.udpHop.ports//.streamSettings.hysteriaSettings.quicParams.udpHop.ports[0]//empty)' "$CFG")
     hmport_qs=""; [ -n "$hmport" ] && hmport_qs="&mport=${hmport}"
     [ -n "$hport" ] && links+="hysteria2://${uuid}@${ip}:${hport}?sni=${hsni}&insecure=1&allowInsecure=1&alpn=h3${hmport_qs}#${NODE_NAME}-Hy2"$'\n'
+fi
+# ===== Sing-box 节点 =====
+SB_CFG="/etc/sing-box/config.json"
+if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CFG" ] && [ -n "$ip" ]; then
+    SB_SNI="${SB_SNI:-addons.mozilla.org}"
+    # HY2
+    if [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ -n "${SB_HY2_PORT:-}" ]; then
+        sb_hy2_pass=$($JQ -r '.inbounds[]|select(.type=="hysteria2").users[0].password//empty' "$SB_CFG" 2>/dev/null)
+        [ -n "$sb_hy2_pass" ] && links+="hy2://${sb_hy2_pass}@${ip}:${SB_HY2_PORT}?sni=${SB_SNI}&alpn=h3&insecure=1#${NODE_NAME}-HY2"$'\n'
+    fi
+    # TUIC
+    if [ "${SB_TUIC_ENABLE:-false}" = "true" ] && [ -n "${SB_TUIC_PORT:-}" ]; then
+        [ -n "${SB_TUIC_UUID:-}" ] && links+="tuic://${SB_TUIC_UUID}:${SB_TUIC_PSK}@${ip}:${SB_TUIC_PORT}?congestion_control=bbr&alpn=h3&sni=${SB_SNI}&insecure=1#${NODE_NAME}-TUIC"$'\n'
+    fi
+    # AnyTLS
+    if [ "${SB_ANYTLS_ENABLE:-false}" = "true" ] && [ -n "${SB_ANYTLS_PORT:-}" ]; then
+        sb_any_pass="${SB_ANYTLS_PSK:-}"; sb_pb="${SB_REALITY_PUB:-}"; sb_sd="${SB_REALITY_SID:-}"
+        [ -n "$sb_any_pass" ] && links+="anytls://${sb_any_pass}@${ip}:${SB_ANYTLS_PORT}?security=reality&sni=${SB_SNI}&fp=chrome&pbk=${sb_pb}&sid=${sb_sd}#${NODE_NAME}-AnyTLS"$'\n'
+    fi
+    # Reality
+    if [ "${SB_REALITY_ENABLE:-false}" = "true" ] && [ -n "${SB_REALITY_PORT:-}" ]; then
+        sb_pbr="${SB_REALITY_PUB:-}"; sb_sdr="${SB_REALITY_SID:-}"
+        links+="vless://${uuid}@${ip}:${SB_REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SB_SNI}&pbk=${sb_pbr}&fp=chrome&sid=${sb_sdr}#${NODE_NAME}-Reality"$'\n'
+    fi
+    # SS
+    if [ "${SB_SS_ENABLE:-false}" = "true" ] && [ -n "${SB_SS_PORT:-}" ]; then
+        sb_ss_pass=$($JQ -r '.inbounds[]|select(.type=="shadowsocks").password//empty' "$SB_CFG" 2>/dev/null)
+        sb_ss_method=$($JQ -r '.inbounds[]|select(.type=="shadowsocks").method//"aes-256-gcm"' "$SB_CFG" 2>/dev/null)
+        [ -n "$sb_ss_pass" ] && { sb_ss_b64=$(printf '%s' "${sb_ss_method}:${sb_ss_pass}" | base64 -w0 2>/dev/null || printf '%s' "${sb_ss_method}:${sb_ss_pass}" | base64 | tr -d '\n'); links+="ss://${sb_ss_b64}@${ip}:${SB_SS_PORT}#${NODE_NAME}-SS"$'\n'; }
+    fi
 fi
 out=$(printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n')
 [ "$IS_DEFAULT_USER" = "1" ] && printf '%s' "$out" > /etc/xray/sub.txt
@@ -1824,6 +2233,12 @@ get_status() {
         systemctl is-active xray 2>/dev/null && { XRAY_ST="${green}● 运行中${re}"; XRAY_RAW="running"; } || { XRAY_ST="${red}○ 已停止${re}"; XRAY_RAW="stopped"; }
         systemctl is-active argov-tunnel 2>/dev/null && { TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"; } || { TUNNEL_ST="${red}○ 已停止${re}"; TUNNEL_RAW="stopped"; }
     fi
+    # Sing-box 状态
+    if [ "${SB_ENABLE:-false}" = "true" ]; then
+        sb_status && { SB_ST="${green}● 运行中${re}"; SB_RAW="running"; } || { SB_ST="${red}○ 已停止${re}"; SB_RAW="stopped"; }
+    else
+        SB_ST=""; SB_RAW=""
+    fi
 }
 get_proto_summary() {
     local s="VL-Argo VM-Argo"
@@ -1900,9 +2315,50 @@ show_node() {
         echo -e "  ${cyan}加密${re}: ${sm}\n"
     fi
 
+    # Sing-box 节点
+    if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CONFIG_FILE" ] && [ -n "$ip" ]; then
+        echo ""
+        echo -e "  ${white}── Sing-box 节点 ──${re}"
+        echo ""
+        if [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ -n "${SB_HY2_PORT:-}" ]; then
+            local sbhy2_pass sbhy2_port
+            sbhy2_port="$SB_HY2_PORT"
+            sbhy2_pass=$(jq -r '.inbounds[]|select(.type=="hysteria2").users[0].password//empty' "$SB_CONFIG_FILE" 2>/dev/null)
+            [ -n "$sbhy2_pass" ] && echo -e "  ${yellow}HY2${re}  ${green}$(gen_sb_hy2_link "$sbhy2_pass" "$ip" "$sbhy2_port" "${SB_SNI:-www.bing.com}" "${NODE_NAME}-HY2")${re}\n"
+        fi
+        if [ "${SB_TUIC_ENABLE:-false}" = "true" ] && [ -n "${SB_TUIC_PORT:-}" ]; then
+            local sbtuic_uuid sbtuic_pass
+            sbtuic_uuid="${SB_TUIC_UUID}"; sbtuic_pass="${SB_TUIC_PSK}"
+            [ -n "$sbtuic_uuid" ] && echo -e "  ${yellow}TUIC${re}  ${green}$(gen_sb_tuic_link "$sbtuic_uuid" "$sbtuic_pass" "$ip" "$SB_TUIC_PORT" "${SB_SNI:-www.bing.com}" "${NODE_NAME}-TUIC")${re}\n"
+        fi
+        if [ "${SB_ANYTLS_ENABLE:-false}" = "true" ] && [ -n "${SB_ANYTLS_PORT:-}" ]; then
+            local sbany_pass
+            sbany_pass="${SB_ANYTLS_PSK}"
+            [ -n "$sbany_pass" ] && echo -e "  ${yellow}AnyTLS${re}  ${green}$(gen_sb_anytls_link "$sbany_pass" "$ip" "$SB_ANYTLS_PORT" "${SB_SNI}" "${SB_REALITY_PUB}" "${SB_REALITY_SID}" "${NODE_NAME}-AnyTLS")${re}\n"
+        fi
+        if [ "${SB_REALITY_ENABLE:-false}" = "true" ] && [ -n "${SB_REALITY_PORT:-}" ]; then
+            local sbreal_uuid; sbreal_uuid=$(get_uuid)
+            echo -e "  ${yellow}Reality${re}  ${green}$(gen_sb_reality_link "$sbreal_uuid" "$ip" "$SB_REALITY_PORT" "${SB_SNI}" "${SB_REALITY_PUB}" "${SB_REALITY_SID}" "${NODE_NAME}-Reality")${re}\n"
+        fi
+        if [ "${SB_SS_ENABLE:-false}" = "true" ] && [ -n "${SB_SS_PORT:-}" ]; then
+            local sbss_pass; sbss_pass=$(jq -r '.inbounds[]|select(.type=="shadowsocks").password//empty' "$SB_CONFIG_FILE" 2>/dev/null)
+            [ -n "$sbss_pass" ] && echo -e "  ${yellow}SS${re}  ${green}$(gen_sb_ss_link "${SS_METHOD:-aes-256-gcm}" "$sbss_pass" "$ip" "$SB_SS_PORT" "${NODE_NAME}-SS")${re}\n"
+        fi
+    fi
+
     echo -e "  ${yellow}💡${re} 复制链接 → 客户端导入    菜单 2 换线路 | 菜单 3 改配置"
     local su; su=$(get_sub_url "$ip" 2>/dev/null)
     [ -n "$su" ] && { echo ""; echo -e "  ${purple}━━━ 📡 订阅链接 ━━━${re}"; echo -e "  ${white}${su}${re}"; echo -e "  ${yellow}💡 V2rayN / Shadowrocket / Clash 系全平台智能适配，一键导入${re}"; }
+
+    # 流量统计显示
+    if [ -f "${WORK_DIR}/.traffic_counters" ]; then
+        . "${WORK_DIR}/.traffic_counters" 2>/dev/null || true
+        local tin="${TRAFFIC_IN:-0}" tout="${TRAFFIC_OUT:-0}"
+        local tin_f tout_f
+        tin_f=$(numfmt --to=iec "$tin" 2>/dev/null || echo "$tin B")
+        tout_f=$(numfmt --to=iec "$tout" 2>/dev/null || echo "$tout B")
+        echo -e "  ${purple}流量${re}: ${green}↓ ${tin_f}${re}  ${cyan}↑ ${tout_f}${re}"
+    fi
 }
 
 #==============================================================================
@@ -1915,8 +2371,10 @@ start_services() {
     rc-service xray start 2>/dev/null || true
     rc-service argov-tunnel start 2>/dev/null || true
     rc-service argov-stats start 2>/dev/null || true
+    [ "${SB_ENABLE:-false}" = "true" ] && { sb_start; }
     sleep 2; get_status
     echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"
+    [ -n "$SB_ST" ] && echo -e "  Sing-box: ${SB_ST}"
     green_msg "Done"
 }
 stop_services()  {
@@ -1925,8 +2383,10 @@ stop_services()  {
     rc-service xray stop 2>/dev/null || true
     rc-service argov-tunnel stop 2>/dev/null || true
     rc-service argov-stats stop 2>/dev/null || true
+    [ "${SB_ENABLE:-false}" = "true" ] && { sb_stop; }
     sleep 1; get_status
     echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"
+    [ -n "$SB_ST" ] && echo -e "  Sing-box: ${SB_ST}"
     red_msg "Stopped"
 }
 restart_services() {
@@ -1936,9 +2396,11 @@ restart_services() {
     rc-service xray restart 2>/dev/null || true
     rc-service argov-tunnel restart 2>/dev/null || true
     rc-service argov-stats restart 2>/dev/null || true
+    [ "${SB_ENABLE:-false}" = "true" ] && { sb_restart; }
     sleep 3; get_status
     local d; d=$(get_argo_domain)
     echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"
+    [ -n "$SB_ST" ] && echo -e "  Sing-box: ${SB_ST}"
     green_msg "Done"
     [ -n "$d" ] && { echo -e "  Domain: ${purple}${d}${re}"; LAST_ARGO_DOMAIN="$d"; save_conf; }
 }
@@ -2372,6 +2834,35 @@ interactive_install() {
 
     echo -e " ${white}━━━ ⑧ 额外协议（可选）━━━${re}"
     select_protocols || { yellow_msg "安装已取消。"; return; }
+
+    echo -e " ${white}━━━ ⑨ Sing-box 内核（可选）━━━${re}"
+    echo -e "  ${yellow}Sing-box 支持 TUIC、AnyTLS Reality 等 Xray 不支持的协议。${re}"
+    echo -e "  ${yellow}HY2 走 Sing-box 不依赖 allowInsecure，未来更稳定。${re}"
+    echo -ne "  是否安装 Sing-box？[y/N]: "; read sb_yn
+    if [ "$sb_yn" = "y" ] || [ "$sb_yn" = "Y" ]; then
+        SB_ENABLE=true
+        echo -e "  → ${green}将安装 Sing-box 内核${re}"
+        echo ""
+        echo -e "  ${white}选择 Sing-box 协议 (多个用空格分隔):${re}"
+        echo -e "  ${green}1${re}. Hysteria2    ${green}2${re}. TUIC    ${green}3${re}. AnyTLS Reality"
+        echo -e "  ${green}4${re}. VLESS Reality  ${green}5${re}. Shadowsocks"
+        echo -ne "  协议编号: "; read sb_protos
+        for num in $sb_protos; do
+            case "$num" in
+                1) SB_HY2_ENABLE=true; SB_HY2_PORT=${SB_HY2_PORT:-$(shuf -i 10000-60000 -n 1)} ;;
+                2) SB_TUIC_ENABLE=true; SB_TUIC_PORT=${SB_TUIC_PORT:-$(shuf -i 10000-60000 -n 1)}
+                   SB_TUIC_UUID="${SB_TUIC_UUID:-$(rand_uuid)}"; SB_TUIC_PSK="${SB_TUIC_PSK:-$(rand_token)}" ;;
+                3) SB_ANYTLS_ENABLE=true; SB_ANYTLS_PORT=${SB_ANYTLS_PORT:-$(shuf -i 10000-60000 -n 1)}
+                   SB_ANYTLS_PSK="${SB_ANYTLS_PSK:-$(rand_token)}" ;;
+                4) SB_REALITY_ENABLE=true; SB_REALITY_PORT=${SB_REALITY_PORT:-$(shuf -i 10000-60000 -n 1)} ;;
+                5) SB_SS_ENABLE=true; SB_SS_PORT=${SB_SS_PORT:-$(shuf -i 10000-60000 -n 1)} ;;
+            esac
+        done
+        echo -e "  → ${green}已选择 Sing-box 协议${re}"
+    else
+        SB_ENABLE=false
+    fi
+
     save_conf; do_install
 }
 
@@ -2503,7 +2994,34 @@ EOF
     fi
     green_msg "  完成"
 
-    install_ag_wrapper; save_conf
+    install_ag_wrapper
+
+    # Sing-box 安装 (如果启用)
+    if [ "${SB_ENABLE:-false}" = "true" ]; then
+        install_singbox || yellow_msg "Sing-box 安装失败，可稍后重试"
+        if sb_is_installed; then
+            # 生成 Reality 密钥
+            if [ "${SB_REALITY_ENABLE:-false}" = "true" ] || [ "${SB_ANYTLS_ENABLE:-false}" = "true" ]; then
+                if [ -z "${SB_REALITY_PRIV:-}" ]; then
+                    local sb_keys; sb_keys=$(sing-box generate reality-keypair 2>/dev/null)
+                    SB_REALITY_PRIV=$(echo "$sb_keys" | awk '/PrivateKey/{print $2}')
+                    SB_REALITY_PUB=$(echo "$sb_keys" | awk '/PublicKey/{print $2}')
+                fi
+                [ -z "${SB_REALITY_SID:-}" ] && SB_REALITY_SID=$(sing-box generate rand 8 --hex 2>/dev/null | tr -d '\n')
+            fi
+            # 生成 TLS 证书 (HY2/TUIC)
+            if [ "${SB_HY2_ENABLE:-false}" = "true" ] || [ "${SB_TUIC_ENABLE:-false}" = "true" ]; then
+                generate_singbox_cert
+            fi
+            # 生成 HY2 密码
+            [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ -z "${SB_HY2_PSK:-}" ] && SB_HY2_PSK=$(rand_token)
+            # 生成 SS 密码
+            [ "${SB_SS_ENABLE:-false}" = "true" ] && [ -z "${SB_SS_PSK:-}" ] && SB_SS_PSK=$(gen_ss2022_pass "2022-blake3-aes-128-gcm" 2>/dev/null || rand_token)
+            build_singbox_config
+            sb_start
+        fi
+    fi
+    save_conf
 
     local hd ip; [ "$ARGO_MODE" = "fixed-token" ] && hd="$ARGO_FIXED_DOMAIN" || hd=$(get_argo_domain)
     [ -z "$hd" ] && [ "$ARGO_MODE" != "fixed-token" ] && { sleep 3; hd=$(get_argo_domain); }
@@ -2514,6 +3032,7 @@ EOF
 
     start_sub_server
     start_stats_service
+    setup_traffic_counters 2>/dev/null || true
 
     echo ""; echo -e " ${purple}╔══════════════════════════════════════════════════╗${re}"
     echo -e " ${purple}║${re}       ${white}🎉 部署成功 · ${NODE_NAME}${re}"
@@ -4514,6 +5033,271 @@ agg_menu() {
     done
 }
 
+#==============================================================================
+# Sing-box 管理面板
+#==============================================================================
+sb_menu() {
+    load_conf
+    while true; do
+        clear
+        echo ""
+        echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
+        echo -e " ${purple}║${re}       ${white}Sing-box 内核管理${re}                   ${purple}║${re}"
+        echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
+        echo ""
+
+        # 状态
+        local sb_ver="未安装"
+        sb_is_installed && sb_ver=$(sing-box version 2>/dev/null | head -1 || echo "installed")
+        echo -e "  Sing-box: ${SB_ST:-未安装}    ${cyan}${sb_ver}${re}"
+
+        # 启用的协议
+        local proto_list=""
+        [ "${SB_HY2_ENABLE:-false}" = "true" ] && proto_list="$proto_list HY2"
+        [ "${SB_TUIC_ENABLE:-false}" = "true" ] && proto_list="$proto_list TUIC"
+        [ "${SB_ANYTLS_ENABLE:-false}" = "true" ] && proto_list="$proto_list AnyTLS"
+        [ "${SB_REALITY_ENABLE:-false}" = "true" ] && proto_list="$proto_list Reality"
+        [ "${SB_SS_ENABLE:-false}" = "true" ] && proto_list="$proto_list SS"
+        [ -n "$proto_list" ] && echo -e "  协议: ${green}${proto_list}${re}"
+        echo ""
+
+        echo -e " ${purple}────────────────────────────────────────${re}"
+        echo -e "  ${green}s1${re}. 安装/更新 Sing-box 内核"
+        echo -e "  ${green}s2${re}. 管理 Sing-box 协议 (添加/编辑/删除)"
+        echo -e "  ${green}s3${re}. 查看 Sing-box 节点链接"
+        echo -e "  ${green}s4${re}. 启动 / 停止 / 重启 Sing-box"
+        echo -e "  ${red}s5${re}. 卸载 Sing-box"
+        echo -e "  ${cyan}s0${re}. 返回主菜单"
+        echo -e " ${purple}────────────────────────────────────────${re}"
+        echo -ne "  请选择: "; read c
+
+        case "$c" in
+            s1|S1|1)
+                install_singbox || { echo -ne "  按回车返回..."; read -r; }
+                if sb_is_installed; then
+                    SB_ENABLE=true; save_conf
+                    green_msg "Sing-box 安装成功！"
+                fi
+                ;;
+            s2|S2|2) manage_sb_protocols ;;
+            s3|S3|3) show_node; echo -ne "  按回车返回..."; read -r ;;
+            s4|S4|4)
+                echo ""
+                echo -e "  ${green}1${re}. 启动    ${red}2${re}. 停止    ${yellow}3${re}. 重启"
+                echo -ne "  选择: "; read sc
+                case "${sc:-1}" in
+                    1) sb_start; green_msg "Sing-box 已启动" ;;
+                    2) sb_stop; red_msg "Sing-box 已停止" ;;
+                    3) sb_restart; green_msg "Sing-box 已重启" ;;
+                esac
+                sleep 1
+                ;;
+            s5|S5|5)
+                echo -ne "  ${red}⚠ 确定卸载 Sing-box? (y/N): ${re}"; read cf
+                if [ "$cf" = "y" ] || [ "$cf" = "Y" ]; then
+                    sb_stop 2>/dev/null
+                    systemctl disable sing-box 2>/dev/null; rc-update del sing-box default 2>/dev/null
+                    rm -rf "$SB_WORK_DIR" /etc/systemd/system/sing-box.service /etc/init.d/sing-box /var/log/sing-box.log /var/log/sing-box.err /usr/bin/sing-box 2>/dev/null
+                    systemctl daemon-reload 2>/dev/null || true
+                    SB_ENABLE=false
+                    SB_HY2_ENABLE=false; SB_TUIC_ENABLE=false; SB_ANYTLS_ENABLE=false; SB_REALITY_ENABLE=false; SB_SS_ENABLE=false
+                    save_conf
+                    red_msg "Sing-box 已卸载"
+                fi
+                ;;
+            s0|S0|0) return ;;
+            *) red_msg "无效选择"; sleep 1 ;;
+        esac
+    done
+}
+
+manage_sb_protocols() {
+    load_conf
+    if ! sb_is_installed; then
+        red_msg "请先安装 Sing-box 内核！"
+        echo -ne "  按回车返回..."; read -r
+        return
+    fi
+
+    while true; do
+        clear
+        echo ""
+        echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
+        echo -e " ${purple}║${re}     ${white}Sing-box 协议管理${re}                     ${purple}║${re}"
+        echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
+        echo ""
+
+        # 列出已启用协议
+        echo -e "  ${white}── 已启用 ──${re}"
+        local has_any=false
+        if [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ -n "${SB_HY2_PORT:-}" ]; then
+            has_any=true
+            echo -e "  ${yellow}HY2${re}    port: ${green}${SB_HY2_PORT}${re}  SNI: ${cyan}${SB_SNI:-}${re}"
+        fi
+        if [ "${SB_TUIC_ENABLE:-false}" = "true" ] && [ -n "${SB_TUIC_PORT:-}" ]; then
+            has_any=true
+            echo -e "  ${yellow}TUIC${re}   port: ${green}${SB_TUIC_PORT}${re}  SNI: ${cyan}${SB_SNI:-}${re}"
+        fi
+        if [ "${SB_ANYTLS_ENABLE:-false}" = "true" ] && [ -n "${SB_ANYTLS_PORT:-}" ]; then
+            has_any=true
+            echo -e "  ${yellow}AnyTLS${re} port: ${green}${SB_ANYTLS_PORT}${re}  SNI: ${cyan}${SB_SNI:-}${re}"
+        fi
+        if [ "${SB_REALITY_ENABLE:-false}" = "true" ] && [ -n "${SB_REALITY_PORT:-}" ]; then
+            has_any=true
+            echo -e "  ${yellow}Reality${re} port: ${green}${SB_REALITY_PORT}${re}  SNI: ${cyan}${SB_SNI:-}${re}"
+        fi
+        if [ "${SB_SS_ENABLE:-false}" = "true" ] && [ -n "${SB_SS_PORT:-}" ]; then
+            has_any=true
+            echo -e "  ${yellow}SS${re}      port: ${green}${SB_SS_PORT}${re}  method: ${cyan}${SS_METHOD:-aes-256-gcm}${re}"
+        fi
+        $has_any || echo -e "  ${cyan}(无)${re}"
+
+        echo ""
+        echo -e "  ${white}── 可选协议 ──${re}"
+        [ "${SB_HY2_ENABLE:-false}" != "true" ]    && echo -e "  ${green}b1${re}. 添加 Hysteria2"
+        [ "${SB_TUIC_ENABLE:-false}" != "true" ]   && echo -e "  ${green}b2${re}. 添加 TUIC"
+        [ "${SB_ANYTLS_ENABLE:-false}" != "true" ] && echo -e "  ${green}b3${re}. 添加 AnyTLS Reality"
+        [ "${SB_REALITY_ENABLE:-false}" != "true" ] && echo -e "  ${green}b4${re}. 添加 VLESS Reality"
+        [ "${SB_SS_ENABLE:-false}" != "true" ]     && echo -e "  ${green}b5${re}. 添加 Shadowsocks"
+        echo -e "  ${red}d${re}. 删除协议    ${cyan}b0${re}. 返回"
+        echo -e " ${purple}────────────────────────────────────────${re}"
+        echo -ne "  请选择: "; read c
+
+        case "$c" in
+            b1|B1) add_sb_hy2 ;;
+            b2|B2) add_sb_tuic ;;
+            b3|B3) add_sb_anytls ;;
+            b4|B4) add_sb_reality ;;
+            b5|B5) add_sb_ss ;;
+            d|D) delete_sb_protocol ;;
+            b0|B0|0) return ;;
+            *) red_msg "无效选择"; sleep 1 ;;
+        esac
+    done
+}
+
+# Sing-box 协议添加函数
+add_sb_hy2() {
+    load_conf
+    echo -ne "  HY2 端口 [$(shuf -i 10000-60000 -n 1)]: "; read p
+    [ -n "$p" ] && is_port "$p" && SB_HY2_PORT="$p" || SB_HY2_PORT=$(shuf -i 10000-60000 -n 1)
+    SB_HY2_PSK="${SB_HY2_PSK:-$(rand_token)}"
+    echo -ne "  SNI [${SB_SNI:-addons.mozilla.org}]: "; read sni
+    [ -n "$sni" ] && SB_SNI="$sni"
+    SB_HY2_ENABLE=true; SB_ENABLE=true
+    generate_singbox_cert; build_singbox_config
+    sb_restart; save_conf
+    green_msg "Hysteria2 (Sing-box) 添加成功"
+}
+
+add_sb_tuic() {
+    load_conf
+    echo -ne "  TUIC 端口 [$(shuf -i 10000-60000 -n 1)]: "; read p
+    [ -n "$p" ] && is_port "$p" && SB_TUIC_PORT="$p" || SB_TUIC_PORT=$(shuf -i 10000-60000 -n 1)
+    SB_TUIC_UUID="${SB_TUIC_UUID:-$(rand_uuid)}"; SB_TUIC_PSK="${SB_TUIC_PSK:-$(rand_token)}"
+    echo -ne "  SNI [${SB_SNI:-addons.mozilla.org}]: "; read sni
+    [ -n "$sni" ] && SB_SNI="$sni"
+    SB_TUIC_ENABLE=true; SB_ENABLE=true
+    generate_singbox_cert; build_singbox_config
+    sb_restart; save_conf
+    green_msg "TUIC (Sing-box) 添加成功"
+}
+
+add_sb_anytls() {
+    load_conf
+    echo -ne "  AnyTLS 端口 [$(shuf -i 10000-60000 -n 1)]: "; read p
+    [ -n "$p" ] && is_port "$p" && SB_ANYTLS_PORT="$p" || SB_ANYTLS_PORT=$(shuf -i 10000-60000 -n 1)
+    SB_ANYTLS_PSK="${SB_ANYTLS_PSK:-$(rand_token)}"
+    echo -ne "  SNI [${SB_SNI:-addons.mozilla.org}]: "; read sni
+    [ -n "$sni" ] && SB_SNI="$sni"
+    # 生成 Reality 密钥
+    if ! sb_is_installed; then red_msg "请先安装 Sing-box"; return; fi
+    if [ -z "${SB_REALITY_PRIV:-}" ]; then
+        local sb_keys; sb_keys=$(sing-box generate reality-keypair 2>/dev/null)
+        SB_REALITY_PRIV=$(echo "$sb_keys" | awk '/PrivateKey/{print $2}')
+        SB_REALITY_PUB=$(echo "$sb_keys" | awk '/PublicKey/{print $2}')
+    fi
+    [ -z "${SB_REALITY_SID:-}" ] && SB_REALITY_SID=$(sing-box generate rand 8 --hex 2>/dev/null | tr -d '\n')
+    SB_ANYTLS_ENABLE=true; SB_ENABLE=true
+    build_singbox_config; sb_restart; save_conf
+    green_msg "AnyTLS Reality (Sing-box) 添加成功"
+}
+
+add_sb_reality() {
+    load_conf
+    echo -ne "  Reality 端口 [$(shuf -i 10000-60000 -n 1)]: "; read p
+    [ -n "$p" ] && is_port "$p" && SB_REALITY_PORT="$p" || SB_REALITY_PORT=$(shuf -i 10000-60000 -n 1)
+    echo -ne "  SNI [${SB_SNI:-addons.mozilla.org}]: "; read sni
+    [ -n "$sni" ] && SB_SNI="$sni"
+    if ! sb_is_installed; then red_msg "请先安装 Sing-box"; return; fi
+    if [ -z "${SB_REALITY_PRIV:-}" ]; then
+        local sb_keys; sb_keys=$(sing-box generate reality-keypair 2>/dev/null)
+        SB_REALITY_PRIV=$(echo "$sb_keys" | awk '/PrivateKey/{print $2}')
+        SB_REALITY_PUB=$(echo "$sb_keys" | awk '/PublicKey/{print $2}')
+    fi
+    [ -z "${SB_REALITY_SID:-}" ] && SB_REALITY_SID=$(sing-box generate rand 8 --hex 2>/dev/null | tr -d '\n')
+    SB_REALITY_ENABLE=true; SB_ENABLE=true
+    build_singbox_config; sb_restart; save_conf
+    green_msg "VLESS Reality (Sing-box) 添加成功"
+}
+
+add_sb_ss() {
+    load_conf
+    echo -ne "  SS 端口 [$(shuf -i 10000-60000 -n 1)]: "; read p
+    [ -n "$p" ] && is_port "$p" && SB_SS_PORT="$p" || SB_SS_PORT=$(shuf -i 10000-60000 -n 1)
+    echo -ne "  加密方法 [${SS_METHOD:-aes-256-gcm}]: "; read m
+    [ -n "$m" ] && SS_METHOD="$m"
+    SB_SS_PSK="${SB_SS_PSK:-$(rand_token)}"
+    SB_SS_ENABLE=true; SB_ENABLE=true
+    build_singbox_config; sb_restart; save_conf
+    green_msg "Shadowsocks (Sing-box) 添加成功"
+}
+
+delete_sb_protocol() {
+    load_conf
+    echo ""
+    echo -e "  ${white}选择要删除的 Sing-box 协议:${re}"
+    local idx=1
+    [ "${SB_HY2_ENABLE:-false}" = "true" ]  && { echo -e "  ${green}${idx}${re}. Hysteria2"; idx=$((idx+1)); }
+    [ "${SB_TUIC_ENABLE:-false}" = "true" ] && { echo -e "  ${green}${idx}${re}. TUIC"; idx=$((idx+1)); }
+    [ "${SB_ANYTLS_ENABLE:-false}" = "true" ] && { echo -e "  ${green}${idx}${re}. AnyTLS"; idx=$((idx+1)); }
+    [ "${SB_REALITY_ENABLE:-false}" = "true" ] && { echo -e "  ${green}${idx}${re}. Reality"; idx=$((idx+1)); }
+    [ "${SB_SS_ENABLE:-false}" = "true" ] && { echo -e "  ${green}${idx}${re}. Shadowsocks"; idx=$((idx+1)); }
+    [ "$idx" = 1 ] && { yellow_msg "无协议可删除"; sleep 1; return; }
+    echo -ne "  输入序号(空格分隔): "; read nums
+    for n in $nums; do
+        case "$n" in
+            1)
+                [ "${SB_HY2_ENABLE:-false}" = "true" ] && { SB_HY2_ENABLE=false; SB_HY2_PORT=; SB_HY2_PSK=; echo "  → HY2 已删除"; }
+                ;;
+            2)
+                [ "${SB_TUIC_ENABLE:-false}" = "true" ] && { SB_TUIC_ENABLE=false; SB_TUIC_PORT=; echo "  → TUIC 已删除"; }
+                ;;
+            3)
+                [ "${SB_ANYTLS_ENABLE:-false}" = "true" ] && { SB_ANYTLS_ENABLE=false; SB_ANYTLS_PORT=; echo "  → AnyTLS 已删除"; }
+                ;;
+            4)
+                [ "${SB_REALITY_ENABLE:-false}" = "true" ] && { SB_REALITY_ENABLE=false; SB_REALITY_PORT=; echo "  → Reality 已删除"; }
+                ;;
+            5)
+                [ "${SB_SS_ENABLE:-false}" = "true" ] && { SB_SS_ENABLE=false; SB_SS_PORT=; echo "  → SS 已删除"; }
+                ;;
+        esac
+    done
+    # 如果没有任何协议了，禁用 Sing-box
+    if [ "${SB_HY2_ENABLE:-false}" != "true" ] && [ "${SB_TUIC_ENABLE:-false}" != "true" ] && \
+       [ "${SB_ANYTLS_ENABLE:-false}" != "true" ] && [ "${SB_REALITY_ENABLE:-false}" != "true" ] && \
+       [ "${SB_SS_ENABLE:-false}" != "true" ]; then
+        SB_ENABLE=false
+        sb_stop 2>/dev/null
+        yellow_msg "所有协议已删除，Sing-box 已停止"
+    else
+        build_singbox_config; sb_restart
+    fi
+    save_conf
+    sleep 1
+}
+
 # MODULE: menus and entrypoint
 main_menu() {
     load_conf
@@ -4523,7 +5307,9 @@ main_menu() {
         start_stats_service >/dev/null 2>&1 &
     fi
     while true; do
-        get_status; clear
+        get_status
+        [ "${SB_ENABLE:-false}" = "true" ] && collect_traffic 2>/dev/null &
+        clear
         local uuid_short="未安装" hd=""
         [ -f "$CONFIG_FILE" ] && uuid_short="$(get_uuid | cut -c1-12)..."
         [ "$TUNNEL_RAW" = "running" ] && hd=$(get_argo_domain)
@@ -4541,6 +5327,15 @@ main_menu() {
         echo -e "  UUID : ${cyan}${uuid_short}${re}"
         [ -n "$hd" ] && echo -e "  域名 : ${green}${hd}${re}"
         echo -e "  CDN  : ${green}$(get_cdn):$(get_cdn_port)${re}"
+        [ -n "$SB_ST" ] && echo -e "  Sing-box: ${SB_ST}"
+        # 流量统计
+        if [ -f "${WORK_DIR}/.traffic_counters" ]; then
+            . "${WORK_DIR}/.traffic_counters" 2>/dev/null || true
+            local tin_f tout_f
+            tin_f=$(numfmt --to=iec "${TRAFFIC_IN:-0}" 2>/dev/null || echo "${TRAFFIC_IN:-0} B")
+            tout_f=$(numfmt --to=iec "${TRAFFIC_OUT:-0}" 2>/dev/null || echo "${TRAFFIC_OUT:-0} B")
+            echo -e "  流量 : ${green}↓ ${tin_f}${re}  ${cyan}↑ ${tout_f}${re}"
+        fi
         echo ""
         echo -e " ${purple}──────────────── ✦ 核心功能 ✦ ────────────────${re}"
         echo -e "  ${green}1${re}. 🔗 查看节点链接       ${green}2${re}. ☁️  更换优选线路"
@@ -4549,7 +5344,7 @@ main_menu() {
         echo ""
         echo -e " ${purple}──────────────── ✦ 进阶路由 ✦ ────────────────${re}"
         echo -e "  ${purple}w${re}. 🌐 独立 WARP 分流     ${purple}r${re}. 🔀 落地节点中继"
-        echo -e "  ${purple}g${re}. 📡 聚合订阅 (Aggregation)"
+        echo -e "  ${purple}g${re}. 📡 聚合订阅            ${purple}s${re}. 🔧 Sing-box 管理"
         echo ""
         echo -e " ${purple}──────────────── ✦ 状态运维 ✦ ────────────────${re}"
         echo -e "  ${green}4${re}. ▶️  启动系统         ${red}5${re}. ⏹️  停止系统"
@@ -4557,7 +5352,7 @@ main_menu() {
         echo -e "  ${cyan}8${re}. 🆙 更新管理脚本      ${red}9${re}. 🗑️  彻底卸载系统"
         echo -e "  ${purple}x${re}. 🚀 更新 Xray 内核    ${cyan}0${re}. 🚪 安全退出"
         echo -e " ${purple}───────────────────────────────────────────────${re}"
-        echo -ne "  请输入 (0-9 / a / u / x / w / r / g): "; read c
+        echo -ne "  请输入 (0-9 / a / u / x / w / r / g / s): "; read c
         case "$c" in
             1) show_node; echo -ne "  按回车返回..."; read -r ;;
             2) edit_cdn; echo -ne "  按回车返回..."; read -r ;;
@@ -4578,13 +5373,16 @@ main_menu() {
                    stop_sub_server 2>/dev/null
                    stop_stats_service 2>/dev/null
                    systemctl stop xray argov-tunnel argov-stats 2>/dev/null; systemctl disable xray argov-tunnel argov-stats 2>/dev/null
-                    rm -rf "$WORK_DIR"; rm -f /etc/systemd/system/xray.service /etc/systemd/system/argov-tunnel.service /etc/systemd/system/argov-sub.service /etc/systemd/system/argov-stats.service /etc/init.d/xray /etc/init.d/argov-tunnel /etc/init.d/argov-stats "$SCRIPT_PATH" "${WORK_DIR}/argov-tunnel.sh"
+                   # Sing-box 清理
+                   [ "${SB_ENABLE:-false}" = "true" ] && { sb_stop; systemctl disable sing-box 2>/dev/null; rc-update del sing-box default 2>/dev/null; }
+                    rm -rf "$WORK_DIR" "$SB_WORK_DIR"; rm -f /etc/systemd/system/xray.service /etc/systemd/system/argov-tunnel.service /etc/systemd/system/argov-sub.service /etc/systemd/system/argov-stats.service /etc/systemd/system/sing-box.service /etc/init.d/xray /etc/init.d/argov-tunnel /etc/init.d/argov-stats /etc/init.d/sing-box "$SCRIPT_PATH" "${WORK_DIR}/argov-tunnel.sh"
                    systemctl daemon-reload; green_msg "卸载完成。"; fi ;;
             w|W) warp_menu ;;
             r|R) relay_menu ;;
             g|G) agg_menu ;;
+            s|S) sb_menu ;;
             0) clear; break ;;
-            *) red_msg "无效 (0-9 / a / u / x / w / r)"; sleep 1 ;;
+            *) red_msg "无效 (0-9 / a / u / x / w / r / g / s)"; sleep 1 ;;
         esac
     done
 }
