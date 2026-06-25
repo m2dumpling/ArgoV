@@ -5037,8 +5037,9 @@ agg_menu() {
 # Sing-box 管理面板
 #==============================================================================
 sb_menu() {
-    load_conf
     while true; do
+        load_conf
+        get_status
         clear
         echo ""
         echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
@@ -5049,7 +5050,9 @@ sb_menu() {
         # 状态
         local sb_ver="未安装"
         sb_is_installed && sb_ver=$(sing-box version 2>/dev/null | head -1 || echo "installed")
-        echo -e "  Sing-box: ${SB_ST:-未安装}    ${cyan}${sb_ver}${re}"
+        local sb_st_display="未安装"
+        sb_status && sb_st_display="${green}● 运行中${re}" || { sb_is_installed && sb_st_display="${red}○ 已停止${re}"; }
+        echo -e "  Sing-box: ${sb_st_display}    ${cyan}${sb_ver}${re}"
 
         # 启用的协议
         local proto_list=""
@@ -5075,7 +5078,7 @@ sb_menu() {
             s1|S1|1)
                 install_singbox || { echo -ne "  按回车返回..."; read -r; }
                 if sb_is_installed; then
-                    SB_ENABLE=true; save_conf
+                    SB_ENABLE=true; save_conf; start_sub_server >/dev/null 2>&1 &
                     green_msg "Sing-box 安装成功！"
                 fi
                 ;;
@@ -5101,7 +5104,7 @@ sb_menu() {
                     systemctl daemon-reload 2>/dev/null || true
                     SB_ENABLE=false
                     SB_HY2_ENABLE=false; SB_TUIC_ENABLE=false; SB_ANYTLS_ENABLE=false; SB_REALITY_ENABLE=false; SB_SS_ENABLE=false
-                    save_conf
+                    save_conf; start_sub_server >/dev/null 2>&1 &
                     red_msg "Sing-box 已卸载"
                 fi
                 ;;
@@ -5112,7 +5115,6 @@ sb_menu() {
 }
 
 manage_sb_protocols() {
-    load_conf
     if ! sb_is_installed; then
         red_msg "请先安装 Sing-box 内核！"
         echo -ne "  按回车返回..."; read -r
@@ -5120,6 +5122,7 @@ manage_sb_protocols() {
     fi
 
     while true; do
+        load_conf
         clear
         echo ""
         echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
@@ -5186,7 +5189,7 @@ add_sb_hy2() {
     [ -n "$sni" ] && SB_SNI="$sni"
     SB_HY2_ENABLE=true; SB_ENABLE=true
     generate_singbox_cert; build_singbox_config
-    sb_restart; save_conf
+    sb_restart; save_conf; start_sub_server >/dev/null 2>&1 &
     green_msg "Hysteria2 (Sing-box) 添加成功"
 }
 
@@ -5199,7 +5202,7 @@ add_sb_tuic() {
     [ -n "$sni" ] && SB_SNI="$sni"
     SB_TUIC_ENABLE=true; SB_ENABLE=true
     generate_singbox_cert; build_singbox_config
-    sb_restart; save_conf
+    sb_restart; save_conf; start_sub_server >/dev/null 2>&1 &
     green_msg "TUIC (Sing-box) 添加成功"
 }
 
@@ -5219,7 +5222,7 @@ add_sb_anytls() {
     fi
     [ -z "${SB_REALITY_SID:-}" ] && SB_REALITY_SID=$(sing-box generate rand 8 --hex 2>/dev/null | tr -d '\n')
     SB_ANYTLS_ENABLE=true; SB_ENABLE=true
-    build_singbox_config; sb_restart; save_conf
+    build_singbox_config; sb_restart; save_conf; start_sub_server >/dev/null 2>&1 &
     green_msg "AnyTLS Reality (Sing-box) 添加成功"
 }
 
@@ -5237,7 +5240,7 @@ add_sb_reality() {
     fi
     [ -z "${SB_REALITY_SID:-}" ] && SB_REALITY_SID=$(sing-box generate rand 8 --hex 2>/dev/null | tr -d '\n')
     SB_REALITY_ENABLE=true; SB_ENABLE=true
-    build_singbox_config; sb_restart; save_conf
+    build_singbox_config; sb_restart; save_conf; start_sub_server >/dev/null 2>&1 &
     green_msg "VLESS Reality (Sing-box) 添加成功"
 }
 
@@ -5249,7 +5252,7 @@ add_sb_ss() {
     [ -n "$m" ] && SS_METHOD="$m"
     SB_SS_PSK="${SB_SS_PSK:-$(rand_token)}"
     SB_SS_ENABLE=true; SB_ENABLE=true
-    build_singbox_config; sb_restart; save_conf
+    build_singbox_config; sb_restart; save_conf; start_sub_server >/dev/null 2>&1 &
     green_msg "Shadowsocks (Sing-box) 添加成功"
 }
 
@@ -5294,7 +5297,7 @@ delete_sb_protocol() {
     else
         build_singbox_config; sb_restart
     fi
-    save_conf
+    save_conf; start_sub_server >/dev/null 2>&1 &
     sleep 1
 }
 
