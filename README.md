@@ -5,21 +5,21 @@
 </p>
 
 <p align="center">
-  <strong>One-click deploy. Zero public ports. Dynamic routing. Built for geeks.</strong>
+  <strong>One-click · Dual-Core · Zero Public Ports · Dynamic Routing</strong>
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="MIT License"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="MIT"></a>
   <img src="https://img.shields.io/badge/Platform-Debian|Ubuntu|CentOS|Alpine-lightgrey?style=flat-square" alt="Platform">
-  <img src="https://img.shields.io/badge/Core-Xray_v1.8+-0078D7?style=flat-square" alt="Core">
-  <img src="https://img.shields.io/badge/Protocol-VLESS|VMess|SS|Reality|Hysteria2-8B5CF6?style=flat-square" alt="Protocols">
+  <img src="https://img.shields.io/badge/Core-Xray_1.8+_|_Sing--box_1.10+-0078D7?style=flat-square" alt="Core">
+  <img src="https://img.shields.io/badge/Protocol-VLESS|VMess|SS|Reality|HY2|TUIC|AnyTLS-8B5CF6?style=flat-square" alt="Protocols">
 </p>
 
 ---
 
-**ArgoV** is a zero-trust proxy management panel powered by Cloudflare Argo Tunnel. VLESS / VMess traffic is encapsulated inside CF's edge network — zero public ports, no domain required. Native support for VLESS Reality, Xray-native Hysteria2 (with BBR/Brutal congestion control + port hopping), and Shadowsocks. Built-in multi-user traffic quotas with monthly auto-reset, server-side landing relay for clean IP egress, aggregated subscriptions across all your VPSes, and WARP smart split-routing. All in a single Bash script.
+**ArgoV** is a dual-core zero-trust proxy panel. Xray-core powers the Argo tunnel (VLESS/VMess WebSocket), Sing-box extends coverage to TUIC, AnyTLS Reality. Built-in per-user quotas, certificate pinning, port hopping, landing relay, aggregated subscriptions, and WARP routing. All in one Bash script.
 
-[Quick Start](#quick-start) · [Panel](#management-panel) · [Features](#core-features) · [Subscriptions](#dynamic-subscription-server) · [User Quotas](#multi-user-traffic-quotas) · [Aggregation](#aggregated-subscription) · [Relay](#landing-relay) · [WARP](#smart-warp-routing) · [中文版](README_CN.md)
+[Quick Start](#quick-start) · [Panel](#management-panel) · [Features](#core-features) · [Dual-Core](#dual-core) · [Subs](#dynamic-subscription-server) · [Quotas](#multi-user-traffic-quotas) · [Aggregation](#aggregated-subscription) · [中文版](README_CN.md)
 
 ---
 
@@ -29,155 +29,123 @@
 bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
 ```
 
-First run auto-launches the interactive install wizard. Press Enter through each step.
+After install, type `ag` for the panel.
 
-After install, type `ag` to open the panel.
-
-Non-interactive:
 ```bash
-NODE_NAME=Tokyo CDN_DOMAIN=xx.cloudflare.182682.xyz bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
+NODE_NAME=Tokyo bash <(curl -Ls https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
 ```
 
 ## Management Panel
 
 ```text
- ╔══════════════════════════════════════════════════╗
- ║     ArgoV  纯净版隧道管理面板                    ║
- ║     VL-Argo VM-Argo SS Reality Hysteria2         ║
- ╚══════════════════════════════════════════════════╝
+ Name: Tokyo    Xray: ● running    Sing-box: ● running    Argo: ● running
+ UUID: 45c7acf6-1fb...
+ Domain: xxx.trycloudflare.com  CDN: xx.cloudflare.182682.xyz:443
+ Traffic: ↓ 12.3 GB  ↑ 156.7 GB
 
-  名称 : Tokyo    Xray: ● 运行中    Argo: ● 运行中
-  UUID : 45c7acf6-1fb...
-  域名 : xxx.trycloudflare.com
-  CDN  : xx.cloudflare.182682.xyz:443
+ ──────────────── ✦ Core ✦ ────────────────
+  1. 🔗 View links         2. ☁️  Switch CDN
+  3. ⚙️  Edit config        a. 🧩 Manage protocols
+  u. 👥 Users & quotas     
 
- ──────────────── ✦ 核心功能 ✦ ────────────────
-  1. 🔗 查看节点链接       2. ☁️  更换优选线路
-  3. ⚙️  修改基础配置       a. 🧩 管理代理节点 (添加/编辑/删除)
-  u. 👥 用户/流量限额       配额用户仅下发本机节点
+ ──────────────── ✦ Routing ✦ ────────────────
+  w. 🌐 WARP routing       r. 🔀 Landing relay
+  g. 📡 Aggregated sub      s. 🔧 Sing-box manage
 
- ──────────────── ✦ 进阶路由 ✦ ────────────────
-  w. 🌐 独立 WARP 分流     r. 🔀 落地节点中继
-  g. 📡 聚合订阅 (Aggregation)
-
- ──────────────── ✦ 状态运维 ✦ ────────────────
-  4. ▶️  启动系统        5. ⏹️  停止系统
-  6. 🔁 重启 Argo 隧道   7. 🔄 重新安装 (保留数据)
-  8. 🆙 更新管理脚本     9. 🗑️  彻底卸载系统
-  x. 🚀 更新 Xray 内核   0. 🚪 安全退出
- ───────────────────────────────────────────────
+ ──────────────── ✦ Ops ✦ ────────────────
+  4. ▶️  Start  5. ⏹️  Stop  6. 🔁 Restart Argo
+  7. 🔄 Reinstall  8. 🆙 Update  9. 🗑️  Uninstall
+  x. 🚀 Update Xray    0. 🚪 Exit
 ```
 
 ## Core Features
 
 | Category | Details |
 |----------|---------|
-| **Argo Tunnel** | VLESS + VMess via WS + TLS over Cloudflare. `127.0.0.1` only — zero public exposure. Auto domain recovery after reboot |
-| **VLESS Reality** | XTLS Vision + Reality stealth. Anti-probing, custom SNI / shortId / fingerprint / x25519 keys |
-| **Hysteria2** | Xray-native QUIC protocol. BBR / Brutal congestion control, port hopping (UDP redirect), per-user auth |
-| **Shadowsocks** | 7 ciphers: AEAD + SS2022. TCP / UDP / TCP+UDP network modes |
-| **Subscription Server** | Python3 HTTP, threaded + 10s auto-refresh, self-signed TLS (CF Full SSL). Outputs base64 for v2rayN / Clash YAML for Mihomo |
-| **User Quotas** | Per-user isolated accounts with UUID, token, bidirectional traffic limits (`200G`). Per-user subscription granularity. Monthly auto-reset (Beijing time) |
-| **Aggregated Sub** | Collect subscriptions from all your VPSes + airports into one URL. Any source change syncs in ≤10s. Self-signed TLS tolerant |
-| **Landing Relay** | Server-side proxy chain to clean-IP VPS. SS / VLESS / VMess / Trojan exit. `AsIs` DNS — zero leak on entry. Split or global mode |
-| **WARP Routing** | SOCKS5 :40000 + IPv6 WireGuard. Smart split: Google → IPv6, YouTube → SOCKS5, rest → direct. Custom domain lists |
-| **Node Management** | Add / edit / delete all protocols independently. Custom link paste for external nodes. Built-in HY2 port hopping config |
-| **System** | Debian / Ubuntu / CentOS / Alpine. `systemd` + `openrc`. Service isolation (`argov-tunnel`, `argov-sub`, `argov-stats`) |
+| **Argo Tunnel** | VLESS + VMess via WS + TLS over CF. `127.0.0.1` only, zero public exposure. Auto domain recovery |
+| **Dual-Core** | Xray-core for Argo; Sing-box for TUIC, AnyTLS. Unified panel, merged subscription |
+| **VLESS Reality** | XTLS Vision + Reality. Custom SNI / shortId / fingerprint / x25519 keys |
+| **Hysteria2** | BBR / Brutal congestion, port hopping (UDP REDIRECT, custom range, fixed/random interval), pinSHA256 |
+| **TUIC / AnyTLS** | Sing-box native protocols. TUIC QUIC + BBR; AnyTLS Reality stealth |
+| **Shadowsocks** | AEAD + SS2022, TCP/UDP |
+| **Subscription Server** | Python3 HTTP, 10s refresh, self-signed TLS. base64 / Clash YAML / sing-box output |
+| **User Quotas** | Per-user UUID+Token, bidirectional limits. Xray via gRPC, Sing-box via iptables per-port. Monthly reset |
+| **Aggregated Sub** | Merge all VPS + airport subs into one URL. ≤10s sync |
+| **Landing Relay** | SS / VLESS / VMess / Trojan exit. `AsIs` DNS, zero leak |
+| **WARP Routing** | SOCKS5 :40000 + IPv6. Smart split: Google→IPv6, YouTube→SOCKS5 |
+| **System** | Debian / Ubuntu / CentOS / Alpine. systemd + OpenRC |
+
+## Dual-Core
+
+```
+                 Xray-core (always)             Sing-box (optional)
+                 ├ VLESS Argo  :8080            ├ Hysteria2   :8443
+                 ├ VMess Argo  :8081            ├ TUIC        :8444
+                 ├ Reality     :443             ├ AnyTLS      :8445
+                 ├ Hysteria2   :8443            ├ VLESS Reality :8446
+                 └ Shadowsocks :8388            └ Shadowsocks :8447
+                 └  Argo + gRPC stats            iptables per-port stats
+```
+
+- **Xray required** for Argo tunnel fallback; **Sing-box optional** (`s → s1`)
+- Unified subscription merges both config sources transparently
 
 ## Dynamic Subscription Server
 
-VPS reboot → Argo tunnel auto-recovers with new domain → subscription server returns fresh links. **Zero SSH.**
+| Mode | URL |
+|------|-----|
+| HTTPS | `https://sub.yourdomain.com:2096/sub?token=xxx` |
+| HTTP | `http://IP:PORT/TOKEN` |
 
-| Mode | URL | Setup |
-|------|-----|-------|
-| Domain (HTTPS) | `https://sub.yourdomain.com:2096/sub?token=xxx` | CF proxy ON, DNS → VPS IP |
-| IP (HTTP) | `http://IP:PORT/TOKEN` | None |
-
-- 64-bit random token auth, manually configurable via `3. 修改配置 → 9. 订阅配置`
-- Self-signed TLS cert auto-generated and validated per domain change
-- CF proxy ports: 2096 / 8443 / 2053 / 2083 / 2087 / 443
-- Profile headers for Shadowrocket group naming & v2rayN `Profile-Title`
-- Subscription config editor: HTTP ↔ HTTPS, domain, port, custom token
+64-bit random token, self-signed TLS, CF proxy ports: 2096/8443/2053/2083/2087/443.
 
 ## Multi-User Traffic Quotas
 
-Press `u` to manage independent user accounts:
+Press `u`:
 
 ```text
-  name             state    reset    used           quota          token
-  ----             -----    -----    ----           -----          -----
-  default          on       -        1.96 GB        unlimited      67e66c...
-  f1               on       ↑10      987.51 MB      200.00 GB      e87385...
+  name     state  reset   used        quota       token
+  default  on     -       1.96 GB     unlimited   67e66c...
+  f1       on     ↑10     987.51 MB   200.00 GB   e87385...
 ```
 
-- Each user: separate UUID, subscription token, enable/disable toggle, traffic quota
-- Limited users receive: VLESS Argo, VMess Argo, Reality, Hysteria2 (no custom links)
-- Quota enforcement: `argov-stats` daemon polls Xray StatsService every 60s; auto-disables on breach; preserves user in list
-- **Monthly auto-reset**: per-user reset day (1–28, Beijing time). Usage zeroed, disabled users re-enabled. Option `8` in user management
+- **Xray**: gRPC StatsService per UUID
+- **Sing-box** (TUIC/AnyTLS/Reality/SS): iptables dedicated port + `argov-sb-stats` daemon (60s delta tracking)
+- HY2 excluded from per-user (port hopping compatibility)
+- Monthly reset (days 1–28), auto-disable on quota breach
+
+## Certificate Pinning (pinSHA256)
+
+Auto-calculated on HY2 creation. No domain needed.
+
+```
+hysteria2://pass@ip:8443?sni=...&insecure=1&pinSHA256=BA:88:45:...&allowInsecure=0
+```
+
+Self-signed cert + SHA256 fingerprint = CA-level security.
 
 ## Aggregated Subscription
 
-Press `g` to merge multiple subscription sources into one URL:
+Press `g` → merge all VPS/airport sources into one URL. ≤10s sync, `sort -u` dedup.
 
-```text
- ── 📡 总订阅 (导入客户端) ──
-   https://sub.example.com:2096/agg?token=xxx
+## Landing Relay / WARP Routing
 
- ── 📥 子订阅 (其他 VPS/机场) ──
-   1. https://vps2.example.com:2096/sub?token=abc
-   2. https://vps3.example.com:8443/sub?token=def
-
-   共 2 个子订阅 + 本机 = 聚合后客户端总节点
-```
-
-- One aggregated URL → all nodes from all VPSes + airports
-- Any source change: ≤10s sync via `agg_gen.sh` background fetch
-- Handles self-signed TLS sources (`curl -skL`)
-- Deduplication: `sort -u` across all sources
-- Client imports one URL, sees all nodes
-
-## Landing Relay (Server-Side Proxy Chaining)
-
-Press `r` to transparently route traffic through a clean-IP VPS:
-
-```text
- ● 已启用 → ss → 1.2.3.4:28175  模式: 全部
-```
-
-- Paste any `ss://` / `vless://` / `vmess://` / `trojan://` link as exit
-- **Zero DNS leak**: `domainStrategy: AsIs` — domains pass through proxy protocol as-is; landing VPS resolves DNS
-- Modes: **All** (all traffic relayed) or **Split** (domain list only)
-- Landing VPS only needs SS-Rust: one command, 5 MB RAM
-- Coexists with WARP; survives reboot / reinstall
-
-## Smart WARP Routing
-
-Press `w` for one-click fscarmen WARP with domain-aware splitting:
-
-| Mode | Google | YouTube | Other |
-|------|--------|---------|-------|
-| SOCKS5 | WARP | WARP | WARP |
-| IPv6 | WARP | WARP | WARP |
-| Smart Split | WARP IPv6 | WARP SOCKS5 | Direct |
+`r` → route through clean-IP VPS (SS/VL/VM/TJ exit). `w` → one-click fscarmen WARP with domain-aware split.
 
 ## Architecture
 
-```text
-Client → CF Edge (TLS) → Argo Tunnel → localhost:8080 Xray fallback
-                                           ├── /vless-argo → VLESS+WS :8081
-                                           └── /vmess-argo → VMess+WS :8082
-
-Direct :  VLESS+Reality  ·  Hysteria2 (QUIC, BBR/Brutal)  ·  Shadowsocks
-
-Routing :  Xray rules → warp-out (Socks5 :40000) / v6-direct (IPv6) / relay-out (SS/VL/VM/TJ) → Landing
-
-Aggregation :  agg_gen.sh → curl all sources → merge → dedup → base64 → /agg?token=xxx
+```
+Client → CF Edge → Argo Tunnel → :8080 Xray fallback → VLESS-WS / VMess-WS
+Direct:  Reality · Hysteria2 (BBR/Brutal, port hopping) · TUIC · AnyTLS · SS
+Routing: warp-out / v6-direct / relay-out
+Dual:    Xray (Argo+gRPC) ｜ Sing-box (iptables per-user stats)
+Sub/Agg: sub_gen.sh / agg_gen.sh → merge → base64 → URL
 ```
 
 ## Client Compatibility
 
-`v2rayN` · `Nekoray` · `Shadowrocket` · `Sing-box` · `Mihomo` · `Clash Verge` · `Clash Meta` · `V2Box` · `Karing`
+`v2rayN v7+` · `Nekoray` · `Shadowrocket` · `Sing-box` · `Mihomo` · `Clash Verge` · `Karing`
 
 ## License
 
-[MIT License](LICENSE).
+[MIT](LICENSE)
