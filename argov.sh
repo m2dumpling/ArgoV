@@ -274,6 +274,16 @@ build_singbox_config() {
 
     # HY2 inbound
     if [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ -n "${SB_HY2_PORT:-}" ]; then
+        local hop_cfg=""
+        if [ "${SB_HY2_HOP_ENABLE:-false}" = "true" ] && [ -n "${SB_HY2_HOP_START:-}" ] && [ -n "${SB_HY2_HOP_END:-}" ]; then
+            hop_cfg=", \"transport\": { \"udp\": {"
+            if [ "${SB_HY2_HOP_MODE:-fixed}" = "random" ]; then
+                hop_cfg="${hop_cfg} \"minHopInterval\": \"${SB_HY2_HOP_MIN:-10}s\", \"maxHopInterval\": \"${SB_HY2_HOP_MAX:-30}s\""
+            else
+                hop_cfg="${hop_cfg} \"hopInterval\": \"${SB_HY2_HOP_INTERVAL:-30}s\""
+            fi
+            hop_cfg="${hop_cfg} } }"
+        fi
         cat >> "$tmp_inbounds" << SBHY2
     {
       "type": "hysteria2",
@@ -286,7 +296,7 @@ build_singbox_config() {
         "alpn": ["h3"],
         "certificate_path": "${SB_CERT_FILE}",
         "key_path": "${SB_KEY_FILE}"
-      }
+      }$(printf '%s' "$hop_cfg")
     }
 SBHY2
         need_comma=true
@@ -857,6 +867,22 @@ sb_status() {
 }
 sb_is_installed() { command -v sing-box >/dev/null 2>&1; }
 
+# Sing-box HY2 端口跳跃
+apply_sb_hy2_hop_rules() {
+    [ "${SB_HY2_HOP_ENABLE:-false}" != "true" ] && return 0
+    local port="${SB_HY2_PORT:-}" start="${SB_HY2_HOP_START:-}" end="${SB_HY2_HOP_END:-}"
+    [ -z "$port" ] || [ -z "$start" ] || [ -z "$end" ] && return 1
+    disable_sb_hy2_hop_rules 2>/dev/null || true
+    iptables -t nat -A PREROUTING -p udp --dport "${start}:${end}" -j REDIRECT --to-ports "$port" -m comment --comment "argov-sb-hy2-hop" 2>/dev/null || true
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+}
+disable_sb_hy2_hop_rules() {
+    while iptables -t nat -L PREROUTING -n --line-numbers 2>/dev/null | grep -q "argov-sb-hy2-hop"; do
+        local ln; ln=$(iptables -t nat -L PREROUTING -n --line-numbers 2>/dev/null | grep "argov-sb-hy2-hop" | head -1 | awk '{print $1}')
+        [ -n "$ln" ] && iptables -t nat -D PREROUTING "$ln" 2>/dev/null || break
+    done
+}
+
 install_singbox() {
     yellow_msg "安装 Sing-box..."
     if sb_is_installed; then
@@ -1172,7 +1198,7 @@ is_safe_conf_file() {
         [[ "$line" =~ ^[A-Z][A-Z0-9_]*= ]] || return 1
         key="${line%%=*}"
         case "$key" in
-            NODE_NAME|ARGO_PORT|VLESS_WS_PORT|VMESS_WS_PORT|CDN_PORT|CDN_DOMAIN|ARGO_MODE|ARGO_AUTH|ARGO_FIXED_DOMAIN|UUID_CUSTOM|REALITY_PORT|HY2_PORT|HY2_MPORT|HY2_CONGESTION|HY2_UP_MBPS|HY2_DOWN_MBPS|SS_PORT|SUB_PORT|SUB_PATH|SUB_DOMAIN|SUB_TOKEN|REALITY_SNI|HY2_SNI|SS_METHOD|ENABLE_REALITY|ENABLE_HY2|ENABLE_SS|HY2_CERT_FILE|HY2_KEY_FILE|REALITY_PRIV|REALITY_PUB|REALITY_SHORTID|LAST_ARGO_DOMAIN|RELAY_ENABLED|RELAY_LINK|RELAY_MODE|XRAY_VERSION|XRAY_SHA256|CLOUDFLARED_VERSION|CLOUDFLARED_SHA256|AGG_TOKEN|SB_ENABLE|SB_VERSION|SB_HY2_ENABLE|SB_TUIC_ENABLE|SB_ANYTLS_ENABLE|SB_REALITY_ENABLE|SB_SS_ENABLE|SB_HY2_PORT|SB_TUIC_PORT|SB_ANYTLS_PORT|SB_REALITY_PORT|SB_SS_PORT|SB_REALITY_PRIV|SB_REALITY_PUB|SB_REALITY_SID|SB_ANYTLS_PSK|SB_TUIC_UUID|SB_TUIC_PSK|SB_HY2_PSK|SB_SS_PSK|SB_ANYTLS_USER|SB_SNI|SB_CERT_FILE|SB_KEY_FILE|TRAFFIC_IN|TRAFFIC_OUT) ;;
+            NODE_NAME|ARGO_PORT|VLESS_WS_PORT|VMESS_WS_PORT|CDN_PORT|CDN_DOMAIN|ARGO_MODE|ARGO_AUTH|ARGO_FIXED_DOMAIN|UUID_CUSTOM|REALITY_PORT|HY2_PORT|HY2_MPORT|HY2_CONGESTION|HY2_UP_MBPS|HY2_DOWN_MBPS|SS_PORT|SUB_PORT|SUB_PATH|SUB_DOMAIN|SUB_TOKEN|REALITY_SNI|HY2_SNI|SS_METHOD|ENABLE_REALITY|ENABLE_HY2|ENABLE_SS|HY2_CERT_FILE|HY2_KEY_FILE|REALITY_PRIV|REALITY_PUB|REALITY_SHORTID|LAST_ARGO_DOMAIN|RELAY_ENABLED|RELAY_LINK|RELAY_MODE|XRAY_VERSION|XRAY_SHA256|CLOUDFLARED_VERSION|CLOUDFLARED_SHA256|AGG_TOKEN|SB_ENABLE|SB_VERSION|SB_HY2_ENABLE|SB_TUIC_ENABLE|SB_ANYTLS_ENABLE|SB_REALITY_ENABLE|SB_SS_ENABLE|SB_HY2_PORT|SB_TUIC_PORT|SB_ANYTLS_PORT|SB_REALITY_PORT|SB_SS_PORT|SB_REALITY_PRIV|SB_REALITY_PUB|SB_REALITY_SID|SB_ANYTLS_PSK|SB_TUIC_UUID|SB_TUIC_PSK|SB_HY2_PSK|SB_SS_PSK|SB_ANYTLS_USER|SB_SNI|SB_CERT_FILE|SB_KEY_FILE|TRAFFIC_IN|TRAFFIC_OUT|SB_HY2_HOP_ENABLE|SB_HY2_HOP_START|SB_HY2_HOP_END|SB_HY2_HOP_MODE|SB_HY2_HOP_INTERVAL|SB_HY2_HOP_MIN|SB_HY2_HOP_MAX) ;;
             *) return 1 ;;
         esac
         case "$line" in
@@ -1607,6 +1633,8 @@ load_conf() {
     SB_REALITY_PRIV="${SB_REALITY_PRIV:-}"; SB_REALITY_PUB="${SB_REALITY_PUB:-}"; SB_REALITY_SID="${SB_REALITY_SID:-}"
     SB_ANYTLS_PSK="${SB_ANYTLS_PSK:-}"; SB_TUIC_UUID="${SB_TUIC_UUID:-}"; SB_TUIC_PSK="${SB_TUIC_PSK:-}"
     SB_HY2_PSK="${SB_HY2_PSK:-}"; SB_SS_PSK="${SB_SS_PSK:-}"; SB_ANYTLS_USER="${SB_ANYTLS_USER:-argov}"
+    SB_HY2_HOP_ENABLE="${SB_HY2_HOP_ENABLE:-false}"; SB_HY2_HOP_START="${SB_HY2_HOP_START:-}"; SB_HY2_HOP_END="${SB_HY2_HOP_END:-}"
+    SB_HY2_HOP_MODE="${SB_HY2_HOP_MODE:-}"; SB_HY2_HOP_INTERVAL="${SB_HY2_HOP_INTERVAL:-}"; SB_HY2_HOP_MIN="${SB_HY2_HOP_MIN:-}"; SB_HY2_HOP_MAX="${SB_HY2_HOP_MAX:-}"
     SB_SNI="${SB_SNI:-addons.mozilla.org}"
     SB_CERT_FILE="${SB_CERT_FILE:-/etc/sing-box/certs/fullchain.pem}"; SB_KEY_FILE="${SB_KEY_FILE:-/etc/sing-box/certs/privkey.pem}"
     TRAFFIC_IN="${TRAFFIC_IN:-0}"; TRAFFIC_OUT="${TRAFFIC_OUT:-0}"
@@ -1644,6 +1672,8 @@ save_conf() {
         save_var SB_REALITY_PRIV "$SB_REALITY_PRIV"; save_var SB_REALITY_PUB "$SB_REALITY_PUB"; save_var SB_REALITY_SID "$SB_REALITY_SID"
         save_var SB_ANYTLS_PSK "$SB_ANYTLS_PSK"; save_var SB_TUIC_UUID "$SB_TUIC_UUID"; save_var SB_TUIC_PSK "$SB_TUIC_PSK"
         save_var SB_HY2_PSK "$SB_HY2_PSK"; save_var SB_SS_PSK "$SB_SS_PSK"; save_var SB_ANYTLS_USER "$SB_ANYTLS_USER"
+        save_var SB_HY2_HOP_ENABLE "$SB_HY2_HOP_ENABLE"; save_var SB_HY2_HOP_START "$SB_HY2_HOP_START"; save_var SB_HY2_HOP_END "$SB_HY2_HOP_END"
+        save_var SB_HY2_HOP_MODE "$SB_HY2_HOP_MODE"; save_var SB_HY2_HOP_INTERVAL "$SB_HY2_HOP_INTERVAL"; save_var SB_HY2_HOP_MIN "$SB_HY2_HOP_MIN"; save_var SB_HY2_HOP_MAX "$SB_HY2_HOP_MAX"
         save_var SB_SNI "$SB_SNI"; save_var SB_CERT_FILE "$SB_CERT_FILE"; save_var SB_KEY_FILE "$SB_KEY_FILE"
         save_var TRAFFIC_IN "$TRAFFIC_IN"; save_var TRAFFIC_OUT "$TRAFFIC_OUT"
     } > "$tmp" && mv -f "$tmp" "$USER_CONF"
@@ -1684,9 +1714,11 @@ gen_hy2_link() {
 
 # Sing-box 链接生成
 gen_sb_hy2_link() {
-    # $1=pass $2=host $3=port $4=sni $5=name
+    # $1=pass $2=host $3=port $4=sni $5=name $6=hop_range (optional)
     local name="${5:-${NODE_NAME}-HY2}"
-    printf '%s' "hy2://$1@$2:$3?sni=${4}&alpn=h3&insecure=1#${name}"
+    local hop=""
+    [ -n "$6" ] && hop="&mport=$6"
+    printf '%s' "hy2://$1@$2:$3?sni=${4}&alpn=h3&insecure=1${hop}#${name}"
 }
 gen_sb_tuic_link() {
     # $1=uuid $2=pass $3=host $4=port $5=sni $6=name
@@ -2291,7 +2323,9 @@ if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CFG" ] && [ -n "$ip" ]; then
         # 共享节点 — 仅 default 用户
         if [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ -n "${SB_HY2_PORT:-}" ]; then
             sb_hy2_pass=$($JQ -r '.inbounds[]|select(.type=="hysteria2" and (.tag=="sb-hy2" or .tag|startswith("sb-hy2")|not)).users[0].password//empty' "$SB_CFG" 2>/dev/null)
-            [ -n "$sb_hy2_pass" ] && links+="hy2://${sb_hy2_pass}@${ip}:${SB_HY2_PORT}?sni=${SB_SNI}&alpn=h3&insecure=1#${NODE_NAME}-HY2"$'\n'
+            local sb_hy2_hop=""
+        [ "${SB_HY2_HOP_ENABLE:-false}" = "true" ] && sb_hy2_hop="&mport=${SB_HY2_HOP_START}-${SB_HY2_HOP_END}"
+        [ -n "$sb_hy2_pass" ] && links+="hy2://${sb_hy2_pass}@${ip}:${SB_HY2_PORT}?sni=${SB_SNI}&alpn=h3&insecure=1${sb_hy2_hop}#${NODE_NAME}-HY2"$'\n'
         fi
         if [ "${SB_TUIC_ENABLE:-false}" = "true" ] && [ -n "${SB_TUIC_PORT:-}" ]; then
             [ -n "${SB_TUIC_UUID:-}" ] && links+="tuic://${SB_TUIC_UUID}:${SB_TUIC_PSK}@${ip}:${SB_TUIC_PORT}?congestion_control=bbr&alpn=h3&sni=${SB_SNI}&insecure=1#${NODE_NAME}-TUIC"$'\n'
@@ -2317,7 +2351,9 @@ if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CFG" ] && [ -n "$ip" ]; then
         local hy2_up; hy2_up=$(echo "$sb_ports" | $JQ -r '.hy2 // 0')
         if [ "$hy2_up" -gt 0 ]; then
             local hy2_pass; hy2_pass=$(echo "$sb_creds" | $JQ -r '.hy2_pass // ""')
-            [ -n "$hy2_pass" ] && links+="hy2://${hy2_pass}@${ip}:${hy2_up}?sni=${SB_SNI}&alpn=h3&insecure=1#${NODE_NAME}-HY2"$'\n'
+            local per_hy2_hop=""
+            [ "${SB_HY2_HOP_ENABLE:-false}" = "true" ] && per_hy2_hop="&mport=${SB_HY2_HOP_START}-${SB_HY2_HOP_END}"
+            [ -n "$hy2_pass" ] && links+="hy2://${hy2_pass}@${ip}:${hy2_up}?sni=${SB_SNI}&alpn=h3&insecure=1${per_hy2_hop}#${NODE_NAME}-HY2"$'\n'
         fi
         # TUIC per-user
         local tuic_up; tuic_up=$(echo "$sb_ports" | $JQ -r '.tuic // 0')
@@ -2784,7 +2820,10 @@ show_node() {
             local sbhy2_pass sbhy2_port
             sbhy2_port="$SB_HY2_PORT"
             sbhy2_pass=$(jq -r '.inbounds[]|select(.type=="hysteria2").users[0].password//empty' "$SB_CONFIG_FILE" 2>/dev/null)
-            [ -n "$sbhy2_pass" ] && echo -e "  ${yellow}HY2${re}  ${green}$(gen_sb_hy2_link "$sbhy2_pass" "$ip" "$sbhy2_port" "${SB_SNI:-www.bing.com}" "${NODE_NAME}-HY2")${re}\n"
+            local sb_hy2_hop_range=""
+            [ "${SB_HY2_HOP_ENABLE:-false}" = "true" ] && sb_hy2_hop_range="${SB_HY2_HOP_START}-${SB_HY2_HOP_END}"
+            [ -n "$sbhy2_pass" ] && echo -e "  ${yellow}HY2${re}  ${green}$(gen_sb_hy2_link "$sbhy2_pass" "$ip" "$sbhy2_port" "${SB_SNI:-www.bing.com}" "${NODE_NAME}-HY2" "$sb_hy2_hop_range")${re}\n"
+            [ -n "$sb_hy2_hop_range" ] && echo -e "  ${cyan}跳变${re}: ${sb_hy2_hop_range}  mode: ${SB_HY2_HOP_MODE:-fixed}"
         fi
         if [ "${SB_TUIC_ENABLE:-false}" = "true" ] && [ -n "${SB_TUIC_PORT:-}" ]; then
             local sbtuic_uuid sbtuic_pass
@@ -5566,6 +5605,7 @@ sb_menu() {
                 if [ "$cf" = "y" ] || [ "$cf" = "Y" ]; then
                     sb_stop 2>/dev/null
                     stop_sb_stats_service 2>/dev/null
+                    disable_sb_hy2_hop_rules 2>/dev/null
                     systemctl disable sing-box 2>/dev/null; rc-update del sing-box default 2>/dev/null
                     rm -rf "$SB_WORK_DIR" /etc/systemd/system/sing-box.service /etc/init.d/sing-box /var/log/sing-box.log /var/log/sing-box.err /usr/bin/sing-box 2>/dev/null
                     systemctl daemon-reload 2>/dev/null || true
@@ -5649,13 +5689,44 @@ manage_sb_protocols() {
 # Sing-box 协议添加函数
 add_sb_hy2() {
     load_conf
-    echo -ne "  HY2 端口 [$(shuf -i 10000-60000 -n 1)]: "; read p
-    [ -n "$p" ] && is_port "$p" && SB_HY2_PORT="$p" || SB_HY2_PORT=$(shuf -i 10000-60000 -n 1)
+    local def_port; def_port=$(shuf -i 10000-60000 -n 1)
+    echo -ne "  HY2 端口 [${def_port}]: "; read p
+    [ -n "$p" ] && is_port "$p" && SB_HY2_PORT="$p" || SB_HY2_PORT="$def_port"
     SB_HY2_PSK="${SB_HY2_PSK:-$(rand_token)}"
     echo -ne "  SNI [${SB_SNI:-addons.mozilla.org}]: "; read sni
     [ -n "$sni" ] && SB_SNI="$sni"
+
+    # 端口跳跃
+    echo -ne "  启用端口跳跃 (UDP)? [y/N]: "; read hop_yn
+    if [ "$hop_yn" = "y" ] || [ "$hop_yn" = "Y" ]; then
+        SB_HY2_HOP_ENABLE=true
+        local def_start=47000 def_end=48000
+        echo -ne "  跳跃起始端口 [${def_start}]: "; read hs
+        [ -n "$hs" ] && is_port "$hs" && def_start="$hs"
+        echo -ne "  跳跃结束端口 [${def_end}]: "; read he
+        [ -n "$he" ] && is_port "$he" && def_end="$he"
+        [ "$def_start" -gt "$def_end" ] && { local tmp=$def_start; def_start=$def_end; def_end=$tmp; }
+        SB_HY2_HOP_START="$def_start"; SB_HY2_HOP_END="$def_end"
+        echo -e "  ${cyan}跳跃模式:${re}"
+        echo -e "    ${green}1${re}. 固定间隔 (30s)    ${green}2${re}. 随机间隔"
+        echo -ne "  选择 [1]: "; read hmode
+        if [ "${hmode:-1}" = "2" ]; then
+            SB_HY2_HOP_MODE="random"
+            echo -ne "  最小间隔(秒) [10]: "; read hmin
+            echo -ne "  最大间隔(秒) [30]: "; read hmax
+            SB_HY2_HOP_MIN="${hmin:-10}"; SB_HY2_HOP_MAX="${hmax:-30}"
+        else
+            SB_HY2_HOP_MODE="fixed"
+            echo -ne "  跳跃间隔(秒) [30]: "; read hint
+            SB_HY2_HOP_INTERVAL="${hint:-30}"
+        fi
+    else
+        SB_HY2_HOP_ENABLE=false
+    fi
+
     SB_HY2_ENABLE=true; SB_ENABLE=true
     generate_singbox_cert; build_singbox_config
+    [ "${SB_HY2_HOP_ENABLE:-false}" = "true" ] && apply_sb_hy2_hop_rules
     sb_restart; save_conf; start_sub_server >/dev/null 2>&1 &
     green_msg "Hysteria2 (Sing-box) 添加成功"
 }
@@ -5747,7 +5818,7 @@ delete_sb_protocol() {
         [ "$n" -lt 1 ] || [ "$n" -gt "${#proto_list[@]}" ] && { echo "  → 序号 $n 无效，跳过"; continue; }
         local key="${proto_list[$((n-1))]}"
         case "$key" in
-            HY2)    SB_HY2_ENABLE=false; SB_HY2_PORT=; SB_HY2_PSK=; echo "  → HY2 已删除" ;;
+            HY2)    disable_sb_hy2_hop_rules 2>/dev/null; SB_HY2_ENABLE=false; SB_HY2_PORT=; SB_HY2_PSK=; SB_HY2_HOP_ENABLE=false; echo "  → HY2 已删除" ;;
             TUIC)   SB_TUIC_ENABLE=false; SB_TUIC_PORT=; echo "  → TUIC 已删除" ;;
             ANYTLS) SB_ANYTLS_ENABLE=false; SB_ANYTLS_PORT=; echo "  → AnyTLS 已删除" ;;
             REALITY) SB_REALITY_ENABLE=false; SB_REALITY_PORT=; echo "  → Reality 已删除" ;;
