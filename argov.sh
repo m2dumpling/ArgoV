@@ -827,6 +827,13 @@ sb_status() {
 }
 sb_is_installed() { command -v sing-box >/dev/null 2>&1; }
 
+# SHA256 证书指纹 (证书固定 pinSHA256)
+cert_pin_sha256() {
+    local cert="$1"
+    [ -f "$cert" ] || return 1
+    openssl x509 -in "$cert" -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//;s/:/ /g' | tr '[:lower:]' '[:upper:]' | tr ' ' ':'
+}
+
 # Sing-box HY2 端口跳跃
 apply_sb_hy2_hop_rules() {
     [ "${SB_HY2_HOP_ENABLE:-false}" != "true" ] && return 0
@@ -1163,7 +1170,7 @@ is_safe_conf_file() {
         [[ "$line" =~ ^[A-Z][A-Z0-9_]*= ]] || return 1
         key="${line%%=*}"
         case "$key" in
-            NODE_NAME|ARGO_PORT|VLESS_WS_PORT|VMESS_WS_PORT|CDN_PORT|CDN_DOMAIN|ARGO_MODE|ARGO_AUTH|ARGO_FIXED_DOMAIN|UUID_CUSTOM|REALITY_PORT|HY2_PORT|HY2_MPORT|HY2_CONGESTION|HY2_UP_MBPS|HY2_DOWN_MBPS|SS_PORT|SUB_PORT|SUB_PATH|SUB_DOMAIN|SUB_TOKEN|REALITY_SNI|HY2_SNI|SS_METHOD|ENABLE_REALITY|ENABLE_HY2|ENABLE_SS|HY2_CERT_FILE|HY2_KEY_FILE|REALITY_PRIV|REALITY_PUB|REALITY_SHORTID|LAST_ARGO_DOMAIN|RELAY_ENABLED|RELAY_LINK|RELAY_MODE|XRAY_VERSION|XRAY_SHA256|CLOUDFLARED_VERSION|CLOUDFLARED_SHA256|AGG_TOKEN|SB_ENABLE|SB_VERSION|SB_HY2_ENABLE|SB_TUIC_ENABLE|SB_ANYTLS_ENABLE|SB_REALITY_ENABLE|SB_SS_ENABLE|SB_HY2_PORT|SB_TUIC_PORT|SB_ANYTLS_PORT|SB_REALITY_PORT|SB_SS_PORT|SB_REALITY_PRIV|SB_REALITY_PUB|SB_REALITY_SID|SB_ANYTLS_PSK|SB_TUIC_UUID|SB_TUIC_PSK|SB_HY2_PSK|SB_SS_PSK|SB_ANYTLS_USER|SB_SNI|SB_CERT_FILE|SB_KEY_FILE|TRAFFIC_IN|TRAFFIC_OUT|SB_HY2_HOP_ENABLE|SB_HY2_HOP_START|SB_HY2_HOP_END|SB_HY2_HOP_MODE|SB_HY2_HOP_INTERVAL|SB_HY2_HOP_MIN|SB_HY2_HOP_MAX) ;;
+            NODE_NAME|ARGO_PORT|VLESS_WS_PORT|VMESS_WS_PORT|CDN_PORT|CDN_DOMAIN|ARGO_MODE|ARGO_AUTH|ARGO_FIXED_DOMAIN|UUID_CUSTOM|REALITY_PORT|HY2_PORT|HY2_MPORT|HY2_CONGESTION|HY2_UP_MBPS|HY2_DOWN_MBPS|SS_PORT|SUB_PORT|SUB_PATH|SUB_DOMAIN|SUB_TOKEN|REALITY_SNI|HY2_SNI|SS_METHOD|ENABLE_REALITY|ENABLE_HY2|ENABLE_SS|HY2_CERT_FILE|HY2_KEY_FILE|REALITY_PRIV|REALITY_PUB|REALITY_SHORTID|LAST_ARGO_DOMAIN|RELAY_ENABLED|RELAY_LINK|RELAY_MODE|XRAY_VERSION|XRAY_SHA256|CLOUDFLARED_VERSION|CLOUDFLARED_SHA256|AGG_TOKEN|SB_ENABLE|SB_VERSION|SB_HY2_ENABLE|SB_TUIC_ENABLE|SB_ANYTLS_ENABLE|SB_REALITY_ENABLE|SB_SS_ENABLE|SB_HY2_PORT|SB_TUIC_PORT|SB_ANYTLS_PORT|SB_REALITY_PORT|SB_SS_PORT|SB_REALITY_PRIV|SB_REALITY_PUB|SB_REALITY_SID|SB_ANYTLS_PSK|SB_TUIC_UUID|SB_TUIC_PSK|SB_HY2_PSK|SB_SS_PSK|SB_ANYTLS_USER|SB_SNI|SB_CERT_FILE|SB_KEY_FILE|TRAFFIC_IN|TRAFFIC_OUT|SB_HY2_HOP_ENABLE|SB_HY2_HOP_START|SB_HY2_HOP_END|SB_HY2_HOP_MODE|SB_HY2_HOP_INTERVAL|SB_HY2_HOP_MIN|SB_HY2_HOP_MAX|HY2_PIN_SHA256|SB_HY2_PIN_SHA256) ;;
             *) return 1 ;;
         esac
         case "$line" in
@@ -1549,11 +1556,14 @@ gen_reality_shortid() {
 }
 gen_hy2_cert() {
     mkdir -p "$WORK_DIR" 2>/dev/null
-    [ -s "$HY2_CERT_FILE" ] && [ -s "$HY2_KEY_FILE" ] && return 0
-    openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3650 \
-        -subj "/CN=${HY2_SNI:-ArgoV-Hy2}" \
-        -keyout "$HY2_KEY_FILE" -out "$HY2_CERT_FILE" >/dev/null 2>&1
-    chmod 600 "$HY2_KEY_FILE" 2>/dev/null || true
+    if [ ! -s "$HY2_CERT_FILE" ] || [ ! -s "$HY2_KEY_FILE" ]; then
+        openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3650 \
+            -subj "/CN=${HY2_SNI:-ArgoV-Hy2}" \
+            -keyout "$HY2_KEY_FILE" -out "$HY2_CERT_FILE" >/dev/null 2>&1
+        chmod 600 "$HY2_KEY_FILE" 2>/dev/null || true
+    fi
+    # 自动计算 SHA256 证书指纹
+    HY2_PIN_SHA256=$(cert_pin_sha256 "$HY2_CERT_FILE")
 }
 gen_ss2022_pass() {
     local method="$1"
@@ -1600,6 +1610,7 @@ load_conf() {
     SB_HY2_PSK="${SB_HY2_PSK:-}"; SB_SS_PSK="${SB_SS_PSK:-}"; SB_ANYTLS_USER="${SB_ANYTLS_USER:-argov}"
     SB_HY2_HOP_ENABLE="${SB_HY2_HOP_ENABLE:-false}"; SB_HY2_HOP_START="${SB_HY2_HOP_START:-}"; SB_HY2_HOP_END="${SB_HY2_HOP_END:-}"
     SB_HY2_HOP_MODE="${SB_HY2_HOP_MODE:-}"; SB_HY2_HOP_INTERVAL="${SB_HY2_HOP_INTERVAL:-}"; SB_HY2_HOP_MIN="${SB_HY2_HOP_MIN:-}"; SB_HY2_HOP_MAX="${SB_HY2_HOP_MAX:-}"
+    HY2_PIN_SHA256="${HY2_PIN_SHA256:-}"; SB_HY2_PIN_SHA256="${SB_HY2_PIN_SHA256:-}"
     SB_SNI="${SB_SNI:-addons.mozilla.org}"
     SB_CERT_FILE="${SB_CERT_FILE:-/etc/sing-box/certs/fullchain.pem}"; SB_KEY_FILE="${SB_KEY_FILE:-/etc/sing-box/certs/privkey.pem}"
     TRAFFIC_IN="${TRAFFIC_IN:-0}"; TRAFFIC_OUT="${TRAFFIC_OUT:-0}"
@@ -1639,6 +1650,7 @@ save_conf() {
         save_var SB_HY2_PSK "$SB_HY2_PSK"; save_var SB_SS_PSK "$SB_SS_PSK"; save_var SB_ANYTLS_USER "$SB_ANYTLS_USER"
         save_var SB_HY2_HOP_ENABLE "$SB_HY2_HOP_ENABLE"; save_var SB_HY2_HOP_START "$SB_HY2_HOP_START"; save_var SB_HY2_HOP_END "$SB_HY2_HOP_END"
         save_var SB_HY2_HOP_MODE "$SB_HY2_HOP_MODE"; save_var SB_HY2_HOP_INTERVAL "$SB_HY2_HOP_INTERVAL"; save_var SB_HY2_HOP_MIN "$SB_HY2_HOP_MIN"; save_var SB_HY2_HOP_MAX "$SB_HY2_HOP_MAX"
+        save_var HY2_PIN_SHA256 "$HY2_PIN_SHA256"; save_var SB_HY2_PIN_SHA256 "$SB_HY2_PIN_SHA256"
         save_var SB_SNI "$SB_SNI"; save_var SB_CERT_FILE "$SB_CERT_FILE"; save_var SB_KEY_FILE "$SB_KEY_FILE"
         save_var TRAFFIC_IN "$TRAFFIC_IN"; save_var TRAFFIC_OUT "$TRAFFIC_OUT"
     } > "$tmp" && mv -f "$tmp" "$USER_CONF"
@@ -1674,6 +1686,7 @@ gen_hy2_link() {
     local mport="$6"
     local qs="sni=$4&insecure=1&allowInsecure=1&alpn=h3"
     [ -n "$mport" ] && qs="${qs}&mport=${mport}"
+    [ -n "${HY2_PIN_SHA256:-}" ] && qs="${qs}&pinSHA256=${HY2_PIN_SHA256}"
     printf '%s' "hysteria2://$1@$2:$3?${qs}#${5:-${NODE_NAME}-Hy2}"
 }
 
@@ -1683,6 +1696,7 @@ gen_sb_hy2_link() {
     local name="${5:-${NODE_NAME}-HY2}"
     local hop=""
     [ -n "$6" ] && hop="&mport=$6"
+    [ -n "${SB_HY2_PIN_SHA256:-}" ] && hop="${hop}&pinSHA256=${SB_HY2_PIN_SHA256}"
     printf '%s' "hy2://$1@$2:$3?sni=${4}&alpn=h3&insecure=1${hop}#${name}"
 }
 gen_sb_tuic_link() {
@@ -2278,7 +2292,9 @@ if $JQ -e '.inbounds[]|select(.tag=="hy2")' "$CFG" >/dev/null 2>&1 && [ -n "$ip"
     hsni=$($JQ -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.serverName//"www.bing.com"' "$CFG")
     hmport=$($JQ -r '.inbounds[]|select(.tag=="hy2")|(.streamSettings.finalmask.quicParams.udpHop.ports//.streamSettings.hysteriaSettings.quicParams.udpHop.ports[0]//empty)' "$CFG")
     hmport_qs=""; [ -n "$hmport" ] && hmport_qs="&mport=${hmport}"
-    [ -n "$hport" ] && links+="hysteria2://${uuid}@${ip}:${hport}?sni=${hsni}&insecure=1&allowInsecure=1&alpn=h3${hmport_qs}#${NODE_NAME}-Hy2"$'\n'
+    local hy2_pin=""
+    [ -n "${HY2_PIN_SHA256:-}" ] && hy2_pin="&pinSHA256=${HY2_PIN_SHA256}"
+    [ -n "$hport" ] && links+="hysteria2://${uuid}@${ip}:${hport}?sni=${hsni}&insecure=1&allowInsecure=1&alpn=h3${hmport_qs}${hy2_pin}#${NODE_NAME}-HY2"$'\n'
 fi
 # ===== Sing-box 节点 (仅 default 用户获取共享端口; 限额用户用专属端口) =====
 SB_CFG="/etc/sing-box/config.json"
@@ -2289,7 +2305,9 @@ if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CFG" ] && [ -n "$ip" ]; then
         local sb_hy2_hop=""
         [ "${SB_HY2_HOP_ENABLE:-false}" = "true" ] && sb_hy2_hop="&mport=${SB_HY2_HOP_START}-${SB_HY2_HOP_END}"
         if [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ -n "${SB_HY2_PORT:-}" ] && [ -n "${SB_HY2_PSK:-}" ]; then
-            links+="hy2://${SB_HY2_PSK}@${ip}:${SB_HY2_PORT}?sni=${SB_SNI}&alpn=h3&insecure=1${sb_hy2_hop}#${NODE_NAME}-HY2"$'\n'
+            local sb_hy2_pin=""
+            [ -n "${SB_HY2_PIN_SHA256:-}" ] && sb_hy2_pin="&pinSHA256=${SB_HY2_PIN_SHA256}"
+            links+="hy2://${SB_HY2_PSK}@${ip}:${SB_HY2_PORT}?sni=${SB_SNI}&alpn=h3&insecure=1${sb_hy2_hop}${sb_hy2_pin}#${NODE_NAME}-HY2"$'\n'
         fi
         if [ "${SB_TUIC_ENABLE:-false}" = "true" ] && [ -n "${SB_TUIC_PORT:-}" ] && [ -n "${SB_TUIC_UUID:-}" ]; then
             links+="tuic://${SB_TUIC_UUID}:${SB_TUIC_PSK}@${ip}:${SB_TUIC_PORT}?congestion_control=bbr&alpn=h3&sni=${SB_SNI}&insecure=1#${NODE_NAME}-TUIC"$'\n'
@@ -5735,7 +5753,9 @@ add_sb_hy2() {
     echo -e "  密码: ${green}${SB_HY2_PSK}${re}\n"
 
     SB_HY2_ENABLE=true; SB_ENABLE=true
-    generate_singbox_cert; build_singbox_config
+    generate_singbox_cert
+    SB_HY2_PIN_SHA256=$(cert_pin_sha256 "$SB_CERT_FILE")
+    build_singbox_config
     [ "${SB_HY2_HOP_ENABLE:-false}" = "true" ] && apply_sb_hy2_hop_rules
     sb_restart; save_conf; start_sub_server >/dev/null 2>&1 &
     green_msg "Hysteria2 (Sing-box) 部署完成"
