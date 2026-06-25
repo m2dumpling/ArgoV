@@ -720,9 +720,8 @@ done <<< "$users_json"
 
 [ -z "$port_map" ] && exit 0
 
-exec 9>"/etc/xray/.argov.lock" 2>/dev/null
-flock -x 9 2>/dev/null || true
-printf '%b' "$port_map" | "$py" - "$ARGOV_USERS_FILE" << 'PYEOF'
+# 写 Python 脚本到临时文件 (避免 pipe+heredoc 争抢 stdin)
+cat > /tmp/.sb_collect.py << 'PYEOF'
 import json, sys, os
 users_file = sys.argv[1]
 with open(users_file, 'r') as f:
@@ -761,6 +760,11 @@ with open(users_file + '.tmp', 'w') as f:
     json.dump(data, f, indent=2, ensure_ascii=False)
 os.replace(users_file + '.tmp', users_file)
 PYEOF
+# 管道喂数据给 Python 脚本 (heredoc 和 pipe 分两步, 不抢 stdin)
+exec 9>"/etc/xray/.argov.lock" 2>/dev/null
+flock -x 9 2>/dev/null || true
+printf '%b' "$port_map" | "$py" /tmp/.sb_collect.py "$ARGOV_USERS_FILE"
+rm -f /tmp/.sb_collect.py
 exec 9>&- 2>/dev/null || true
 SBCOLLECTEOF
     chmod +x "${WORK_DIR}/sb_stats.sh" "${WORK_DIR}/sb_collect.sh"
