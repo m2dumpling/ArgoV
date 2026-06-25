@@ -465,10 +465,7 @@ for u in data.get('users', []):
     u.setdefault('sb_ports', {})
     u.setdefault('sb_creds', {})
 
-    if hy2_base > 0 and 'hy2' not in u['sb_ports']:
-        u['sb_ports']['hy2'] = hy2_base + 10 + idx
-        u['sb_creds'].setdefault('hy2_pass', os.urandom(16).hex())
-
+    # HY2 每用户端口不分配 — 跳变兼容性, 仅共享端口可用
     if tuic_base > 0 and 'tuic' not in u['sb_ports']:
         u['sb_ports']['tuic'] = tuic_base + 10 + idx
         u['sb_creds'].setdefault('tuic_uuid', __import__('uuid').uuid4().hex)
@@ -539,15 +536,7 @@ for u in data.get('users', []):
     ports = u.get('sb_ports', {})
     creds = u.get('sb_creds', {})
 
-    # HY2 per-user
-    if hy2_enable:
-        p = ports.get('hy2') or 0
-        if p > 0:
-            obj = {"type":"hysteria2","tag":f"sb-hy2-{name}","listen":"::","listen_port":p,
-                   "users":[{"password":creds.get('hy2_pass','')}],
-                   "tls":{"enabled":True,"alpn":["h3"],"certificate_path":cert_file,"key_path":key_file}}
-            inbounds.append(obj)
-
+    # HY2 每用户 inbound 已移除 — 跳变兼容性, 仅共享端口
     # TUIC per-user
     if tuic_enable:
         p = ports.get('tuic') or 0
@@ -850,15 +839,7 @@ apply_sb_hy2_hop_rules() {
     local shared_start="${SB_HY2_HOP_START:-47000}" shared_end="${SB_HY2_HOP_END:-48000}"
     iptables -t nat -A PREROUTING -p udp --dport "${shared_start}:${shared_end}" -j REDIRECT --to-ports "$port" -m comment --comment "argov-sb-hy2-hop" 2>/dev/null || true
 
-    # 每用户独立跳变范围 (偏移 = port+40000, 宽度 = 与共享一致)
-    local width=$((shared_end - shared_start))
-    if [ -f "$ARGOV_USERS_FILE" ]; then
-        jq -r '.users[] | select(.name!="default") | .sb_ports.hy2 // 0' "$ARGOV_USERS_FILE" 2>/dev/null | while read up; do
-            [ "$up" = "0" ] && continue
-            local ustart=$((up + 40000)) uend=$((ustart + width))
-            iptables -t nat -A PREROUTING -p udp --dport "${ustart}:${uend}" -j REDIRECT --to-ports "$up" -m comment --comment "argov-sb-hy2-hop" 2>/dev/null || true
-        done
-    fi
+    # 每用户 HY2 跳变已移除 — 仅共享端口跳变
 }
 disable_sb_hy2_hop_rules() {
     while iptables -t nat -L PREROUTING -n --line-numbers 2>/dev/null | grep -q "argov-sb-hy2-hop"; do
@@ -2327,15 +2308,7 @@ if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CFG" ] && [ -n "$ip" ]; then
     # v2: 限额用户获取自己专属的 Sing-box 节点 (独立端口+密码, 可追踪流量)
         local sb_ports; sb_ports=$(printf '%s' "$USER_JSON" | $JQ -c '.sb_ports // {}' 2>/dev/null)
         local sb_creds; sb_creds=$(printf '%s' "$USER_JSON" | $JQ -c '.sb_creds // {}' 2>/dev/null)
-        # HY2 per-user
-        local hy2_up; hy2_up=$(echo "$sb_ports" | $JQ -r '.hy2 // 0')
-        if [ "$hy2_up" -gt 0 ]; then
-            local hy2_pass; hy2_pass=$(echo "$sb_creds" | $JQ -r '.hy2_pass // ""')
-            local per_hy2_width=$((${SB_HY2_HOP_END:-48000} - ${SB_HY2_HOP_START:-47000}))
-            local per_hy2_ustart=$((hy2_up + 40000)) per_hy2_uend=$((per_hy2_ustart + per_hy2_width))
-            [ "${SB_HY2_HOP_ENABLE:-false}" = "true" ] && per_hy2_hop="&mport=${per_hy2_ustart}-${per_hy2_uend}"
-            [ -n "$hy2_pass" ] && links+="hy2://${hy2_pass}@${ip}:${hy2_up}?sni=${SB_SNI}&alpn=h3&insecure=1${per_hy2_hop}#${NODE_NAME}-HY2"$'\n'
-        fi
+        # HY2 不走限额用户 — 跳变兼容性问题
         # TUIC per-user
         local tuic_up; tuic_up=$(echo "$sb_ports" | $JQ -r '.tuic // 0')
         if [ "$tuic_up" -gt 0 ]; then
