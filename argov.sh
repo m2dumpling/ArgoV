@@ -2318,9 +2318,8 @@ if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CFG" ] && [ -n "$ip" ]; then
         local hy2_up; hy2_up=$(echo "$sb_ports" | $JQ -r '.hy2 // 0')
         if [ "$hy2_up" -gt 0 ]; then
             local hy2_pass; hy2_pass=$(echo "$sb_creds" | $JQ -r '.hy2_pass // ""')
-            local per_hy2_hop=""
-            [ "${SB_HY2_HOP_ENABLE:-false}" = "true" ] && per_hy2_hop="&mport=${SB_HY2_HOP_START}-${SB_HY2_HOP_END}"
-            [ -n "$hy2_pass" ] && links+="hy2://${hy2_pass}@${ip}:${hy2_up}?sni=${SB_SNI}&alpn=h3&insecure=1${per_hy2_hop}#${NODE_NAME}-HY2"$'\n'
+            # 限额用户直连专属端口, 不带 mport (跳变规则只重定向到共享端口)
+            [ -n "$hy2_pass" ] && links+="hy2://${hy2_pass}@${ip}:${hy2_up}?sni=${SB_SNI}&alpn=h3&insecure=1#${NODE_NAME}-HY2"$'\n'
         fi
         # TUIC per-user
         local tuic_up; tuic_up=$(echo "$sb_ports" | $JQ -r '.tuic // 0')
