@@ -712,8 +712,8 @@ while IFS= read -r user; do
     for proto in hy2 tuic anytls reality ss; do
         up=$(echo "$sb_ports" | jq -r ".${proto} // 0")
         [ "$up" = "0" ] && continue
-        tin=$(iptables -L INPUT -v -n -x 2>/dev/null | awk -v p="$up" 'index($NF, p) {sum+=$2} END {print sum+0}')
-        tout=$(iptables -L OUTPUT -v -n -x 2>/dev/null | awk -v p="$up" 'index($NF, p) {sum+=$2} END {print sum+0}')
+        tin=$(iptables -L INPUT -v -n -x 2>/dev/null | awk -v p="$up" '/argov-traffic-in/ && $0 ~ "dpt:"p {sum+=$2} END {print sum+0}')
+        tout=$(iptables -L OUTPUT -v -n -x 2>/dev/null | awk -v p="$up" '/argov-traffic-out/ && $0 ~ "spt:"p {sum+=$2} END {print sum+0}')
         port_map="${port_map}${uname} ${proto} ${tin} ${tout}\n"
     done
 done <<< "$users_json"
