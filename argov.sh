@@ -5660,46 +5660,134 @@ manage_sb_protocols() {
 # Sing-box 协议添加函数
 add_sb_hy2() {
     load_conf
-    local def_port; def_port=$(shuf -i 10000-60000 -n 1)
-    echo -ne "  HY2 端口 [${def_port}]: "; read p
-    [ -n "$p" ] && is_port "$p" && SB_HY2_PORT="$p" || SB_HY2_PORT="$def_port"
-    SB_HY2_PSK="${SB_HY2_PSK:-$(rand_token)}"
-    echo -ne "  SNI [${SB_SNI:-addons.mozilla.org}]: "; read sni
-    [ -n "$sni" ] && SB_SNI="$sni"
+    echo -e "\n${cyan}━━━ Hysteria2 (Sing-box) 节点配置 ━━━${re}\n"
 
-    # 端口跳跃
-    echo -ne "  启用端口跳跃 (UDP)? [y/N]: "; read hop_yn
-    if [ "$hop_yn" = "y" ] || [ "$hop_yn" = "Y" ]; then
+    # (1) 端口
+    local def_port; def_port=$(shuf -i 10000-60000 -n 1)
+    echo -e "${yellow}HY2 端口 (推荐随机, 默认 ${def_port}):${re}"
+    echo -ne "  → "; read p
+    [ -n "$p" ] && is_port "$p" && SB_HY2_PORT="$p" || SB_HY2_PORT="$def_port"
+    echo -e "  端口: ${green}${SB_HY2_PORT}${re}\n"
+
+    # (2) SNI
+    echo -e "${yellow}SNI/TLS 域名 (默认: ${SB_SNI:-addons.mozilla.org}):${re}"
+    echo -ne "  → "; read sni
+    [ -n "$sni" ] && SB_SNI="$sni"
+    echo -e "  SNI: ${green}${SB_SNI}${re}\n"
+
+    # (3) 端口跳跃 (Hi_Hysteria 同款)
+    echo -e "${yellow}是否启用端口跳跃 (Port Hopping)?${re}"
+    echo -e "  Tip: 长时间单端口 UDP 易被限速/QoS/断流, 跳跃可有效避免."
+    echo -e "  ${green}1${re}. 启用(推荐)    ${green}2${re}. 跳过"
+    echo -ne "  → 选择 [1]: "; read hop_yn
+    if [ -z "$hop_yn" ] || [ "$hop_yn" = "1" ]; then
         SB_HY2_HOP_ENABLE=true
-        local def_start=47000 def_end=48000
-        echo -ne "  跳跃起始端口 [${def_start}]: "; read hs
-        [ -n "$hs" ] && is_port "$hs" && def_start="$hs"
-        echo -ne "  跳跃结束端口 [${def_end}]: "; read he
-        [ -n "$he" ] && is_port "$he" && def_end="$he"
-        [ "$def_start" -gt "$def_end" ] && { local tmp=$def_start; def_start=$def_end; def_end=$tmp; }
-        SB_HY2_HOP_START="$def_start"; SB_HY2_HOP_END="$def_end"
-        echo -e "  ${cyan}跳跃模式:${re}"
-        echo -e "    ${green}1${re}. 固定间隔 (30s)    ${green}2${re}. 随机间隔"
-        echo -ne "  选择 [1]: "; read hmode
+        while true; do
+            echo -ne "  起始端口 [47000]: "; read hs
+            [ -z "$hs" ] && hs=47000
+            is_port "$hs" || { echo -e "  ${red}端口范围错误${re}"; continue; }
+            echo -ne "  结束端口 [48000]: "; read he
+            [ -z "$he" ] && he=48000
+            is_port "$he" || { echo -e "  ${red}端口范围错误${re}"; continue; }
+            [ "$hs" -ge "$he" ] && { echo -e "  ${red}起始必须小于结束${re}"; continue; }
+            SB_HY2_HOP_START="$hs"; SB_HY2_HOP_END="$he"
+            break
+        done
+        echo -e "  跳跃范围: ${green}${SB_HY2_HOP_START}-${SB_HY2_HOP_END}${re}"
+        echo -e "  ${yellow}跳跃时间模式:${re}"
+        echo -e "  ${green}1${re}. 固定间隔     ${green}2${re}. 随机间隔"
+        echo -ne "  → 选择 [1]: "; read hmode
         if [ "${hmode:-1}" = "2" ]; then
             SB_HY2_HOP_MODE="random"
             echo -ne "  最小间隔(秒) [10]: "; read hmin
             echo -ne "  最大间隔(秒) [30]: "; read hmax
             SB_HY2_HOP_MIN="${hmin:-10}"; SB_HY2_HOP_MAX="${hmax:-30}"
+            echo -e "  随机间隔: ${green}${SB_HY2_HOP_MIN}s ~ ${SB_HY2_HOP_MAX}s${re}"
         else
             SB_HY2_HOP_MODE="fixed"
-            echo -ne "  跳跃间隔(秒) [30]: "; read hint
+            echo -ne "  跳跃间隔(秒, ≥5) [30]: "; read hint
             SB_HY2_HOP_INTERVAL="${hint:-30}"
+            echo -e "  固定间隔: ${green}${SB_HY2_HOP_INTERVAL}s${re}"
         fi
     else
         SB_HY2_HOP_ENABLE=false
+        echo -e "  端口跳跃: ${red}未启用${re}"
     fi
+    echo ""
+
+    # (4) 拥塞控制 (Hi_Hysteria 同款: Reno/BBR/Brutal)
+    echo -e "${yellow}拥塞控制模式:${re}"
+    echo -e "  Reno:  保守稳定, 优先兼容性"
+    echo -e "  BBR:   均衡积极, 通常吞吐更高"
+    echo -e "  Brutal: Hysteria2 独有, 固定速率, 恶劣网络抗抖动"
+    echo -e "  ${green}1${re}. Reno    ${green}2${re}. BBR    ${green}3${re}. Brutal(默认)"
+    echo -ne "  → 选择 [3]: "; read cc
+    case "${cc:-3}" in
+        1) SB_HY2_CONGESTION="reno" ;;
+        2)
+            SB_HY2_CONGESTION="bbr"
+            echo -e "  ${yellow}BBR 预设:${re}"
+            echo -e "  ${green}1${re}. 保守(conservative)  ${green}2${re}. 标准(standard,默认)  ${green}3${re}. 激进(aggressive)"
+            echo -ne "  → 选择 [2]: "; read bp
+            case "${bp:-2}" in
+                1) SB_HY2_BBR_PROFILE="conservative" ;;
+                3) SB_HY2_BBR_PROFILE="aggressive" ;;
+                *) SB_HY2_BBR_PROFILE="standard" ;;
+            esac
+            ;;
+        *) SB_HY2_CONGESTION="brutal"
+           echo -ne "  上行带宽 Mbps [100]: "; read up_mbps
+           SB_HY2_UP_MBPS="${up_mbps:-100}"
+           echo -ne "  下行带宽 Mbps [200]: "; read down_mbps
+           SB_HY2_DOWN_MBPS="${down_mbps:-200}"
+           ;;
+    esac
+    echo -e "  拥塞控制: ${green}${SB_HY2_CONGESTION}${re}\n"
+
+    # (5) 密码
+    SB_HY2_PSK="${SB_HY2_PSK:-$(rand_token)}"
+    echo -e "${yellow}认证密码 (默认自动生成):${re}"
+    echo -ne "  → [${SB_HY2_PSK}]: "; read custom_psk
+    [ -n "$custom_psk" ] && SB_HY2_PSK="$custom_psk"
+    echo -e "  密码: ${green}${SB_HY2_PSK}${re}\n"
 
     SB_HY2_ENABLE=true; SB_ENABLE=true
     generate_singbox_cert; build_singbox_config
     [ "${SB_HY2_HOP_ENABLE:-false}" = "true" ] && apply_sb_hy2_hop_rules
     sb_restart; save_conf; start_sub_server >/dev/null 2>&1 &
-    green_msg "Hysteria2 (Sing-box) 添加成功"
+    green_msg "Hysteria2 (Sing-box) 部署完成"
+}
+
+add_sb_anytls() {
+    load_conf
+    echo -e "\n${cyan}━━━ AnyTLS Reality (Sing-box) 节点配置 ━━━${re}\n"
+
+    local def_port; def_port=$(shuf -i 10000-60000 -n 1)
+    echo -e "${yellow}AnyTLS 端口 (默认 ${def_port}):${re}"
+    echo -ne "  → "; read p
+    [ -n "$p" ] && is_port "$p" && SB_ANYTLS_PORT="$p" || SB_ANYTLS_PORT="$def_port"
+    echo -e "  端口: ${green}${SB_ANYTLS_PORT}${re}\n"
+
+    echo -e "${yellow}Reality SNI (默认: ${SB_SNI:-addons.mozilla.org}):${re}"
+    echo -ne "  → "; read sni
+    [ -n "$sni" ] && SB_SNI="$sni"
+    echo -e "  SNI: ${green}${SB_SNI}${re}\n"
+
+    SB_ANYTLS_PSK="${SB_ANYTLS_PSK:-$(rand_token)}"
+    echo -e "${yellow}认证密码 (默认自动生成):${re}"
+    echo -ne "  → [${SB_ANYTLS_PSK}]: "; read custom_psk
+    [ -n "$custom_psk" ] && SB_ANYTLS_PSK="$custom_psk"
+
+    if ! sb_is_installed; then red_msg "请先安装 Sing-box"; return; fi
+    if [ -z "${SB_REALITY_PRIV:-}" ]; then
+        local sb_keys; sb_keys=$(sing-box generate reality-keypair 2>/dev/null)
+        SB_REALITY_PRIV=$(echo "$sb_keys" | awk '/PrivateKey/{print $2}')
+        SB_REALITY_PUB=$(echo "$sb_keys" | awk '/PublicKey/{print $2}')
+    fi
+    [ -z "${SB_REALITY_SID:-}" ] && SB_REALITY_SID=$(sing-box generate rand 8 --hex 2>/dev/null | tr -d '\n')
+    SB_ANYTLS_ENABLE=true; SB_ENABLE=true
+    build_singbox_config; sb_restart; save_conf; start_sub_server >/dev/null 2>&1 &
+    green_msg "AnyTLS Reality (Sing-box) 部署完成"
 }
 
 add_sb_tuic() {
@@ -5713,26 +5801,6 @@ add_sb_tuic() {
     generate_singbox_cert; build_singbox_config
     sb_restart; save_conf; start_sub_server >/dev/null 2>&1 &
     green_msg "TUIC (Sing-box) 添加成功"
-}
-
-add_sb_anytls() {
-    load_conf
-    echo -ne "  AnyTLS 端口 [$(shuf -i 10000-60000 -n 1)]: "; read p
-    [ -n "$p" ] && is_port "$p" && SB_ANYTLS_PORT="$p" || SB_ANYTLS_PORT=$(shuf -i 10000-60000 -n 1)
-    SB_ANYTLS_PSK="${SB_ANYTLS_PSK:-$(rand_token)}"
-    echo -ne "  SNI [${SB_SNI:-addons.mozilla.org}]: "; read sni
-    [ -n "$sni" ] && SB_SNI="$sni"
-    # 生成 Reality 密钥
-    if ! sb_is_installed; then red_msg "请先安装 Sing-box"; return; fi
-    if [ -z "${SB_REALITY_PRIV:-}" ]; then
-        local sb_keys; sb_keys=$(sing-box generate reality-keypair 2>/dev/null)
-        SB_REALITY_PRIV=$(echo "$sb_keys" | awk '/PrivateKey/{print $2}')
-        SB_REALITY_PUB=$(echo "$sb_keys" | awk '/PublicKey/{print $2}')
-    fi
-    [ -z "${SB_REALITY_SID:-}" ] && SB_REALITY_SID=$(sing-box generate rand 8 --hex 2>/dev/null | tr -d '\n')
-    SB_ANYTLS_ENABLE=true; SB_ENABLE=true
-    build_singbox_config; sb_restart; save_conf; start_sub_server >/dev/null 2>&1 &
-    green_msg "AnyTLS Reality (Sing-box) 添加成功"
 }
 
 add_sb_reality() {
