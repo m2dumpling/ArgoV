@@ -104,6 +104,11 @@ def assert_sub_generator_contract(text: str) -> None:
     require("[ \"$IS_DEFAULT_USER\" = \"1\" ] && printf '%s' \"$out\" > /etc/xray/sub.txt" in sub_gen, "only default subscription may refresh global sub.txt")
     require("mport=${hmport}" in sub_gen, "built-in Hysteria2 mport must be emitted in subscription links")
     require("allowInsecure=1" in sub_gen, "self-signed Hysteria2 compatibility must keep allowInsecure")
+    # Sing-box 节点必须在订阅中
+    require("SB_CFG" in sub_gen, "sub_gen.sh must reference Sing-box config")
+    require("sni=\\${SB_SNI}" in sub_gen or "SB_SNI" in sub_gen, "sub_gen.sh must emit Sing-box HY2 links")
+    require("tuic://" in sub_gen, "sub_gen.sh must emit Sing-box TUIC links")
+    require("anytls://" in sub_gen, "sub_gen.sh must emit Sing-box AnyTLS links")
 
 
 def main() -> None:

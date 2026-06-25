@@ -533,3 +533,81 @@ require(
     r"节点配置修改",
     "change_config menu must exist with a clear purpose label",
 )
+
+# ——— Sing-box 内核 ———
+require(
+    r"install_singbox\(\)",
+    "install_singbox() must exist",
+)
+require(
+    r"build_singbox_config\(\)",
+    "build_singbox_config() must exist",
+)
+require(
+    r"generate_singbox_cert\(\)",
+    "generate_singbox_cert() must exist",
+)
+require(
+    r"detect_sb_arch\(\)",
+    "detect_sb_arch() must exist for sing-box architecture detection",
+)
+require(
+    r"sb_menu\(\)",
+    "sb_menu() must provide the Sing-box management panel",
+)
+require(
+    r"manage_sb_protocols\(\)",
+    "manage_sb_protocols() must exist for protocol add/edit/delete",
+)
+require(
+    r"gen_sb_hy2_link\(\)",
+    "gen_sb_hy2_link() must exist",
+)
+require(
+    r"gen_sb_tuic_link\(\)",
+    "gen_sb_tuic_link() must exist",
+)
+require(
+    r"gen_sb_anytls_link\(\)",
+    "gen_sb_anytls_link() must exist",
+)
+require(
+    r"gen_sb_reality_link\(\)",
+    "gen_sb_reality_link() must exist for Sing-box Reality",
+)
+require(
+    r"gen_sb_ss_link\(\)",
+    "gen_sb_ss_link() must exist for Sing-box Shadowsocks",
+)
+# Sing-box 必须使用自签证书 (不依赖 allowInsecure)
+require(
+    r"SB_CERT_FILE.*fullchain\.pem",
+    "Sing-box must have certificate file path defined",
+)
+# Sing-box 系统服务
+require(
+    r'sing-box\.service|sing-box.*openrc',
+    "Sing-box systemd or OpenRC service must be defined",
+)
+
+# ——— iptables 流量统计 ———
+require(
+    r"setup_traffic_counters\(\)",
+    "setup_traffic_counters() must exist for iptables traffic counting",
+)
+require(
+    r"collect_traffic\(\)",
+    "collect_traffic() must exist for collecting iptables counters",
+)
+require(
+    r"reset_traffic_counters\(\)",
+    "reset_traffic_counters() must exist for monthly reset",
+)
+require(
+    r'iptables.*argov-traffic-in',
+    "iptables argov-traffic-in rules must be created",
+)
+require(
+    r'iptables.*argov-traffic-out',
+    "iptables argov-traffic-out rules must be created",
+)
