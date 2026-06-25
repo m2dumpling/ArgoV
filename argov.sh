@@ -282,7 +282,6 @@ build_singbox_config() {
       "listen": "::",
       "listen_port": __SB_HY2_PORT__,
       "users": [ { "password": "__SB_HY2_PSK__" } ],
-__SB_HY2_TRANSPORT__
       "tls": {
         "enabled": true,
         "alpn": ["h3"],
@@ -295,18 +294,6 @@ INBOUND_HY2
         sed -i "s|\"__SB_HY2_PSK__\"|\"${SB_HY2_PSK:-}\"|g" "$TEMP_INBOUNDS"
         sed -i "s|__SB_CERT_FILE__|${SB_CERT_FILE}|g" "$TEMP_INBOUNDS"
         sed -i "s|__SB_KEY_FILE__|${SB_KEY_FILE}|g" "$TEMP_INBOUNDS"
-        # 端口跳跃 transport
-        if [ "${SB_HY2_HOP_ENABLE:-false}" = "true" ] && [ -n "${SB_HY2_HOP_START:-}" ]; then
-            local hop_json
-            if [ "${SB_HY2_HOP_MODE:-fixed}" = "random" ]; then
-                hop_json="\\\"transport\\\": { \\\"udp\\\": { \\\"minHopInterval\\\": \\\"${SB_HY2_HOP_MIN:-10}s\\\", \\\"maxHopInterval\\\": \\\"${SB_HY2_HOP_MAX:-30}s\\\" } },"
-            else
-                hop_json="\\\"transport\\\": { \\\"udp\\\": { \\\"hopInterval\\\": \\\"${SB_HY2_HOP_INTERVAL:-30}s\\\" } },"
-            fi
-            sed -i "s|__SB_HY2_TRANSPORT__|${hop_json}|g" "$TEMP_INBOUNDS"
-        else
-            sed -i "/__SB_HY2_TRANSPORT__/d" "$TEMP_INBOUNDS"
-        fi
         need_comma=true
     fi
 
@@ -559,13 +546,6 @@ for u in data.get('users', []):
             obj = {"type":"hysteria2","tag":f"sb-hy2-{name}","listen":"::","listen_port":p,
                    "users":[{"password":creds.get('hy2_pass','')}],
                    "tls":{"enabled":True,"alpn":["h3"],"certificate_path":cert_file,"key_path":key_file}}
-            if hy2_hop_en and hy2_hop_start and hy2_hop_end:
-                udp = {}
-                if hy2_hop_mode == 'random':
-                    udp = {"minHopInterval":f"{hy2_hop_min}s","maxHopInterval":f"{hy2_hop_max}s"}
-                else:
-                    udp = {"hopInterval":f"{hy2_hop_intv}s"}
-                obj["transport"] = {"udp":udp}
             inbounds.append(obj)
 
     # TUIC per-user
