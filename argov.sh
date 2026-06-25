@@ -1692,8 +1692,14 @@ gen_reality_link() {
 }
 gen_hy2_link() {
     local mport="$6"
+    # sing-box 需要 insecure=1 跳过 CA 验证 + pinSHA256 做指纹锁定
+    # Xray 同样需要 allowInsecure=0 + pinSHA256 (有指纹时不需要 allowInsecure)
     local qs="sni=$4&insecure=1&alpn=h3"
-    [ -n "${HY2_PIN_SHA256:-}" ] && qs="${qs}&pinSHA256=${HY2_PIN_SHA256}" || qs="${qs}&allowInsecure=1"
+    if [ -n "${HY2_PIN_SHA256:-}" ]; then
+        qs="${qs}&pinSHA256=${HY2_PIN_SHA256}&allowInsecure=0"
+    else
+        qs="${qs}&allowInsecure=1"
+    fi
     [ -n "$mport" ] && qs="${qs}&mport=${mport}"
     printf '%s' "hysteria2://$1@$2:$3?${qs}#${5:-${NODE_NAME}-Hy2}"
 }
@@ -1702,10 +1708,14 @@ gen_hy2_link() {
 gen_sb_hy2_link() {
     # $1=pass $2=host $3=port $4=sni $5=name $6=hop_range (optional)
     local name="${5:-${NODE_NAME}-HY2}"
-    local hop=""
-    [ -n "$6" ] && hop="&mport=$6"
-    [ -n "${SB_HY2_PIN_SHA256:-}" ] && hop="${hop}&pinSHA256=${SB_HY2_PIN_SHA256}"
-    printf '%s' "hy2://$1@$2:$3?sni=${4}&alpn=h3&insecure=1${hop}#${name}"
+    local extra=""
+    [ -n "$6" ] && extra="&mport=$6"
+    if [ -n "${SB_HY2_PIN_SHA256:-}" ]; then
+        extra="${extra}&pinSHA256=${SB_HY2_PIN_SHA256}&allowInsecure=0"
+    else
+        extra="${extra}&allowInsecure=1"
+    fi
+    printf '%s' "hy2://$1@$2:$3?sni=${4}&alpn=h3&insecure=1${extra}#${name}"
 }
 gen_sb_tuic_link() {
     # $1=uuid $2=pass $3=host $4=port $5=sni $6=name
@@ -2300,13 +2310,13 @@ if $JQ -e '.inbounds[]|select(.tag=="hy2")' "$CFG" >/dev/null 2>&1 && [ -n "$ip"
     hsni=$($JQ -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.serverName//"www.bing.com"' "$CFG")
     hmport=$($JQ -r '.inbounds[]|select(.tag=="hy2")|(.streamSettings.finalmask.quicParams.udpHop.ports//.streamSettings.hysteriaSettings.quicParams.udpHop.ports[0]//empty)' "$CFG")
     hmport_qs=""; [ -n "$hmport" ] && hmport_qs="&mport=${hmport}"
-    local hy2_pin="" hy2_allow=""
+    local hy2_extra=""
     if [ -n "${HY2_PIN_SHA256:-}" ]; then
-        hy2_pin="&pinSHA256=${HY2_PIN_SHA256}"
+        hy2_extra="&pinSHA256=${HY2_PIN_SHA256}&allowInsecure=0"
     else
-        hy2_allow="&allowInsecure=1"
+        hy2_extra="&allowInsecure=1"
     fi
-    [ -n "$hport" ] && links+="hysteria2://${uuid}@${ip}:${hport}?sni=${hsni}&insecure=1&alpn=h3${hmport_qs}${hy2_pin}${hy2_allow}#${NODE_NAME}-HY2"$'\n'
+    [ -n "$hport" ] && links+="hysteria2://${uuid}@${ip}:${hport}?sni=${hsni}&insecure=1&alpn=h3${hmport_qs}${hy2_extra}#${NODE_NAME}-HY2"$'\n'
 fi
 # ===== Sing-box 节点 (仅 default 用户获取共享端口; 限额用户用专属端口) =====
 SB_CFG="/etc/sing-box/config.json"
