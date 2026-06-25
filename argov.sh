@@ -2374,6 +2374,7 @@ start_services() {
     rc-service argov-tunnel start 2>/dev/null || true
     rc-service argov-stats start 2>/dev/null || true
     [ "${SB_ENABLE:-false}" = "true" ] && { sb_start; }
+    setup_traffic_counters 2>/dev/null || true
     sleep 2; get_status
     echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"
     [ -n "$SB_ST" ] && echo -e "  Sing-box: ${SB_ST}"
@@ -5307,13 +5308,16 @@ delete_sb_protocol() {
 main_menu() {
     load_conf
     secure_work_dir_permissions
+    # 确保流量计数器已挂载（升级/重启后首次进入 ag 时补装）
+    setup_traffic_counters 2>/dev/null || true
+    collect_traffic 2>/dev/null || true
     # 无感升级：旧版 stats.py 无配额阻断逻辑 → 静默重新生成
     if [ -f "${WORK_DIR}/stats.py" ] && ! grep -qF 'disabled and sync_config' "${WORK_DIR}/stats.py" 2>/dev/null; then
         start_stats_service >/dev/null 2>&1 &
     fi
     while true; do
         get_status
-        [ "${SB_ENABLE:-false}" = "true" ] && collect_traffic 2>/dev/null &
+        collect_traffic 2>/dev/null
         clear
         local uuid_short="未安装" hd=""
         [ -f "$CONFIG_FILE" ] && uuid_short="$(get_uuid | cut -c1-12)..."
