@@ -267,6 +267,8 @@ EOF
 }
 build_singbox_config() {
     mkdir -p "$SB_WORK_DIR" 2>/dev/null
+    # v2: 自动同步每用户端口和凭证
+    sb_sync_users 2>/dev/null || true
     local tmp_inbounds; tmp_inbounds=$(mktemp -t sbin.XXXXXX)
     local need_comma=false
 
@@ -379,6 +381,10 @@ SBSS
         need_comma=true
     fi
 
+    # 每用户独立 inbound (v2 流量配额)
+    local per_user_need_comma; per_user_need_comma=$(sb_build_per_user_inbounds "$tmp_inbounds" "$need_comma")
+    [ "$per_user_need_comma" = "true" ] && need_comma=true
+
     # 拼接完整 config.json
     cat > "$SB_CONFIG_FILE" << 'SBCONFIGHEAD'
 {
@@ -400,6 +406,396 @@ SBCONFIGTAIL
     if command -v sing-box >/dev/null 2>&1; then
         sing-box check -c "$SB_CONFIG_FILE" >/dev/null 2>&1 || yellow_msg "Sing-box 配置验证警告"
     fi
+}
+
+#==============================================================================
+# v2: Sing-box 每用户端口分配 + 流量配额
+#==============================================================================
+sb_sync_users() {
+    # 为所有非 default 用户分配独立 Sing-box 端口和凭证
+    local py; py=$(py_bin); [ -z "$py" ] && return
+    [ ! -f "$ARGOV_USERS_FILE" ] && return
+
+    local hy2_base="${SB_HY2_PORT:-0}" tuic_base="${SB_TUIC_PORT:-0}"
+    local anytls_base="${SB_ANYTLS_PORT:-0}" reality_base="${SB_REALITY_PORT:-0}" ss_base="${SB_SS_PORT:-0}"
+
+    begin_argov_lock
+    "$py" - "$ARGOV_USERS_FILE" "$hy2_base" "$tuic_base" "$anytls_base" "$reality_base" "$ss_base" << 'PYEOF'
+import json, os, sys
+
+users_file = sys.argv[1]
+hy2_base  = int(sys.argv[2] or 0)
+tuic_base = int(sys.argv[3] or 0)
+anytls_base = int(sys.argv[4] or 0)
+reality_base = int(sys.argv[5] or 0)
+ss_base   = int(sys.argv[6] or 0)
+
+with open(users_file, 'r') as f:
+    data = json.load(f)
+
+idx = 0
+for u in data.get('users', []):
+    if u.get('name') == 'default':
+        continue
+    idx += 1
+    u.setdefault('sb_ports', {})
+    u.setdefault('sb_creds', {})
+
+    if hy2_base > 0 and 'hy2' not in u['sb_ports']:
+        u['sb_ports']['hy2'] = hy2_base + 10 + idx
+        u['sb_creds'].setdefault('hy2_pass', os.urandom(16).hex())
+
+    if tuic_base > 0 and 'tuic' not in u['sb_ports']:
+        u['sb_ports']['tuic'] = tuic_base + 10 + idx
+        u['sb_creds'].setdefault('tuic_uuid', __import__('uuid').uuid4().hex)
+        u['sb_creds'].setdefault('tuic_pass', os.urandom(16).hex())
+
+    if anytls_base > 0 and 'anytls' not in u['sb_ports']:
+        u['sb_ports']['anytls'] = anytls_base + 10 + idx
+        u['sb_creds'].setdefault('anytls_pass', os.urandom(16).hex())
+
+    if reality_base > 0 and 'reality' not in u['sb_ports']:
+        u['sb_ports']['reality'] = reality_base + 10 + idx
+
+    if ss_base > 0 and 'ss' not in u['sb_ports']:
+        u['sb_ports']['ss'] = ss_base + 10 + idx
+        u['sb_creds'].setdefault('ss_pass', os.urandom(16).hex())
+
+with open(users_file + '.tmp', 'w') as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+os.replace(users_file + '.tmp', users_file)
+PYEOF
+    local rc=$?
+    end_argov_lock
+    return $rc
+}
+
+sb_build_per_user_inbounds() {
+    # 生成每用户 Sing-box inbound JSON 块, 追加到 $1 (tmp inbounds 文件)
+    local tmp_file="$1"
+    [ ! -f "$ARGOV_USERS_FILE" ] && return
+    local need_comma="$2"
+
+    local users_json; users_json=$(jq -c '.users[] | select(.name != "default")' "$ARGOV_USERS_FILE" 2>/dev/null)
+    [ -z "$users_json" ] && return
+
+    while IFS= read -r user; do
+        [ -z "$user" ] && continue
+        local uname; uname=$(echo "$user" | jq -r '.name')
+        local sb_ports; sb_ports=$(echo "$user" | jq -c '.sb_ports // {}')
+        local sb_creds; sb_creds=$(echo "$user" | jq -c '.sb_creds // {}')
+
+        # HY2 per-user
+        if [ "${SB_HY2_ENABLE:-false}" = "true" ]; then
+            local hy2_up; hy2_up=$(echo "$sb_ports" | jq -r '.hy2 // 0')
+            if [ "$hy2_up" -gt 0 ]; then
+                local hy2_pass; hy2_pass=$(echo "$sb_creds" | jq -r '.hy2_pass // ""')
+                $need_comma && echo "," >> "$tmp_file"
+                cat >> "$tmp_file" << SBUHY2
+    {
+      "type": "hysteria2",
+      "tag": "sb-hy2-${uname}",
+      "listen": "::",
+      "listen_port": ${hy2_up},
+      "users": [ { "password": "${hy2_pass}" } ],
+      "tls": {
+        "enabled": true,
+        "alpn": ["h3"],
+        "certificate_path": "${SB_CERT_FILE}",
+        "key_path": "${SB_KEY_FILE}"
+      }
+    }
+SBUHY2
+                need_comma=true
+            fi
+        fi
+
+        # TUIC per-user
+        if [ "${SB_TUIC_ENABLE:-false}" = "true" ]; then
+            local tuic_up; tuic_up=$(echo "$sb_ports" | jq -r '.tuic // 0')
+            if [ "$tuic_up" -gt 0 ]; then
+                local tuic_uid; tuic_uid=$(echo "$sb_creds" | jq -r '.tuic_uuid // ""')
+                local tuic_pass; tuic_pass=$(echo "$sb_creds" | jq -r '.tuic_pass // ""')
+                $need_comma && echo "," >> "$tmp_file"
+                cat >> "$tmp_file" << SBUTUIC
+    {
+      "type": "tuic",
+      "tag": "sb-tuic-${uname}",
+      "listen": "::",
+      "listen_port": ${tuic_up},
+      "users": [ { "uuid": "${tuic_uid}", "password": "${tuic_pass}" } ],
+      "congestion_control": "bbr",
+      "tls": {
+        "enabled": true,
+        "alpn": ["h3"],
+        "certificate_path": "${SB_CERT_FILE}",
+        "key_path": "${SB_KEY_FILE}"
+      }
+    }
+SBUTUIC
+                need_comma=true
+            fi
+        fi
+
+        # AnyTLS per-user
+        if [ "${SB_ANYTLS_ENABLE:-false}" = "true" ]; then
+            local anytls_up; anytls_up=$(echo "$sb_ports" | jq -r '.anytls // 0')
+            if [ "$anytls_up" -gt 0 ]; then
+                local anytls_pass; anytls_pass=$(echo "$sb_creds" | jq -r '.anytls_pass // ""')
+                $need_comma && echo "," >> "$tmp_file"
+                cat >> "$tmp_file" << SBUANYTLS
+    {
+      "type": "anytls",
+      "tag": "sb-anytls-${uname}",
+      "listen": "::",
+      "listen_port": ${anytls_up},
+      "users": [ { "name": "${uname}", "password": "${anytls_pass}" } ],
+      "padding_scheme": [],
+      "tls": {
+        "enabled": true,
+        "server_name": "${SB_SNI}",
+        "reality": {
+          "enabled": true,
+          "handshake": { "server": "${SB_SNI}", "server_port": 443 },
+          "private_key": "${SB_REALITY_PRIV}",
+          "short_id": ["${SB_REALITY_SID}"]
+        }
+      }
+    }
+SBUANYTLS
+                need_comma=true
+            fi
+        fi
+
+        # Reality per-user
+        if [ "${SB_REALITY_ENABLE:-false}" = "true" ]; then
+            local reality_up; reality_up=$(echo "$sb_ports" | jq -r '.reality // 0')
+            if [ "$reality_up" -gt 0 ]; then
+                local r_uid; r_uid=$(echo "$user" | jq -r '.uuid // ""')
+                $need_comma && echo "," >> "$tmp_file"
+                cat >> "$tmp_file" << SBUREALITY
+    {
+      "type": "vless",
+      "tag": "sb-reality-${uname}",
+      "listen": "::",
+      "listen_port": ${reality_up},
+      "users": [ { "uuid": "${r_uid}", "flow": "xtls-rprx-vision" } ],
+      "tls": {
+        "enabled": true,
+        "server_name": "${SB_SNI}",
+        "reality": {
+          "enabled": true,
+          "handshake": { "server": "${SB_SNI}", "server_port": 443 },
+          "private_key": "${SB_REALITY_PRIV}",
+          "short_id": ["${SB_REALITY_SID}"]
+        }
+      }
+    }
+SBUREALITY
+                need_comma=true
+            fi
+        fi
+
+        # SS per-user
+        if [ "${SB_SS_ENABLE:-false}" = "true" ]; then
+            local ss_up; ss_up=$(echo "$sb_ports" | jq -r '.ss // 0')
+            if [ "$ss_up" -gt 0 ]; then
+                local ss_pass; ss_pass=$(echo "$sb_creds" | jq -r '.ss_pass // ""')
+                $need_comma && echo "," >> "$tmp_file"
+                cat >> "$tmp_file" << SBUSS
+    {
+      "type": "shadowsocks",
+      "tag": "sb-ss-${uname}",
+      "listen": "::",
+      "listen_port": ${ss_up},
+      "method": "${SS_METHOD:-aes-256-gcm}",
+      "password": "${ss_pass}"
+    }
+SBUSS
+                need_comma=true
+            fi
+        fi
+    done <<< "$users_json"
+    echo "$need_comma"
+}
+
+sb_collect_user_traffic() {
+    # 读取每用户端口的 iptables 计数器, 更新 argov_users.json
+    local py; py=$(py_bin); [ -z "$py" ] && return
+    [ ! -f "$ARGOV_USERS_FILE" ] && return
+
+    # 收集所有用户端口
+    local port_map=""
+    local users_json; users_json=$(jq -c '.users[] | select(.name != "default")' "$ARGOV_USERS_FILE" 2>/dev/null)
+    while IFS= read -r user; do
+        [ -z "$user" ] && continue
+        local uname; uname=$(echo "$user" | jq -r '.name')
+        local sb_ports; sb_ports=$(echo "$user" | jq -c '.sb_ports // {}')
+
+        for proto in hy2 tuic anytls reality ss; do
+            local up; up=$(echo "$sb_ports" | jq -r ".${proto} // 0")
+            if [ "$up" -gt 0 ]; then
+                # 读取该端口的 iptables INPUT 计数器 (入站=用户的 uplink, 即服务器 downlink)
+                local tin; tin=$(iptables -L INPUT -v -n -x 2>/dev/null | awk -v p="$up" '$NF ~ p {sum+=$2} END {print sum+0}')
+                local tout; tout=$(iptables -L OUTPUT -v -n -x 2>/dev/null | awk -v p="$up" '$NF ~ p {sum+=$2} END {print sum+0}')
+                port_map="${port_map}${uname} ${proto} ${tin} ${tout}\n"
+            fi
+        done
+    done <<< "$users_json"
+
+    [ -z "$port_map" ] && return
+
+    begin_argov_lock
+    printf '%b' "$port_map" | "$py" - "$ARGOV_USERS_FILE" << 'PYEOF'
+import json, sys
+
+users_file = sys.argv[1]
+with open(users_file, 'r') as f:
+    data = json.load(f)
+
+# 读取端口流量映射: name proto in_bytes out_bytes
+user_traffic = {}
+for line in sys.stdin:
+    parts = line.strip().split()
+    if len(parts) != 4:
+        continue
+    name, proto, tin, tout = parts[0], parts[1], int(parts[2]), int(parts[3])
+    user_traffic.setdefault(name, {'up': 0, 'down': 0})
+    user_traffic[name]['up'] += tout   # 服务器出站 = 用户下行(uplink)
+    user_traffic[name]['down'] += tin  # 服务器入站 = 用户上行(downlink)
+
+for u in data.get('users', []):
+    name = u.get('name', '')
+    if name in user_traffic:
+        u['used_up'] = u.get('used_up', 0) + user_traffic[name]['up']
+        u['used_down'] = u.get('used_down', 0) + user_traffic[name]['down']
+
+with open(users_file + '.tmp', 'w') as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+import os; os.replace(users_file + '.tmp', users_file)
+PYEOF
+    end_argov_lock
+}
+
+start_sb_stats_service() {
+    # 安装 argov-sb-stats 守护进程 (每60s采集 Sing-box 用户流量)
+    cat > "${WORK_DIR}/sb_stats.sh" << 'SBSTATSEOF'
+#!/usr/bin/env bash
+set -e
+WORK_DIR="/etc/xray"
+ARGOV_USERS_FILE="/etc/xray/argov_users.json"
+while true; do
+    sleep 60
+    [ "${SB_ENABLE:-false}" != "true" ] && continue
+    [ ! -f "$ARGOV_USERS_FILE" ] && continue
+    # 调用 argov.sh 中的采集函数 (通过 source 加载)
+    if [ -f "${WORK_DIR}/sb_collect.sh" ]; then
+        bash "${WORK_DIR}/sb_collect.sh" 2>/dev/null || true
+    fi
+done
+SBSTATSEOF
+
+    # 独立采集脚本 (避免 source 整个 argov.sh)
+    cat > "${WORK_DIR}/sb_collect.sh" << 'SBCOLLECTEOF'
+#!/usr/bin/env bash
+ARGOV_USERS_FILE="/etc/xray/argov_users.json"
+py=$(command -v python3 || command -v python || true)
+[ -z "$py" ] && exit 0
+[ ! -f "$ARGOV_USERS_FILE" ] && exit 0
+
+port_map=""
+users_json=$(jq -c '.users[] | select(.name != "default")' "$ARGOV_USERS_FILE" 2>/dev/null)
+while IFS= read -r user; do
+    [ -z "$user" ] && continue
+    uname=$(echo "$user" | jq -r '.name')
+    sb_ports=$(echo "$user" | jq -c '.sb_ports // {}')
+    for proto in hy2 tuic anytls reality ss; do
+        up=$(echo "$sb_ports" | jq -r ".${proto} // 0")
+        [ "$up" = "0" ] && continue
+        tin=$(iptables -L INPUT -v -n -x 2>/dev/null | awk -v p="$up" 'index($NF, p) {sum+=$2} END {print sum+0}')
+        tout=$(iptables -L OUTPUT -v -n -x 2>/dev/null | awk -v p="$up" 'index($NF, p) {sum+=$2} END {print sum+0}')
+        port_map="${port_map}${uname} ${proto} ${tin} ${tout}\n"
+    done
+done <<< "$users_json"
+
+[ -z "$port_map" ] && exit 0
+
+exec 9>"/etc/xray/.argov.lock" 2>/dev/null
+flock -x 9 2>/dev/null || true
+printf '%b' "$port_map" | "$py" - "$ARGOV_USERS_FILE" << 'PYEOF'
+import json, sys, os
+users_file = sys.argv[1]
+with open(users_file, 'r') as f:
+    data = json.load(f)
+user_traffic = {}
+for line in sys.stdin:
+    parts = line.strip().split()
+    if len(parts) != 4: continue
+    name, proto, tin, tout = parts[0], parts[1], int(parts[2]), int(parts[3])
+    user_traffic.setdefault(name, {'up': 0, 'down': 0})
+    user_traffic[name]['up'] += tout
+    user_traffic[name]['down'] += tin
+for u in data.get('users', []):
+    name = u.get('name', '')
+    if name in user_traffic:
+        old_up = u.get('used_up', 0)
+        old_down = u.get('used_down', 0)
+        u['used_up'] = old_up + user_traffic[name]['up']
+        u['used_down'] = old_down + user_traffic[name]['down']
+        # 检查配额
+        quota = u.get('quota_bytes', 0)
+        if quota > 0:
+            total = u['used_up'] + u['used_down']
+            if total >= quota:
+                u['enabled'] = False
+with open(users_file + '.tmp', 'w') as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+os.replace(users_file + '.tmp', users_file)
+PYEOF
+exec 9>&- 2>/dev/null || true
+SBCOLLECTEOF
+    chmod +x "${WORK_DIR}/sb_stats.sh" "${WORK_DIR}/sb_collect.sh"
+
+    # 安装系统服务
+    if [ "$IS_ALPINE" = 1 ]; then
+        cat > /etc/init.d/argov-sb-stats << 'SBOPENRC'
+#!/sbin/openrc-run
+name=argov-sb-stats
+description="ArgoV Sing-box Per-User Stats Daemon"
+supervisor=supervise-daemon
+command=/etc/xray/sb_stats.sh
+command_background=true
+pidfile=/run/argov-sb-stats.pid
+depend() { need net; }
+SBOPENRC
+        chmod +x /etc/init.d/argov-sb-stats
+        rc-update add argov-sb-stats default 2>/dev/null || true
+        rc-service argov-sb-stats restart 2>/dev/null || true
+    else
+        cat > /etc/systemd/system/argov-sb-stats.service << 'SBSYSTEMD'
+[Unit]
+Description=ArgoV Sing-box Per-User Stats Daemon
+After=network.target
+[Service]
+Type=simple
+ExecStart=/etc/xray/sb_stats.sh
+Restart=on-failure
+RestartSec=10s
+[Install]
+WantedBy=multi-user.target
+SBSYSTEMD
+        systemctl daemon-reload
+        systemctl enable argov-sb-stats 2>/dev/null || true
+        systemctl restart argov-sb-stats 2>/dev/null || true
+    fi
+}
+
+stop_sb_stats_service() {
+    systemctl stop argov-sb-stats 2>/dev/null || true
+    systemctl disable argov-sb-stats 2>/dev/null || true
+    rc-service argov-sb-stats stop 2>/dev/null || true
+    rc-update del argov-sb-stats default 2>/dev/null || true
+    rm -f /etc/systemd/system/argov-sb-stats.service /etc/init.d/argov-sb-stats "${WORK_DIR}/sb_stats.sh" "${WORK_DIR}/sb_collect.sh" 2>/dev/null
 }
 save_var() { printf "%s=%q\n" "$1" "$2"; }
 secure_work_dir_permissions() {
@@ -550,6 +946,14 @@ setup_traffic_counters() {
     [ -n "${SB_ANYTLS_PORT:-}" ] && [ "${SB_ANYTLS_PORT:-}" != "0" ] && ports="$ports $SB_ANYTLS_PORT"
     [ -n "${SB_REALITY_PORT:-}" ] && [ "${SB_REALITY_PORT:-}" != "0" ] && ports="$ports $SB_REALITY_PORT"
     [ -n "${SB_SS_PORT:-}" ] && [ "${SB_SS_PORT:-}" != "0" ] && ports="$ports $SB_SS_PORT"
+
+    # v2: 每用户端口
+    if [ -f "$ARGOV_USERS_FILE" ]; then
+        local per_user_ports; per_user_ports=$(jq -r '.users[] | select(.name!="default") | .sb_ports // {} | .[]' "$ARGOV_USERS_FILE" 2>/dev/null)
+        for pp in $per_user_ports; do
+            [ "$pp" != "0" ] && [ -n "$pp" ] && ports="$ports $pp"
+        done
+    fi
 
     # 清掉旧计数规则
     while iptables -L INPUT -n --line-numbers 2>/dev/null | grep -q "argov-traffic"; do
@@ -1887,6 +2291,42 @@ if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CFG" ] && [ -n "$ip" ]; then
         sb_ss_method=$($JQ -r '.inbounds[]|select(.type=="shadowsocks").method//"aes-256-gcm"' "$SB_CFG" 2>/dev/null)
         [ -n "$sb_ss_pass" ] && { sb_ss_b64=$(printf '%s' "${sb_ss_method}:${sb_ss_pass}" | base64 -w0 2>/dev/null || printf '%s' "${sb_ss_method}:${sb_ss_pass}" | base64 | tr -d '\n'); links+="ss://${sb_ss_b64}@${ip}:${SB_SS_PORT}#${NODE_NAME}-SS"$'\n'; }
     fi
+    # v2: 非默认用户获取自己专属的 Sing-box 节点 (独立端口+密码)
+    if [ "$IS_DEFAULT_USER" != "1" ]; then
+        local sb_ports; sb_ports=$(printf '%s' "$USER_JSON" | $JQ -c '.sb_ports // {}' 2>/dev/null)
+        local sb_creds; sb_creds=$(printf '%s' "$USER_JSON" | $JQ -c '.sb_creds // {}' 2>/dev/null)
+        # HY2 per-user
+        local hy2_up; hy2_up=$(echo "$sb_ports" | $JQ -r '.hy2 // 0')
+        if [ "$hy2_up" -gt 0 ]; then
+            local hy2_pass; hy2_pass=$(echo "$sb_creds" | $JQ -r '.hy2_pass // ""')
+            [ -n "$hy2_pass" ] && links+="hy2://${hy2_pass}@${ip}:${hy2_up}?sni=${SB_SNI}&alpn=h3&insecure=1#${NODE_NAME}-HY2"$'\n'
+        fi
+        # TUIC per-user
+        local tuic_up; tuic_up=$(echo "$sb_ports" | $JQ -r '.tuic // 0')
+        if [ "$tuic_up" -gt 0 ]; then
+            local t_uuid; t_uuid=$(echo "$sb_creds" | $JQ -r '.tuic_uuid // ""')
+            local t_pass; t_pass=$(echo "$sb_creds" | $JQ -r '.tuic_pass // ""')
+            [ -n "$t_uuid" ] && links+="tuic://${t_uuid}:${t_pass}@${ip}:${tuic_up}?congestion_control=bbr&alpn=h3&sni=${SB_SNI}&insecure=1#${NODE_NAME}-TUIC"$'\n'
+        fi
+        # AnyTLS per-user
+        local anytls_up; anytls_up=$(echo "$sb_ports" | $JQ -r '.anytls // 0')
+        if [ "$anytls_up" -gt 0 ]; then
+            local a_pass; a_pass=$(echo "$sb_creds" | $JQ -r '.anytls_pass // ""')
+            [ -n "$a_pass" ] && links+="anytls://${a_pass}@${ip}:${anytls_up}?security=reality&sni=${SB_SNI}&fp=chrome&pbk=${SB_REALITY_PUB:-}&sid=${SB_REALITY_SID:-}#${NODE_NAME}-AnyTLS"$'\n'
+        fi
+        # Reality per-user
+        local reality_up; reality_up=$(echo "$sb_ports" | $JQ -r '.reality // 0')
+        if [ "$reality_up" -gt 0 ]; then
+            links+="vless://${uuid}@${ip}:${reality_up}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SB_SNI}&pbk=${SB_REALITY_PUB:-}&fp=chrome&sid=${SB_REALITY_SID:-}#${NODE_NAME}-Reality"$'\n'
+        fi
+        # SS per-user
+        local ss_up; ss_up=$(echo "$sb_ports" | $JQ -r '.ss // 0')
+        if [ "$ss_up" -gt 0 ]; then
+            local ss_pass; ss_pass=$(echo "$sb_creds" | $JQ -r '.ss_pass // ""')
+            local ss_m; ss_m="${SS_METHOD:-aes-256-gcm}"
+            [ -n "$ss_pass" ] && { local ss_b64; ss_b64=$(printf '%s' "${ss_m}:${ss_pass}" | base64 -w0 2>/dev/null || printf '%s' "${ss_m}:${ss_pass}" | base64 | tr -d '\n'); links+="ss://${ss_b64}@${ip}:${ss_up}#${NODE_NAME}-SS"$'\n'; }
+        fi
+    fi
 fi
 out=$(printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n')
 [ "$IS_DEFAULT_USER" = "1" ] && printf '%s' "$out" > /etc/xray/sub.txt
@@ -2369,10 +2809,11 @@ show_node() {
 # MODULE: service lifecycle
 start_services() {
     yellow_msg "Starting..."
-    systemctl start xray argov-tunnel argov-stats 2>/dev/null || true
+    systemctl start xray argov-tunnel argov-stats argov-sb-stats 2>/dev/null || true
     rc-service xray start 2>/dev/null || true
     rc-service argov-tunnel start 2>/dev/null || true
     rc-service argov-stats start 2>/dev/null || true
+    rc-service argov-sb-stats start 2>/dev/null || true
     [ "${SB_ENABLE:-false}" = "true" ] && { sb_start; }
     setup_traffic_counters 2>/dev/null || true
     sleep 2; get_status
@@ -2382,10 +2823,11 @@ start_services() {
 }
 stop_services()  {
     yellow_msg "Stopping..."
-    systemctl stop xray argov-tunnel argov-stats 2>/dev/null || true
+    systemctl stop xray argov-tunnel argov-stats argov-sb-stats 2>/dev/null || true
     rc-service xray stop 2>/dev/null || true
     rc-service argov-tunnel stop 2>/dev/null || true
     rc-service argov-stats stop 2>/dev/null || true
+    rc-service argov-sb-stats stop 2>/dev/null || true
     [ "${SB_ENABLE:-false}" = "true" ] && { sb_stop; }
     sleep 1; get_status
     echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"
@@ -2395,10 +2837,11 @@ stop_services()  {
 restart_services() {
     yellow_msg "Restarting..."
     rm -f "$TUNNEL_LOG"
-    systemctl restart xray argov-tunnel argov-stats 2>/dev/null || true
+    systemctl restart xray argov-tunnel argov-stats argov-sb-stats 2>/dev/null || true
     rc-service xray restart 2>/dev/null || true
     rc-service argov-tunnel restart 2>/dev/null || true
     rc-service argov-stats restart 2>/dev/null || true
+    rc-service argov-sb-stats restart 2>/dev/null || true
     [ "${SB_ENABLE:-false}" = "true" ] && { sb_restart; }
     sleep 3; get_status
     local d; d=$(get_argo_domain)
@@ -3035,6 +3478,8 @@ EOF
 
     start_sub_server
     start_stats_service
+    sb_sync_users 2>/dev/null || true
+    start_sb_stats_service 2>/dev/null || true
     setup_traffic_counters 2>/dev/null || true
 
     echo ""; echo -e " ${purple}╔══════════════════════════════════════════════════╗${re}"
@@ -5102,6 +5547,7 @@ sb_menu() {
                 echo -ne "  ${red}⚠ 确定卸载 Sing-box? (y/N): ${re}"; read cf
                 if [ "$cf" = "y" ] || [ "$cf" = "Y" ]; then
                     sb_stop 2>/dev/null
+                    stop_sb_stats_service 2>/dev/null
                     systemctl disable sing-box 2>/dev/null; rc-update del sing-box default 2>/dev/null
                     rm -rf "$SB_WORK_DIR" /etc/systemd/system/sing-box.service /etc/init.d/sing-box /var/log/sing-box.log /var/log/sing-box.err /usr/bin/sing-box 2>/dev/null
                     systemctl daemon-reload 2>/dev/null || true
@@ -5381,10 +5827,10 @@ main_menu() {
                if [ "$cf" = "y" ] || [ "$cf" = "Y" ]; then
                    stop_sub_server 2>/dev/null
                    stop_stats_service 2>/dev/null
-                   systemctl stop xray argov-tunnel argov-stats 2>/dev/null; systemctl disable xray argov-tunnel argov-stats 2>/dev/null
+                   systemctl stop xray argov-tunnel argov-stats argov-sb-stats 2>/dev/null; systemctl disable xray argov-tunnel argov-stats argov-sb-stats 2>/dev/null
                    # Sing-box 清理
                    [ "${SB_ENABLE:-false}" = "true" ] && { sb_stop; systemctl disable sing-box 2>/dev/null; rc-update del sing-box default 2>/dev/null; }
-                    rm -rf "$WORK_DIR" "$SB_WORK_DIR"; rm -f /etc/systemd/system/xray.service /etc/systemd/system/argov-tunnel.service /etc/systemd/system/argov-sub.service /etc/systemd/system/argov-stats.service /etc/systemd/system/sing-box.service /etc/init.d/xray /etc/init.d/argov-tunnel /etc/init.d/argov-stats /etc/init.d/sing-box "$SCRIPT_PATH" "${WORK_DIR}/argov-tunnel.sh"
+                    rm -rf "$WORK_DIR" "$SB_WORK_DIR"; rm -f /etc/systemd/system/xray.service /etc/systemd/system/argov-tunnel.service /etc/systemd/system/argov-sub.service /etc/systemd/system/argov-stats.service /etc/systemd/system/argov-sb-stats.service /etc/systemd/system/sing-box.service /etc/init.d/xray /etc/init.d/argov-tunnel /etc/init.d/argov-stats /etc/init.d/argov-sb-stats /etc/init.d/sing-box "$SCRIPT_PATH" "${WORK_DIR}/argov-tunnel.sh"
                    systemctl daemon-reload; green_msg "卸载完成。"; fi ;;
             w|W) warp_menu ;;
             r|R) relay_menu ;;

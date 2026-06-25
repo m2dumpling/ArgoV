@@ -611,3 +611,31 @@ require(
     r'iptables.*argov-traffic-out',
     "iptables argov-traffic-out rules must be created",
 )
+
+# ——— v2: Sing-box 每用户流量配额 ———
+require(
+    r"sb_sync_users\(\)",
+    "sb_sync_users() must exist for per-user Sing-box port allocation",
+)
+require(
+    r"sb_build_per_user_inbounds\(\)",
+    "sb_build_per_user_inbounds() must exist for per-user inbound generation",
+)
+require(
+    r"sb_collect_user_traffic\(\)",
+    "sb_collect_user_traffic() must exist for per-user traffic collection",
+)
+require(
+    r"start_sb_stats_service\(\)",
+    "start_sb_stats_service() must exist for argov-sb-stats daemon",
+)
+require(
+    r"stop_sb_stats_service\(\)",
+    "stop_sb_stats_service() must exist for sb-stats cleanup",
+)
+# sub_gen.sh 必须有每用户 Sing-box 端口读取
+require(
+    r"sb_ports.*sb_creds",
+    "sub_gen.sh must read per-user sb_ports and sb_creds for dedicated links",
+    flags=re.DOTALL,
+)
