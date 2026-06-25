@@ -755,7 +755,7 @@ is_safe_conf_file() {
         [[ "$line" =~ ^[A-Z][A-Z0-9_]*= ]] || return 1
         key="${line%%=*}"
         case "$key" in
-            NODE_NAME|ARGO_PORT|VLESS_WS_PORT|VMESS_WS_PORT|CDN_PORT|CDN_DOMAIN|ARGO_MODE|ARGO_AUTH|ARGO_FIXED_DOMAIN|UUID_CUSTOM|REALITY_PORT|HY2_PORT|HY2_MPORT|HY2_CONGESTION|HY2_UP_MBPS|HY2_DOWN_MBPS|SS_PORT|SUB_PORT|SUB_PATH|SUB_DOMAIN|SUB_TOKEN|REALITY_SNI|HY2_SNI|SS_METHOD|ENABLE_REALITY|ENABLE_HY2|ENABLE_SS|HY2_CERT_FILE|HY2_KEY_FILE|REALITY_PRIV|REALITY_PUB|REALITY_SHORTID|LAST_ARGO_DOMAIN|RELAY_ENABLED|RELAY_LINK|RELAY_MODE|XRAY_VERSION|XRAY_SHA256|CLOUDFLARED_VERSION|CLOUDFLARED_SHA256|AGG_TOKEN|SB_ENABLE|SB_VERSION|SB_HY2_ENABLE|SB_TUIC_ENABLE|SB_ANYTLS_ENABLE|SB_REALITY_ENABLE|SB_SS_ENABLE|SB_HY2_PORT|SB_TUIC_PORT|SB_ANYTLS_PORT|SB_REALITY_PORT|SB_SS_PORT|SB_REALITY_PRIV|SB_REALITY_PUB|SB_REALITY_SID|SB_ANYTLS_PSK|SB_TUIC_UUID|SB_TUIC_PSK|SB_SNI|SB_CERT_FILE|SB_KEY_FILE|TRAFFIC_IN|TRAFFIC_OUT) ;;
+            NODE_NAME|ARGO_PORT|VLESS_WS_PORT|VMESS_WS_PORT|CDN_PORT|CDN_DOMAIN|ARGO_MODE|ARGO_AUTH|ARGO_FIXED_DOMAIN|UUID_CUSTOM|REALITY_PORT|HY2_PORT|HY2_MPORT|HY2_CONGESTION|HY2_UP_MBPS|HY2_DOWN_MBPS|SS_PORT|SUB_PORT|SUB_PATH|SUB_DOMAIN|SUB_TOKEN|REALITY_SNI|HY2_SNI|SS_METHOD|ENABLE_REALITY|ENABLE_HY2|ENABLE_SS|HY2_CERT_FILE|HY2_KEY_FILE|REALITY_PRIV|REALITY_PUB|REALITY_SHORTID|LAST_ARGO_DOMAIN|RELAY_ENABLED|RELAY_LINK|RELAY_MODE|XRAY_VERSION|XRAY_SHA256|CLOUDFLARED_VERSION|CLOUDFLARED_SHA256|AGG_TOKEN|SB_ENABLE|SB_VERSION|SB_HY2_ENABLE|SB_TUIC_ENABLE|SB_ANYTLS_ENABLE|SB_REALITY_ENABLE|SB_SS_ENABLE|SB_HY2_PORT|SB_TUIC_PORT|SB_ANYTLS_PORT|SB_REALITY_PORT|SB_SS_PORT|SB_REALITY_PRIV|SB_REALITY_PUB|SB_REALITY_SID|SB_ANYTLS_PSK|SB_TUIC_UUID|SB_TUIC_PSK|SB_HY2_PSK|SB_SS_PSK|SB_ANYTLS_USER|SB_SNI|SB_CERT_FILE|SB_KEY_FILE|TRAFFIC_IN|TRAFFIC_OUT) ;;
             *) return 1 ;;
         esac
         case "$line" in
@@ -1181,6 +1181,7 @@ load_conf() {
     SB_REALITY_PORT="${SB_REALITY_PORT:-}"; SB_SS_PORT="${SB_SS_PORT:-}"
     SB_REALITY_PRIV="${SB_REALITY_PRIV:-}"; SB_REALITY_PUB="${SB_REALITY_PUB:-}"; SB_REALITY_SID="${SB_REALITY_SID:-}"
     SB_ANYTLS_PSK="${SB_ANYTLS_PSK:-}"; SB_TUIC_UUID="${SB_TUIC_UUID:-}"; SB_TUIC_PSK="${SB_TUIC_PSK:-}"
+    SB_HY2_PSK="${SB_HY2_PSK:-}"; SB_SS_PSK="${SB_SS_PSK:-}"; SB_ANYTLS_USER="${SB_ANYTLS_USER:-argov}"
     SB_SNI="${SB_SNI:-addons.mozilla.org}"
     SB_CERT_FILE="${SB_CERT_FILE:-/etc/sing-box/certs/fullchain.pem}"; SB_KEY_FILE="${SB_KEY_FILE:-/etc/sing-box/certs/privkey.pem}"
     TRAFFIC_IN="${TRAFFIC_IN:-0}"; TRAFFIC_OUT="${TRAFFIC_OUT:-0}"
@@ -1217,6 +1218,7 @@ save_conf() {
         save_var SB_REALITY_PORT "$SB_REALITY_PORT"; save_var SB_SS_PORT "$SB_SS_PORT"
         save_var SB_REALITY_PRIV "$SB_REALITY_PRIV"; save_var SB_REALITY_PUB "$SB_REALITY_PUB"; save_var SB_REALITY_SID "$SB_REALITY_SID"
         save_var SB_ANYTLS_PSK "$SB_ANYTLS_PSK"; save_var SB_TUIC_UUID "$SB_TUIC_UUID"; save_var SB_TUIC_PSK "$SB_TUIC_PSK"
+        save_var SB_HY2_PSK "$SB_HY2_PSK"; save_var SB_SS_PSK "$SB_SS_PSK"; save_var SB_ANYTLS_USER "$SB_ANYTLS_USER"
         save_var SB_SNI "$SB_SNI"; save_var SB_CERT_FILE "$SB_CERT_FILE"; save_var SB_KEY_FILE "$SB_KEY_FILE"
         save_var TRAFFIC_IN "$TRAFFIC_IN"; save_var TRAFFIC_OUT "$TRAFFIC_OUT"
     } > "$tmp" && mv -f "$tmp" "$USER_CONF"
@@ -5260,31 +5262,31 @@ delete_sb_protocol() {
     load_conf
     echo ""
     echo -e "  ${white}选择要删除的 Sing-box 协议:${re}"
-    local idx=1
-    [ "${SB_HY2_ENABLE:-false}" = "true" ]  && { echo -e "  ${green}${idx}${re}. Hysteria2"; idx=$((idx+1)); }
-    [ "${SB_TUIC_ENABLE:-false}" = "true" ] && { echo -e "  ${green}${idx}${re}. TUIC"; idx=$((idx+1)); }
-    [ "${SB_ANYTLS_ENABLE:-false}" = "true" ] && { echo -e "  ${green}${idx}${re}. AnyTLS"; idx=$((idx+1)); }
-    [ "${SB_REALITY_ENABLE:-false}" = "true" ] && { echo -e "  ${green}${idx}${re}. Reality"; idx=$((idx+1)); }
-    [ "${SB_SS_ENABLE:-false}" = "true" ] && { echo -e "  ${green}${idx}${re}. Shadowsocks"; idx=$((idx+1)); }
-    [ "$idx" = 1 ] && { yellow_msg "无协议可删除"; sleep 1; return; }
+    # 构建动态映射：显示编号 → 协议 key
+    local -a proto_list=()
+    [ "${SB_HY2_ENABLE:-false}"   = "true" ] && proto_list+=("HY2")
+    [ "${SB_TUIC_ENABLE:-false}"  = "true" ] && proto_list+=("TUIC")
+    [ "${SB_ANYTLS_ENABLE:-false}" = "true" ] && proto_list+=("ANYTLS")
+    [ "${SB_REALITY_ENABLE:-false}" = "true" ] && proto_list+=("REALITY")
+    [ "${SB_SS_ENABLE:-false}"    = "true" ] && proto_list+=("SS")
+    if [ ${#proto_list[@]} -eq 0 ]; then
+        yellow_msg "无协议可删除"; sleep 1; return
+    fi
+    local i=1
+    for p in "${proto_list[@]}"; do
+        echo -e "  ${green}${i}${re}. ${p}"
+        i=$((i+1))
+    done
     echo -ne "  输入序号(空格分隔): "; read nums
     for n in $nums; do
-        case "$n" in
-            1)
-                [ "${SB_HY2_ENABLE:-false}" = "true" ] && { SB_HY2_ENABLE=false; SB_HY2_PORT=; SB_HY2_PSK=; echo "  → HY2 已删除"; }
-                ;;
-            2)
-                [ "${SB_TUIC_ENABLE:-false}" = "true" ] && { SB_TUIC_ENABLE=false; SB_TUIC_PORT=; echo "  → TUIC 已删除"; }
-                ;;
-            3)
-                [ "${SB_ANYTLS_ENABLE:-false}" = "true" ] && { SB_ANYTLS_ENABLE=false; SB_ANYTLS_PORT=; echo "  → AnyTLS 已删除"; }
-                ;;
-            4)
-                [ "${SB_REALITY_ENABLE:-false}" = "true" ] && { SB_REALITY_ENABLE=false; SB_REALITY_PORT=; echo "  → Reality 已删除"; }
-                ;;
-            5)
-                [ "${SB_SS_ENABLE:-false}" = "true" ] && { SB_SS_ENABLE=false; SB_SS_PORT=; echo "  → SS 已删除"; }
-                ;;
+        [ "$n" -lt 1 ] || [ "$n" -gt "${#proto_list[@]}" ] && { echo "  → 序号 $n 无效，跳过"; continue; }
+        local key="${proto_list[$((n-1))]}"
+        case "$key" in
+            HY2)    SB_HY2_ENABLE=false; SB_HY2_PORT=; SB_HY2_PSK=; echo "  → HY2 已删除" ;;
+            TUIC)   SB_TUIC_ENABLE=false; SB_TUIC_PORT=; echo "  → TUIC 已删除" ;;
+            ANYTLS) SB_ANYTLS_ENABLE=false; SB_ANYTLS_PORT=; echo "  → AnyTLS 已删除" ;;
+            REALITY) SB_REALITY_ENABLE=false; SB_REALITY_PORT=; echo "  → Reality 已删除" ;;
+            SS)     SB_SS_ENABLE=false; SB_SS_PORT=; SB_SS_PSK=; echo "  → SS 已删除" ;;
         esac
     done
     # 如果没有任何协议了，禁用 Sing-box
