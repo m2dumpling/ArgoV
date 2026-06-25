@@ -267,150 +267,177 @@ EOF
 }
 build_singbox_config() {
     mkdir -p "$SB_WORK_DIR" 2>/dev/null
-    # v2: 自动同步每用户端口和凭证
     sb_sync_users 2>/dev/null || true
-    local tmp_inbounds; tmp_inbounds=$(mktemp -t sbin.XXXXXX)
+    local TEMP_INBOUNDS; TEMP_INBOUNDS=$(mktemp -t sbin.XXXXXX)
+    > "$TEMP_INBOUNDS"
     local need_comma=false
 
-    # HY2 inbound
+    # === HY2 (singbox-deploy 同款模板) ===
     if [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ -n "${SB_HY2_PORT:-}" ]; then
-        local hop_cfg=""
-        if [ "${SB_HY2_HOP_ENABLE:-false}" = "true" ] && [ -n "${SB_HY2_HOP_START:-}" ] && [ -n "${SB_HY2_HOP_END:-}" ]; then
-            hop_cfg=", \"transport\": { \"udp\": {"
-            if [ "${SB_HY2_HOP_MODE:-fixed}" = "random" ]; then
-                hop_cfg="${hop_cfg} \"minHopInterval\": \"${SB_HY2_HOP_MIN:-10}s\", \"maxHopInterval\": \"${SB_HY2_HOP_MAX:-30}s\""
-            else
-                hop_cfg="${hop_cfg} \"hopInterval\": \"${SB_HY2_HOP_INTERVAL:-30}s\""
-            fi
-            hop_cfg="${hop_cfg} } }"
-        fi
-        cat >> "$tmp_inbounds" << SBHY2
+        $need_comma && echo "," >> "$TEMP_INBOUNDS"
+        cat >> "$TEMP_INBOUNDS" <<'INBOUND_HY2'
     {
       "type": "hysteria2",
       "tag": "sb-hy2",
       "listen": "::",
-      "listen_port": ${SB_HY2_PORT},
-      "users": [ { "password": "${SB_HY2_PSK:-}" } ],
+      "listen_port": __SB_HY2_PORT__,
+      "users": [ { "password": "__SB_HY2_PSK__" } ],
+__SB_HY2_TRANSPORT__
       "tls": {
         "enabled": true,
         "alpn": ["h3"],
-        "certificate_path": "${SB_CERT_FILE}",
-        "key_path": "${SB_KEY_FILE}"
-      }$(printf '%s' "$hop_cfg")
+        "certificate_path": "__SB_CERT_FILE__",
+        "key_path": "__SB_KEY_FILE__"
+      }
     }
-SBHY2
+INBOUND_HY2
+        sed -i "s|__SB_HY2_PORT__|${SB_HY2_PORT}|g" "$TEMP_INBOUNDS"
+        sed -i "s|\"__SB_HY2_PSK__\"|\"${SB_HY2_PSK:-}\"|g" "$TEMP_INBOUNDS"
+        sed -i "s|__SB_CERT_FILE__|${SB_CERT_FILE}|g" "$TEMP_INBOUNDS"
+        sed -i "s|__SB_KEY_FILE__|${SB_KEY_FILE}|g" "$TEMP_INBOUNDS"
+        # 端口跳跃 transport
+        if [ "${SB_HY2_HOP_ENABLE:-false}" = "true" ] && [ -n "${SB_HY2_HOP_START:-}" ]; then
+            local hop_json
+            if [ "${SB_HY2_HOP_MODE:-fixed}" = "random" ]; then
+                hop_json="\\\"transport\\\": { \\\"udp\\\": { \\\"minHopInterval\\\": \\\"${SB_HY2_HOP_MIN:-10}s\\\", \\\"maxHopInterval\\\": \\\"${SB_HY2_HOP_MAX:-30}s\\\" } },"
+            else
+                hop_json="\\\"transport\\\": { \\\"udp\\\": { \\\"hopInterval\\\": \\\"${SB_HY2_HOP_INTERVAL:-30}s\\\" } },"
+            fi
+            sed -i "s|__SB_HY2_TRANSPORT__|${hop_json}|g" "$TEMP_INBOUNDS"
+        else
+            sed -i "/__SB_HY2_TRANSPORT__/d" "$TEMP_INBOUNDS"
+        fi
         need_comma=true
     fi
 
-    # TUIC inbound
+    # === TUIC (singbox-deploy 同款模板) ===
     if [ "${SB_TUIC_ENABLE:-false}" = "true" ] && [ -n "${SB_TUIC_PORT:-}" ]; then
-        $need_comma && echo "," >> "$tmp_inbounds"
-        cat >> "$tmp_inbounds" << SBTUIC
+        $need_comma && echo "," >> "$TEMP_INBOUNDS"
+        cat >> "$TEMP_INBOUNDS" <<'INBOUND_TUIC'
     {
       "type": "tuic",
       "tag": "sb-tuic",
       "listen": "::",
-      "listen_port": ${SB_TUIC_PORT},
-      "users": [ { "uuid": "${SB_TUIC_UUID:-}", "password": "${SB_TUIC_PSK:-}" } ],
+      "listen_port": __SB_TUIC_PORT__,
+      "users": [ { "uuid": "__SB_TUIC_UUID__", "password": "__SB_TUIC_PSK__" } ],
       "congestion_control": "bbr",
       "tls": {
         "enabled": true,
         "alpn": ["h3"],
-        "certificate_path": "${SB_CERT_FILE}",
-        "key_path": "${SB_KEY_FILE}"
+        "certificate_path": "__SB_CERT_FILE__",
+        "key_path": "__SB_KEY_FILE__"
       }
     }
-SBTUIC
+INBOUND_TUIC
+        sed -i "s|__SB_TUIC_PORT__|${SB_TUIC_PORT}|g" "$TEMP_INBOUNDS"
+        sed -i "s|\"__SB_TUIC_UUID__\"|\"${SB_TUIC_UUID:-}\"|g" "$TEMP_INBOUNDS"
+        sed -i "s|\"__SB_TUIC_PSK__\"|\"${SB_TUIC_PSK:-}\"|g" "$TEMP_INBOUNDS"
+        sed -i "s|__SB_CERT_FILE__|${SB_CERT_FILE}|g" "$TEMP_INBOUNDS"
+        sed -i "s|__SB_KEY_FILE__|${SB_KEY_FILE}|g" "$TEMP_INBOUNDS"
         need_comma=true
     fi
 
-    # AnyTLS Reality inbound
+    # === AnyTLS Reality (singbox-deploy 1:1 复刻) ===
     if [ "${SB_ANYTLS_ENABLE:-false}" = "true" ] && [ -n "${SB_ANYTLS_PORT:-}" ]; then
-        $need_comma && echo "," >> "$tmp_inbounds"
-        cat >> "$tmp_inbounds" << SBANYTLS
+        $need_comma && echo "," >> "$TEMP_INBOUNDS"
+        cat >> "$TEMP_INBOUNDS" <<'INBOUND_ANYTLS'
     {
       "type": "anytls",
       "tag": "sb-anytls",
       "listen": "::",
-      "listen_port": ${SB_ANYTLS_PORT},
-      "users": [ { "name": "${SB_ANYTLS_USER:-argov}", "password": "${SB_ANYTLS_PSK:-}" } ],
+      "listen_port": __SB_ANYTLS_PORT__,
+      "users": [ { "name": "__SB_ANYTLS_USER__", "password": "__SB_ANYTLS_PSK__" } ],
       "padding_scheme": [],
       "tls": {
         "enabled": true,
-        "server_name": "${SB_SNI}",
+        "server_name": "__SB_SNI__",
         "reality": {
           "enabled": true,
-          "handshake": { "server": "${SB_SNI}", "server_port": 443 },
-          "private_key": "${SB_REALITY_PRIV}",
-          "short_id": ["${SB_REALITY_SID}"]
+          "handshake": { "server": "__SB_SNI__", "server_port": 443 },
+          "private_key": "__SB_REALITY_PRIV__",
+          "short_id": ["__SB_REALITY_SID__"]
         }
       }
     }
-SBANYTLS
+INBOUND_ANYTLS
+        sed -i "s|__SB_ANYTLS_PORT__|${SB_ANYTLS_PORT}|g" "$TEMP_INBOUNDS"
+        sed -i "s|\"__SB_ANYTLS_USER__\"|\"${SB_ANYTLS_USER:-argov}\"|g" "$TEMP_INBOUNDS"
+        sed -i "s|\"__SB_ANYTLS_PSK__\"|\"${SB_ANYTLS_PSK:-}\"|g" "$TEMP_INBOUNDS"
+        sed -i "s|__SB_SNI__|${SB_SNI:-addons.mozilla.org}|g" "$TEMP_INBOUNDS"
+        sed -i "s|\"__SB_REALITY_PRIV__\"|\"${SB_REALITY_PRIV:-}\"|g" "$TEMP_INBOUNDS"
+        sed -i "s|\"__SB_REALITY_SID__\"|\"${SB_REALITY_SID:-}\"|g" "$TEMP_INBOUNDS"
         need_comma=true
     fi
 
-    # VLESS Reality inbound (Sing-box)
+    # === VLESS Reality (singbox-deploy 1:1 复刻) ===
     if [ "${SB_REALITY_ENABLE:-false}" = "true" ] && [ -n "${SB_REALITY_PORT:-}" ]; then
-        $need_comma && echo "," >> "$tmp_inbounds"
-        cat >> "$tmp_inbounds" << SBVLESS
+        $need_comma && echo "," >> "$TEMP_INBOUNDS"
+        cat >> "$TEMP_INBOUNDS" <<'INBOUND_VLESS'
     {
       "type": "vless",
       "tag": "sb-reality",
       "listen": "::",
-      "listen_port": ${SB_REALITY_PORT},
-      "users": [ { "uuid": "${UUID_CUSTOM:-$(get_uuid)}", "flow": "xtls-rprx-vision" } ],
+      "listen_port": __SB_REALITY_PORT__,
+      "users": [ { "uuid": "__SB_REALITY_UUID__", "flow": "xtls-rprx-vision" } ],
       "tls": {
         "enabled": true,
-        "server_name": "${SB_SNI}",
+        "server_name": "__SB_SNI__",
         "reality": {
           "enabled": true,
-          "handshake": { "server": "${SB_SNI}", "server_port": 443 },
-          "private_key": "${SB_REALITY_PRIV}",
-          "short_id": ["${SB_REALITY_SID}"]
+          "handshake": { "server": "__SB_SNI__", "server_port": 443 },
+          "private_key": "__SB_REALITY_PRIV__",
+          "short_id": ["__SB_REALITY_SID__"]
         }
       }
     }
-SBVLESS
+INBOUND_VLESS
+        sed -i "s|__SB_REALITY_PORT__|${SB_REALITY_PORT}|g" "$TEMP_INBOUNDS"
+        sed -i "s|\"__SB_REALITY_UUID__\"|\"${UUID_CUSTOM:-$(get_uuid)}\"|g" "$TEMP_INBOUNDS"
+        sed -i "s|__SB_SNI__|${SB_SNI:-addons.mozilla.org}|g" "$TEMP_INBOUNDS"
+        sed -i "s|\"__SB_REALITY_PRIV__\"|\"${SB_REALITY_PRIV:-}\"|g" "$TEMP_INBOUNDS"
+        sed -i "s|\"__SB_REALITY_SID__\"|\"${SB_REALITY_SID:-}\"|g" "$TEMP_INBOUNDS"
         need_comma=true
     fi
 
-    # SS inbound (Sing-box)
+    # === Shadowsocks (singbox-deploy 同款模板) ===
     if [ "${SB_SS_ENABLE:-false}" = "true" ] && [ -n "${SB_SS_PORT:-}" ]; then
-        $need_comma && echo "," >> "$tmp_inbounds"
-        cat >> "$tmp_inbounds" << SBSS
+        $need_comma && echo "," >> "$TEMP_INBOUNDS"
+        cat >> "$TEMP_INBOUNDS" <<'INBOUND_SS'
     {
       "type": "shadowsocks",
       "tag": "sb-ss",
       "listen": "::",
-      "listen_port": ${SB_SS_PORT},
-      "method": "${SS_METHOD:-aes-256-gcm}",
-      "password": "${SB_SS_PSK:-}"
+      "listen_port": __SB_SS_PORT__,
+      "method": "__SB_SS_METHOD__",
+      "password": "__SB_SS_PSK__"
     }
-SBSS
+INBOUND_SS
+        sed -i "s|__SB_SS_PORT__|${SB_SS_PORT}|g" "$TEMP_INBOUNDS"
+        sed -i "s|\"__SB_SS_METHOD__\"|\"${SS_METHOD:-aes-256-gcm}\"|g" "$TEMP_INBOUNDS"
+        sed -i "s|\"__SB_SS_PSK__\"|\"${SB_SS_PSK:-}\"|g" "$TEMP_INBOUNDS"
         need_comma=true
     fi
 
     # 每用户独立 inbound (v2 流量配额)
-    local per_user_need_comma; per_user_need_comma=$(sb_build_per_user_inbounds "$tmp_inbounds" "$need_comma")
+    local per_user_need_comma; per_user_need_comma=$(sb_build_per_user_inbounds "$TEMP_INBOUNDS" "$need_comma")
     [ "$per_user_need_comma" = "true" ] && need_comma=true
 
-    # 拼接完整 config.json
-    cat > "$SB_CONFIG_FILE" << 'SBCONFIGHEAD'
+    # 拼接最终 config.json
+    cat > "$SB_CONFIG_FILE" <<'SBCONFIGHEAD'
 {
   "log": { "level": "info", "timestamp": true },
   "ntp": { "enabled": true, "server": "time.apple.com", "server_port": 123, "interval": "30m" },
   "inbounds": [
 SBCONFIGHEAD
-    cat "$tmp_inbounds" >> "$SB_CONFIG_FILE"
-    cat >> "$SB_CONFIG_FILE" << 'SBCONFIGTAIL'
+    cat "$TEMP_INBOUNDS" >> "$SB_CONFIG_FILE"
+    cat >> "$SB_CONFIG_FILE" <<'SBCONFIGTAIL'
   ],
   "outbounds": [
     { "type": "direct", "tag": "direct-out" }
   ]
 }
 SBCONFIGTAIL
-    rm -f "$tmp_inbounds" 2>/dev/null
+    rm -f "$TEMP_INBOUNDS" 2>/dev/null
 
     # 验证
     if command -v sing-box >/dev/null 2>&1; then
@@ -481,152 +508,116 @@ PYEOF
 }
 
 sb_build_per_user_inbounds() {
-    # 生成每用户 Sing-box inbound JSON 块, 追加到 $1 (tmp inbounds 文件)
-    local tmp_file="$1"
-    [ ! -f "$ARGOV_USERS_FILE" ] && return
-    local need_comma="$2"
+    local tmp_file="$1" need_comma="$2"
+    [ ! -f "$ARGOV_USERS_FILE" ] && { echo "$need_comma"; return; }
+    local py; py=$(py_bin); [ -z "$py" ] && { echo "$need_comma"; return; }
 
-    local users_json; users_json=$(jq -c '.users[] | select(.name != "default")' "$ARGOV_USERS_FILE" 2>/dev/null)
-    [ -z "$users_json" ] && return
+    # Python 生成每用户 inbound JSON (避免 heredoc 展开问题)
+    local per_user_json; per_user_json=$("$py" - "$ARGOV_USERS_FILE" "$need_comma" \
+        "${SB_HY2_ENABLE:-false}" "${SB_HY2_HOP_ENABLE:-false}" "${SB_HY2_HOP_START:-}" "${SB_HY2_HOP_END:-}" \
+        "${SB_HY2_HOP_MODE:-fixed}" "${SB_HY2_HOP_INTERVAL:-30}" "${SB_HY2_HOP_MIN:-10}" "${SB_HY2_HOP_MAX:-30}" \
+        "${SB_TUIC_ENABLE:-false}" "${SB_ANYTLS_ENABLE:-false}" "${SB_REALITY_ENABLE:-false}" "${SB_SS_ENABLE:-false}" \
+        "${SB_CERT_FILE}" "${SB_KEY_FILE}" "${SB_SNI:-addons.mozilla.org}" "${SB_REALITY_PRIV:-}" "${SB_REALITY_SID:-}" \
+        "${SS_METHOD:-aes-256-gcm}" << 'PYPERUSER'
+import json, sys
+users_file = sys.argv[1]
+prev_comma  = sys.argv[2] == 'true'
+hy2_enable    = sys.argv[3] == 'true'
+hy2_hop_en    = sys.argv[4] == 'true'
+hy2_hop_start = sys.argv[5]
+hy2_hop_end   = sys.argv[6]
+hy2_hop_mode  = sys.argv[7]
+hy2_hop_intv  = sys.argv[8]
+hy2_hop_min   = sys.argv[9]
+hy2_hop_max   = sys.argv[10]
+tuic_enable   = sys.argv[11] == 'true'
+anytls_enable = sys.argv[12] == 'true'
+reality_enable= sys.argv[13] == 'true'
+ss_enable     = sys.argv[14] == 'true'
+cert_file     = sys.argv[15]
+key_file      = sys.argv[16]
+sb_sni        = sys.argv[17]
+reality_priv  = sys.argv[18]
+reality_sid   = sys.argv[19]
+ss_method     = sys.argv[20]
 
-    while IFS= read -r user; do
-        [ -z "$user" ] && continue
-        local uname; uname=$(echo "$user" | jq -r '.name')
-        local sb_ports; sb_ports=$(echo "$user" | jq -c '.sb_ports // {}')
-        local sb_creds; sb_creds=$(echo "$user" | jq -c '.sb_creds // {}')
+with open(users_file) as f:
+    data = json.load(f)
 
-        # HY2 per-user
-        if [ "${SB_HY2_ENABLE:-false}" = "true" ]; then
-            local hy2_up; hy2_up=$(echo "$sb_ports" | jq -r '.hy2 // 0')
-            if [ "$hy2_up" -gt 0 ]; then
-                local hy2_pass; hy2_pass=$(echo "$sb_creds" | jq -r '.hy2_pass // ""')
-                $need_comma && echo "," >> "$tmp_file"
-                cat >> "$tmp_file" << SBUHY2
-    {
-      "type": "hysteria2",
-      "tag": "sb-hy2-${uname}",
-      "listen": "::",
-      "listen_port": ${hy2_up},
-      "users": [ { "password": "${hy2_pass}" } ],
-      "tls": {
-        "enabled": true,
-        "alpn": ["h3"],
-        "certificate_path": "${SB_CERT_FILE}",
-        "key_path": "${SB_KEY_FILE}"
-      }
-    }
-SBUHY2
-                need_comma=true
-            fi
-        fi
+inbounds = []
+for u in data.get('users', []):
+    name = u.get('name', 'default')
+    if name == 'default':
+        continue
+    ports = u.get('sb_ports', {})
+    creds = u.get('sb_creds', {})
 
-        # TUIC per-user
-        if [ "${SB_TUIC_ENABLE:-false}" = "true" ]; then
-            local tuic_up; tuic_up=$(echo "$sb_ports" | jq -r '.tuic // 0')
-            if [ "$tuic_up" -gt 0 ]; then
-                local tuic_uid; tuic_uid=$(echo "$sb_creds" | jq -r '.tuic_uuid // ""')
-                local tuic_pass; tuic_pass=$(echo "$sb_creds" | jq -r '.tuic_pass // ""')
-                $need_comma && echo "," >> "$tmp_file"
-                cat >> "$tmp_file" << SBUTUIC
-    {
-      "type": "tuic",
-      "tag": "sb-tuic-${uname}",
-      "listen": "::",
-      "listen_port": ${tuic_up},
-      "users": [ { "uuid": "${tuic_uid}", "password": "${tuic_pass}" } ],
-      "congestion_control": "bbr",
-      "tls": {
-        "enabled": true,
-        "alpn": ["h3"],
-        "certificate_path": "${SB_CERT_FILE}",
-        "key_path": "${SB_KEY_FILE}"
-      }
-    }
-SBUTUIC
-                need_comma=true
-            fi
-        fi
+    # HY2 per-user
+    if hy2_enable:
+        p = ports.get('hy2') or 0
+        if p > 0:
+            obj = {"type":"hysteria2","tag":f"sb-hy2-{name}","listen":"::","listen_port":p,
+                   "users":[{"password":creds.get('hy2_pass','')}],
+                   "tls":{"enabled":True,"alpn":["h3"],"certificate_path":cert_file,"key_path":key_file}}
+            if hy2_hop_en and hy2_hop_start and hy2_hop_end:
+                udp = {}
+                if hy2_hop_mode == 'random':
+                    udp = {"minHopInterval":f"{hy2_hop_min}s","maxHopInterval":f"{hy2_hop_max}s"}
+                else:
+                    udp = {"hopInterval":f"{hy2_hop_intv}s"}
+                obj["transport"] = {"udp":udp}
+            inbounds.append(obj)
 
-        # AnyTLS per-user
-        if [ "${SB_ANYTLS_ENABLE:-false}" = "true" ]; then
-            local anytls_up; anytls_up=$(echo "$sb_ports" | jq -r '.anytls // 0')
-            if [ "$anytls_up" -gt 0 ]; then
-                local anytls_pass; anytls_pass=$(echo "$sb_creds" | jq -r '.anytls_pass // ""')
-                $need_comma && echo "," >> "$tmp_file"
-                cat >> "$tmp_file" << SBUANYTLS
-    {
-      "type": "anytls",
-      "tag": "sb-anytls-${uname}",
-      "listen": "::",
-      "listen_port": ${anytls_up},
-      "users": [ { "name": "${uname}", "password": "${anytls_pass}" } ],
-      "padding_scheme": [],
-      "tls": {
-        "enabled": true,
-        "server_name": "${SB_SNI}",
-        "reality": {
-          "enabled": true,
-          "handshake": { "server": "${SB_SNI}", "server_port": 443 },
-          "private_key": "${SB_REALITY_PRIV}",
-          "short_id": ["${SB_REALITY_SID}"]
-        }
-      }
-    }
-SBUANYTLS
-                need_comma=true
-            fi
-        fi
+    # TUIC per-user
+    if tuic_enable:
+        p = ports.get('tuic') or 0
+        if p > 0:
+            inbounds.append({"type":"tuic","tag":f"sb-tuic-{name}","listen":"::","listen_port":p,
+                "users":[{"uuid":creds.get('tuic_uuid',''),"password":creds.get('tuic_pass','')}],
+                "congestion_control":"bbr",
+                "tls":{"enabled":True,"alpn":["h3"],"certificate_path":cert_file,"key_path":key_file}})
 
-        # Reality per-user
-        if [ "${SB_REALITY_ENABLE:-false}" = "true" ]; then
-            local reality_up; reality_up=$(echo "$sb_ports" | jq -r '.reality // 0')
-            if [ "$reality_up" -gt 0 ]; then
-                local r_uid; r_uid=$(echo "$user" | jq -r '.uuid // ""')
-                $need_comma && echo "," >> "$tmp_file"
-                cat >> "$tmp_file" << SBUREALITY
-    {
-      "type": "vless",
-      "tag": "sb-reality-${uname}",
-      "listen": "::",
-      "listen_port": ${reality_up},
-      "users": [ { "uuid": "${r_uid}", "flow": "xtls-rprx-vision" } ],
-      "tls": {
-        "enabled": true,
-        "server_name": "${SB_SNI}",
-        "reality": {
-          "enabled": true,
-          "handshake": { "server": "${SB_SNI}", "server_port": 443 },
-          "private_key": "${SB_REALITY_PRIV}",
-          "short_id": ["${SB_REALITY_SID}"]
-        }
-      }
-    }
-SBUREALITY
-                need_comma=true
-            fi
-        fi
+    # AnyTLS per-user
+    if anytls_enable:
+        p = ports.get('anytls') or 0
+        if p > 0:
+            inbounds.append({"type":"anytls","tag":f"sb-anytls-{name}","listen":"::","listen_port":p,
+                "users":[{"name":name,"password":creds.get('anytls_pass','')}],
+                "padding_scheme":[],
+                "tls":{"enabled":True,"server_name":sb_sni,
+                    "reality":{"enabled":True,"handshake":{"server":sb_sni,"server_port":443},
+                    "private_key":reality_priv,"short_id":[reality_sid]}}})
 
-        # SS per-user
-        if [ "${SB_SS_ENABLE:-false}" = "true" ]; then
-            local ss_up; ss_up=$(echo "$sb_ports" | jq -r '.ss // 0')
-            if [ "$ss_up" -gt 0 ]; then
-                local ss_pass; ss_pass=$(echo "$sb_creds" | jq -r '.ss_pass // ""')
-                $need_comma && echo "," >> "$tmp_file"
-                cat >> "$tmp_file" << SBUSS
-    {
-      "type": "shadowsocks",
-      "tag": "sb-ss-${uname}",
-      "listen": "::",
-      "listen_port": ${ss_up},
-      "method": "${SS_METHOD:-aes-256-gcm}",
-      "password": "${ss_pass}"
-    }
-SBUSS
-                need_comma=true
-            fi
-        fi
-    done <<< "$users_json"
-    echo "$need_comma"
+    # Reality per-user
+    if reality_enable:
+        p = ports.get('reality') or 0
+        if p > 0:
+            inbounds.append({"type":"vless","tag":f"sb-reality-{name}","listen":"::","listen_port":p,
+                "users":[{"uuid":u.get('uuid',''),"flow":"xtls-rprx-vision"}],
+                "tls":{"enabled":True,"server_name":sb_sni,
+                    "reality":{"enabled":True,"handshake":{"server":sb_sni,"server_port":443},
+                    "private_key":reality_priv,"short_id":[reality_sid]}}})
+
+    # SS per-user
+    if ss_enable:
+        p = ports.get('ss') or 0
+        if p > 0:
+            inbounds.append({"type":"shadowsocks","tag":f"sb-ss-{name}","listen":"::","listen_port":p,
+                "method":ss_method,"password":creds.get('ss_pass','')})
+
+for i, obj in enumerate(inbounds):
+    if i > 0 or prev_comma:
+        print(",", end="")
+    print(json.dumps(obj, indent=2, ensure_ascii=False))
+PYPERUSER
+    )
+
+    if [ -n "$per_user_json" ]; then
+        printf '%s' "$per_user_json" >> "$tmp_file"
+        echo "true"
+    else
+        echo "$need_comma"
+    fi
 }
 
 sb_collect_user_traffic() {
