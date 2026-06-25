@@ -2111,7 +2111,7 @@ def get_cache(token):
     if token:
         threading.Thread(target=lambda: refresh_cache(token), daemon=True).start()
     with CACHE_LOCK:
-        return CACHE.get(token) or CACHE.get('${SUB_TOKEN}')
+        return CACHE.get(token)  # 不 fallback 到 default, 避免限额用户拿到共享节点
 
 class ThreadedServer(ThreadingMixIn, HTTPServer):
     allow_reuse_address=True; daemon_threads=True
@@ -5833,6 +5833,7 @@ main_menu() {
                local utmp; utmp=$(mktemp /tmp/argov.XXXXXX)
                download_script_checked "https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh?r=$RANDOM$RANDOM" "$utmp" && bash "$utmp"; rm -f "$utmp"
                start_sub_server >/dev/null 2>&1 &
+               start_sb_stats_service >/dev/null 2>&1 &
                clear; continue ;;
             x|X) update_xray_core ;;
             9) echo -ne "  ${red}⚠ 确定卸载? (y/n): ${re}"; read cf
