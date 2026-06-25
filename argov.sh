@@ -739,12 +739,12 @@ for u in data.get('users', []):
     name = u.get('name', '')
     if name in user_traffic:
         # delta 模式: iptables 计数器是累积值, 只加增量
-        u.setdefault('sb_prev_in', 0)
-        u.setdefault('sb_prev_out', 0)
+        prev_in = u.get('sb_prev_in') or 0
+        prev_out = u.get('sb_prev_out') or 0
         cur_in = user_traffic[name]['up']
         cur_out = user_traffic[name]['down']
-        delta_up = cur_out - u['sb_prev_out']
-        delta_down = cur_in - u['sb_prev_in']
+        delta_up = cur_out - prev_out
+        delta_down = cur_in - prev_in
         if delta_up > 0:
             u['used_up'] = u.get('used_up', 0) + delta_up
         if delta_down > 0:
