@@ -681,9 +681,11 @@ start_sb_stats_service() {
     # 安装 argov-sb-stats 守护进程 (每60s采集 Sing-box 用户流量)
     cat > "${WORK_DIR}/sb_stats.sh" << 'SBSTATSEOF'
 #!/usr/bin/env bash
-set -e
 WORK_DIR="/etc/xray"
 ARGOV_USERS_FILE="/etc/xray/argov_users.json"
+ARGOV_CONF="/etc/xray/argov.conf"
+# 加载配置 (SB_ENABLE 等在这)
+[ -f "$ARGOV_CONF" ] && . "$ARGOV_CONF"
 while true; do
     sleep 60
     [ "${SB_ENABLE:-false}" != "true" ] && continue
