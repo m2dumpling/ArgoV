@@ -955,22 +955,18 @@ setup_traffic_counters() {
         done
     fi
 
-    # 清掉旧计数规则
-    while iptables -L INPUT -n --line-numbers 2>/dev/null | grep -q "argov-traffic"; do
-        local ln; ln=$(iptables -L INPUT -n --line-numbers 2>/dev/null | grep "argov-traffic" | head -1 | awk '{print $1}')
-        [ -n "$ln" ] && iptables -D INPUT "$ln" 2>/dev/null || break
-    done
-    while iptables -L OUTPUT -n --line-numbers 2>/dev/null | grep -q "argov-traffic"; do
-        local ln; ln=$(iptables -L OUTPUT -n --line-numbers 2>/dev/null | grep "argov-traffic" | head -1 | awk '{print $1}')
-        [ -n "$ln" ] && iptables -D OUTPUT "$ln" 2>/dev/null || break
-    done
-
-    # 对每个端口挂 INPUT/OUTPUT 计数规则
+    # 对每个端口挂 INPUT/OUTPUT 计数规则 (只添加不删除，保持计数器累积)
     for p in $ports; do
-        iptables -I INPUT -p tcp --dport "$p" -m comment --comment "argov-traffic-in" 2>/dev/null || true
-        iptables -I INPUT -p udp --dport "$p" -m comment --comment "argov-traffic-in" 2>/dev/null || true
-        iptables -I OUTPUT -p tcp --sport "$p" -m comment --comment "argov-traffic-out" 2>/dev/null || true
-        iptables -I OUTPUT -p udp --sport "$p" -m comment --comment "argov-traffic-out" 2>/dev/null || true
+        # INPUT 规则
+        iptables -C INPUT -p tcp --dport "$p" -m comment --comment "argov-traffic-in" 2>/dev/null || \
+            iptables -I INPUT -p tcp --dport "$p" -m comment --comment "argov-traffic-in" 2>/dev/null || true
+        iptables -C INPUT -p udp --dport "$p" -m comment --comment "argov-traffic-in" 2>/dev/null || \
+            iptables -I INPUT -p udp --dport "$p" -m comment --comment "argov-traffic-in" 2>/dev/null || true
+        # OUTPUT 规则
+        iptables -C OUTPUT -p tcp --sport "$p" -m comment --comment "argov-traffic-out" 2>/dev/null || \
+            iptables -I OUTPUT -p tcp --sport "$p" -m comment --comment "argov-traffic-out" 2>/dev/null || true
+        iptables -C OUTPUT -p udp --sport "$p" -m comment --comment "argov-traffic-out" 2>/dev/null || \
+            iptables -I OUTPUT -p udp --sport "$p" -m comment --comment "argov-traffic-out" 2>/dev/null || true
     done
 }
 
@@ -1398,6 +1394,14 @@ restart_user_runtime() {
         rc-service xray restart 2>/dev/null || true
     else
         systemctl restart xray 2>/dev/null || true
+    fi
+    # v2: 同步 Sing-box 每用户端口 + 重建设置 + 启动流量守护进程
+    if [ "${SB_ENABLE:-false}" = "true" ] && sb_is_installed 2>/dev/null; then
+        sb_sync_users 2>/dev/null || true
+        build_singbox_config 2>/dev/null || true
+        sb_restart 2>/dev/null || true
+        setup_traffic_counters 2>/dev/null || true
+        start_sb_stats_service 2>/dev/null || true
     fi
     start_sub_server >/dev/null 2>&1 || true
     start_stats_service >/dev/null 2>&1 || true
@@ -2262,37 +2266,34 @@ if $JQ -e '.inbounds[]|select(.tag=="hy2")' "$CFG" >/dev/null 2>&1 && [ -n "$ip"
     hmport_qs=""; [ -n "$hmport" ] && hmport_qs="&mport=${hmport}"
     [ -n "$hport" ] && links+="hysteria2://${uuid}@${ip}:${hport}?sni=${hsni}&insecure=1&allowInsecure=1&alpn=h3${hmport_qs}#${NODE_NAME}-Hy2"$'\n'
 fi
-# ===== Sing-box 节点 =====
+# ===== Sing-box 节点 (仅 default 用户获取共享端口; 限额用户用专属端口) =====
 SB_CFG="/etc/sing-box/config.json"
 if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CFG" ] && [ -n "$ip" ]; then
     SB_SNI="${SB_SNI:-addons.mozilla.org}"
-    # HY2
-    if [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ -n "${SB_HY2_PORT:-}" ]; then
-        sb_hy2_pass=$($JQ -r '.inbounds[]|select(.type=="hysteria2").users[0].password//empty' "$SB_CFG" 2>/dev/null)
-        [ -n "$sb_hy2_pass" ] && links+="hy2://${sb_hy2_pass}@${ip}:${SB_HY2_PORT}?sni=${SB_SNI}&alpn=h3&insecure=1#${NODE_NAME}-HY2"$'\n'
-    fi
-    # TUIC
-    if [ "${SB_TUIC_ENABLE:-false}" = "true" ] && [ -n "${SB_TUIC_PORT:-}" ]; then
-        [ -n "${SB_TUIC_UUID:-}" ] && links+="tuic://${SB_TUIC_UUID}:${SB_TUIC_PSK}@${ip}:${SB_TUIC_PORT}?congestion_control=bbr&alpn=h3&sni=${SB_SNI}&insecure=1#${NODE_NAME}-TUIC"$'\n'
-    fi
-    # AnyTLS
-    if [ "${SB_ANYTLS_ENABLE:-false}" = "true" ] && [ -n "${SB_ANYTLS_PORT:-}" ]; then
-        sb_any_pass="${SB_ANYTLS_PSK:-}"; sb_pb="${SB_REALITY_PUB:-}"; sb_sd="${SB_REALITY_SID:-}"
-        [ -n "$sb_any_pass" ] && links+="anytls://${sb_any_pass}@${ip}:${SB_ANYTLS_PORT}?security=reality&sni=${SB_SNI}&fp=chrome&pbk=${sb_pb}&sid=${sb_sd}#${NODE_NAME}-AnyTLS"$'\n'
-    fi
-    # Reality
-    if [ "${SB_REALITY_ENABLE:-false}" = "true" ] && [ -n "${SB_REALITY_PORT:-}" ]; then
-        sb_pbr="${SB_REALITY_PUB:-}"; sb_sdr="${SB_REALITY_SID:-}"
-        links+="vless://${uuid}@${ip}:${SB_REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SB_SNI}&pbk=${sb_pbr}&fp=chrome&sid=${sb_sdr}#${NODE_NAME}-Reality"$'\n'
-    fi
-    # SS
-    if [ "${SB_SS_ENABLE:-false}" = "true" ] && [ -n "${SB_SS_PORT:-}" ]; then
-        sb_ss_pass=$($JQ -r '.inbounds[]|select(.type=="shadowsocks").password//empty' "$SB_CFG" 2>/dev/null)
-        sb_ss_method=$($JQ -r '.inbounds[]|select(.type=="shadowsocks").method//"aes-256-gcm"' "$SB_CFG" 2>/dev/null)
-        [ -n "$sb_ss_pass" ] && { sb_ss_b64=$(printf '%s' "${sb_ss_method}:${sb_ss_pass}" | base64 -w0 2>/dev/null || printf '%s' "${sb_ss_method}:${sb_ss_pass}" | base64 | tr -d '\n'); links+="ss://${sb_ss_b64}@${ip}:${SB_SS_PORT}#${NODE_NAME}-SS"$'\n'; }
-    fi
-    # v2: 非默认用户获取自己专属的 Sing-box 节点 (独立端口+密码)
-    if [ "$IS_DEFAULT_USER" != "1" ]; then
+    if [ "$IS_DEFAULT_USER" = "1" ]; then
+        # 共享节点 — 仅 default 用户
+        if [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ -n "${SB_HY2_PORT:-}" ]; then
+            sb_hy2_pass=$($JQ -r '.inbounds[]|select(.type=="hysteria2" and (.tag=="sb-hy2" or .tag|startswith("sb-hy2")|not)).users[0].password//empty' "$SB_CFG" 2>/dev/null)
+            [ -n "$sb_hy2_pass" ] && links+="hy2://${sb_hy2_pass}@${ip}:${SB_HY2_PORT}?sni=${SB_SNI}&alpn=h3&insecure=1#${NODE_NAME}-HY2"$'\n'
+        fi
+        if [ "${SB_TUIC_ENABLE:-false}" = "true" ] && [ -n "${SB_TUIC_PORT:-}" ]; then
+            [ -n "${SB_TUIC_UUID:-}" ] && links+="tuic://${SB_TUIC_UUID}:${SB_TUIC_PSK}@${ip}:${SB_TUIC_PORT}?congestion_control=bbr&alpn=h3&sni=${SB_SNI}&insecure=1#${NODE_NAME}-TUIC"$'\n'
+        fi
+        if [ "${SB_ANYTLS_ENABLE:-false}" = "true" ] && [ -n "${SB_ANYTLS_PORT:-}" ]; then
+            sb_any_pass="${SB_ANYTLS_PSK:-}"; sb_pb="${SB_REALITY_PUB:-}"; sb_sd="${SB_REALITY_SID:-}"
+            [ -n "$sb_any_pass" ] && links+="anytls://${sb_any_pass}@${ip}:${SB_ANYTLS_PORT}?security=reality&sni=${SB_SNI}&fp=chrome&pbk=${sb_pb}&sid=${sb_sd}#${NODE_NAME}-AnyTLS"$'\n'
+        fi
+        if [ "${SB_REALITY_ENABLE:-false}" = "true" ] && [ -n "${SB_REALITY_PORT:-}" ]; then
+            sb_pbr="${SB_REALITY_PUB:-}"; sb_sdr="${SB_REALITY_SID:-}"
+            links+="vless://${uuid}@${ip}:${SB_REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SB_SNI}&pbk=${sb_pbr}&fp=chrome&sid=${sb_sdr}#${NODE_NAME}-Reality"$'\n'
+        fi
+        if [ "${SB_SS_ENABLE:-false}" = "true" ] && [ -n "${SB_SS_PORT:-}" ]; then
+            sb_ss_pass=$($JQ -r '.inbounds[]|select(.type=="shadowsocks" and (.tag=="sb-ss" or .tag|startswith("sb-ss")|not)).password//empty' "$SB_CFG" 2>/dev/null)
+            sb_ss_method=$($JQ -r '.inbounds[]|select(.type=="shadowsocks" and (.tag=="sb-ss" or .tag|startswith("sb-ss")|not)).method//"aes-256-gcm"' "$SB_CFG" 2>/dev/null)
+            [ -n "$sb_ss_pass" ] && { sb_ss_b64=$(printf '%s' "${sb_ss_method}:${sb_ss_pass}" | base64 -w0 2>/dev/null || printf '%s' "${sb_ss_method}:${sb_ss_pass}" | base64 | tr -d '\n'); links+="ss://${sb_ss_b64}@${ip}:${SB_SS_PORT}#${NODE_NAME}-SS"$'\n'; }
+        fi
+    else
+    # v2: 限额用户获取自己专属的 Sing-box 节点 (独立端口+密码, 可追踪流量)
         local sb_ports; sb_ports=$(printf '%s' "$USER_JSON" | $JQ -c '.sb_ports // {}' 2>/dev/null)
         local sb_creds; sb_creds=$(printf '%s' "$USER_JSON" | $JQ -c '.sb_creds // {}' 2>/dev/null)
         # HY2 per-user
@@ -2326,8 +2327,8 @@ if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CFG" ] && [ -n "$ip" ]; then
             local ss_m; ss_m="${SS_METHOD:-aes-256-gcm}"
             [ -n "$ss_pass" ] && { local ss_b64; ss_b64=$(printf '%s' "${ss_m}:${ss_pass}" | base64 -w0 2>/dev/null || printf '%s' "${ss_m}:${ss_pass}" | base64 | tr -d '\n'); links+="ss://${ss_b64}@${ip}:${ss_up}#${NODE_NAME}-SS"$'\n'; }
         fi
-    fi
-fi
+    fi   # close else (IS_DEFAULT_USER != 1)
+fi   # close SB_ENABLE check
 out=$(printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n')
 [ "$IS_DEFAULT_USER" = "1" ] && printf '%s' "$out" > /etc/xray/sub.txt
 
@@ -2983,7 +2984,7 @@ manage_users() {
                     echo ""
                     green_msg "User added."
                     echo -e "  URL: ${green}$(get_user_sub_url "$ip" "$token")${re}"
-                    echo -e "  Limited users receive only: VLESS Argo, VMess Argo, Reality, Hysteria2."
+                    echo -e "  Limited users receive only: VLESS Argo, VMess Argo, Reality, Hysteria2, Sing-box (dedicated port)."
                 else
                     red_msg "User already exists or cannot be added."
                 fi
