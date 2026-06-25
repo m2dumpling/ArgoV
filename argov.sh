@@ -829,9 +829,17 @@ sb_is_installed() { command -v sing-box >/dev/null 2>&1; }
 
 # SHA256 证书指纹 (证书固定 pinSHA256)
 cert_pin_sha256() {
+    # Hysteria2 URL 格式: 大写十六进制+冒号 (BA:88:45:17:A1:...)
     local cert="$1"
     [ -f "$cert" ] || return 1
-    openssl x509 -in "$cert" -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//;s/:/ /g' | tr '[:lower:]' '[:upper:]' | tr ' ' ':'
+    openssl x509 -in "$cert" -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//' | tr '[:lower:]' '[:upper:]'
+}
+cert_pin_sha256_b64() {
+    # Xray pinnedPeerCertificateChainSha256 格式: BASE64(SHA256 raw bytes)
+    local cert="$1"
+    [ -f "$cert" ] || return 1
+    openssl x509 -in "$cert" -outform DER -sha256 2>/dev/null | openssl dgst -sha256 -binary 2>/dev/null | base64 -w0 2>/dev/null || \
+    openssl x509 -in "$cert" -outform DER 2>/dev/null | openssl dgst -sha256 -binary 2>/dev/null | base64 | tr -d '\n'
 }
 
 # Sing-box HY2 端口跳跃
@@ -5888,6 +5896,13 @@ main_menu() {
     # 确保流量计数器已挂载（升级/重启后首次进入 ag 时补装）
     setup_traffic_counters 2>/dev/null || true
     collect_traffic 2>/dev/null || true
+    # 自动计算 HY2 证书指纹 (存量节点升级后补充)
+    if [ -z "${HY2_PIN_SHA256:-}" ] && [ -f "$HY2_CERT_FILE" ]; then
+        HY2_PIN_SHA256=$(cert_pin_sha256 "$HY2_CERT_FILE"); save_conf
+    fi
+    if [ -z "${SB_HY2_PIN_SHA256:-}" ] && [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ -f "$SB_CERT_FILE" ]; then
+        SB_HY2_PIN_SHA256=$(cert_pin_sha256 "$SB_CERT_FILE"); save_conf
+    fi
     # 无感升级：旧版 stats.py 无配额阻断逻辑 → 静默重新生成
     if [ -f "${WORK_DIR}/stats.py" ] && ! grep -qF 'disabled and sync_config' "${WORK_DIR}/stats.py" 2>/dev/null; then
         start_stats_service >/dev/null 2>&1 &
