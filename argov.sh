@@ -2291,28 +2291,24 @@ SB_CFG="/etc/sing-box/config.json"
 if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CFG" ] && [ -n "$ip" ]; then
     SB_SNI="${SB_SNI:-addons.mozilla.org}"
     if [ "$IS_DEFAULT_USER" = "1" ]; then
-        # 共享节点 — 仅 default 用户
-        if [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ -n "${SB_HY2_PORT:-}" ]; then
-            sb_hy2_pass=$($JQ -r '.inbounds[]|select(.type=="hysteria2" and (.tag=="sb-hy2" or .tag|startswith("sb-hy2")|not)).users[0].password//empty' "$SB_CFG" 2>/dev/null)
-            local sb_hy2_hop=""
+        # 共享节点 — 仅 default 用户. 直接读 conf 变量, 不 jq 查 config.json
+        local sb_hy2_hop=""
         [ "${SB_HY2_HOP_ENABLE:-false}" = "true" ] && sb_hy2_hop="&mport=${SB_HY2_HOP_START}-${SB_HY2_HOP_END}"
-        [ -n "$sb_hy2_pass" ] && links+="hy2://${sb_hy2_pass}@${ip}:${SB_HY2_PORT}?sni=${SB_SNI}&alpn=h3&insecure=1${sb_hy2_hop}#${NODE_NAME}-HY2"$'\n'
+        if [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ -n "${SB_HY2_PORT:-}" ] && [ -n "${SB_HY2_PSK:-}" ]; then
+            links+="hy2://${SB_HY2_PSK}@${ip}:${SB_HY2_PORT}?sni=${SB_SNI}&alpn=h3&insecure=1${sb_hy2_hop}#${NODE_NAME}-HY2"$'\n'
         fi
-        if [ "${SB_TUIC_ENABLE:-false}" = "true" ] && [ -n "${SB_TUIC_PORT:-}" ]; then
-            [ -n "${SB_TUIC_UUID:-}" ] && links+="tuic://${SB_TUIC_UUID}:${SB_TUIC_PSK}@${ip}:${SB_TUIC_PORT}?congestion_control=bbr&alpn=h3&sni=${SB_SNI}&insecure=1#${NODE_NAME}-TUIC"$'\n'
+        if [ "${SB_TUIC_ENABLE:-false}" = "true" ] && [ -n "${SB_TUIC_PORT:-}" ] && [ -n "${SB_TUIC_UUID:-}" ]; then
+            links+="tuic://${SB_TUIC_UUID}:${SB_TUIC_PSK}@${ip}:${SB_TUIC_PORT}?congestion_control=bbr&alpn=h3&sni=${SB_SNI}&insecure=1#${NODE_NAME}-TUIC"$'\n'
         fi
-        if [ "${SB_ANYTLS_ENABLE:-false}" = "true" ] && [ -n "${SB_ANYTLS_PORT:-}" ]; then
-            sb_any_pass="${SB_ANYTLS_PSK:-}"; sb_pb="${SB_REALITY_PUB:-}"; sb_sd="${SB_REALITY_SID:-}"
-            [ -n "$sb_any_pass" ] && links+="anytls://${sb_any_pass}@${ip}:${SB_ANYTLS_PORT}?security=reality&sni=${SB_SNI}&fp=chrome&pbk=${sb_pb}&sid=${sb_sd}#${NODE_NAME}-AnyTLS"$'\n'
+        if [ "${SB_ANYTLS_ENABLE:-false}" = "true" ] && [ -n "${SB_ANYTLS_PORT:-}" ] && [ -n "${SB_ANYTLS_PSK:-}" ]; then
+            links+="anytls://${SB_ANYTLS_PSK}@${ip}:${SB_ANYTLS_PORT}?security=reality&sni=${SB_SNI}&fp=chrome&pbk=${SB_REALITY_PUB:-}&sid=${SB_REALITY_SID:-}#${NODE_NAME}-AnyTLS"$'\n'
         fi
         if [ "${SB_REALITY_ENABLE:-false}" = "true" ] && [ -n "${SB_REALITY_PORT:-}" ]; then
-            sb_pbr="${SB_REALITY_PUB:-}"; sb_sdr="${SB_REALITY_SID:-}"
-            links+="vless://${uuid}@${ip}:${SB_REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SB_SNI}&pbk=${sb_pbr}&fp=chrome&sid=${sb_sdr}#${NODE_NAME}-Reality"$'\n'
+            links+="vless://${uuid}@${ip}:${SB_REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SB_SNI}&pbk=${SB_REALITY_PUB:-}&fp=chrome&sid=${SB_REALITY_SID:-}#${NODE_NAME}-Reality"$'\n'
         fi
-        if [ "${SB_SS_ENABLE:-false}" = "true" ] && [ -n "${SB_SS_PORT:-}" ]; then
-            sb_ss_pass=$($JQ -r '.inbounds[]|select(.type=="shadowsocks" and (.tag=="sb-ss" or .tag|startswith("sb-ss")|not)).password//empty' "$SB_CFG" 2>/dev/null)
-            sb_ss_method=$($JQ -r '.inbounds[]|select(.type=="shadowsocks" and (.tag=="sb-ss" or .tag|startswith("sb-ss")|not)).method//"aes-256-gcm"' "$SB_CFG" 2>/dev/null)
-            [ -n "$sb_ss_pass" ] && { sb_ss_b64=$(printf '%s' "${sb_ss_method}:${sb_ss_pass}" | base64 -w0 2>/dev/null || printf '%s' "${sb_ss_method}:${sb_ss_pass}" | base64 | tr -d '\n'); links+="ss://${sb_ss_b64}@${ip}:${SB_SS_PORT}#${NODE_NAME}-SS"$'\n'; }
+        if [ "${SB_SS_ENABLE:-false}" = "true" ] && [ -n "${SB_SS_PORT:-}" ] && [ -n "${SB_SS_PSK:-}" ]; then
+            sb_ss_b64=$(printf '%s' "${SS_METHOD:-aes-256-gcm}:${SB_SS_PSK}" | base64 -w0 2>/dev/null || printf '%s' "${SS_METHOD:-aes-256-gcm}:${SB_SS_PSK}" | base64 | tr -d '\n')
+            links+="ss://${sb_ss_b64}@${ip}:${SB_SS_PORT}#${NODE_NAME}-SS"$'\n'
         fi
     else
     # v2: 限额用户获取自己专属的 Sing-box 节点 (独立端口+密码, 可追踪流量)
