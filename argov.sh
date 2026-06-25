@@ -738,10 +738,19 @@ for line in sys.stdin:
 for u in data.get('users', []):
     name = u.get('name', '')
     if name in user_traffic:
-        old_up = u.get('used_up', 0)
-        old_down = u.get('used_down', 0)
-        u['used_up'] = old_up + user_traffic[name]['up']
-        u['used_down'] = old_down + user_traffic[name]['down']
+        # delta 模式: iptables 计数器是累积值, 只加增量
+        u.setdefault('sb_prev_in', 0)
+        u.setdefault('sb_prev_out', 0)
+        cur_in = user_traffic[name]['up']
+        cur_out = user_traffic[name]['down']
+        delta_up = cur_out - u['sb_prev_out']
+        delta_down = cur_in - u['sb_prev_in']
+        if delta_up > 0:
+            u['used_up'] = u.get('used_up', 0) + delta_up
+        if delta_down > 0:
+            u['used_down'] = u.get('used_down', 0) + delta_down
+        u['sb_prev_in'] = cur_in
+        u['sb_prev_out'] = cur_out
         # 检查配额
         quota = u.get('quota_bytes', 0)
         if quota > 0:
@@ -955,17 +964,19 @@ setup_traffic_counters() {
         done
     fi
 
-    # 对每个端口挂 INPUT/OUTPUT 计数规则 (只添加不删除，保持计数器累积)
+    # 对每个端口挂 INPUT/OUTPUT 计数规则 (grep 检查 > iptables -C, 避免重复叠加)
     for p in $ports; do
-        # INPUT 规则
-        iptables -C INPUT -p tcp --dport "$p" -m comment --comment "argov-traffic-in" 2>/dev/null || \
+        # INPUT tcp
+        iptables -L INPUT -n 2>/dev/null | grep -q "dpt:$p.*argov-traffic-in" || \
             iptables -I INPUT -p tcp --dport "$p" -m comment --comment "argov-traffic-in" 2>/dev/null || true
-        iptables -C INPUT -p udp --dport "$p" -m comment --comment "argov-traffic-in" 2>/dev/null || \
+        # INPUT udp
+        iptables -L INPUT -n 2>/dev/null | grep -q "dpt:$p.*argov-traffic-in" || \
             iptables -I INPUT -p udp --dport "$p" -m comment --comment "argov-traffic-in" 2>/dev/null || true
-        # OUTPUT 规则
-        iptables -C OUTPUT -p tcp --sport "$p" -m comment --comment "argov-traffic-out" 2>/dev/null || \
+        # OUTPUT tcp
+        iptables -L OUTPUT -n 2>/dev/null | grep -q "spt:$p.*argov-traffic-out" || \
             iptables -I OUTPUT -p tcp --sport "$p" -m comment --comment "argov-traffic-out" 2>/dev/null || true
-        iptables -C OUTPUT -p udp --sport "$p" -m comment --comment "argov-traffic-out" 2>/dev/null || \
+        # OUTPUT udp
+        iptables -L OUTPUT -n 2>/dev/null | grep -q "spt:$p.*argov-traffic-out" || \
             iptables -I OUTPUT -p udp --sport "$p" -m comment --comment "argov-traffic-out" 2>/dev/null || true
     done
 }
