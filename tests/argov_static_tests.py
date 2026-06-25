@@ -413,7 +413,7 @@ require(
     "Hysteria2 must be managed by tag hy2",
 )
 require(
-    r'hysteria2://\$\{uuid\}@\$\{ip\}:\$\{hport\}\?sni=\$\{hsni\}&insecure=1&alpn=h3\$\{hmport_qs\}\$\{hy2_pin\}',
+    r'hysteria2://\$\{uuid\}@\$\{ip\}:\$\{hport\}\?sni=\$\{hsni\}&insecure=1&alpn=h3',
     "subscription generator must include built-in Hysteria2 links with self-signed TLS compatibility for local controllable users",
 )
 require(
