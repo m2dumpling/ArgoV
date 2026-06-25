@@ -850,11 +850,12 @@ apply_sb_hy2_hop_rules() {
     local shared_start="${SB_HY2_HOP_START:-47000}" shared_end="${SB_HY2_HOP_END:-48000}"
     iptables -t nat -A PREROUTING -p udp --dport "${shared_start}:${shared_end}" -j REDIRECT --to-ports "$port" -m comment --comment "argov-sb-hy2-hop" 2>/dev/null || true
 
-    # 每用户独立跳变范围 (port+40000 ~ port+41000)
+    # 每用户独立跳变范围 (偏移 = port+40000, 宽度 = 与共享一致)
+    local width=$((shared_end - shared_start))
     if [ -f "$ARGOV_USERS_FILE" ]; then
         jq -r '.users[] | select(.name!="default") | .sb_ports.hy2 // 0' "$ARGOV_USERS_FILE" 2>/dev/null | while read up; do
             [ "$up" = "0" ] && continue
-            local ustart=$((up + 40000)) uend=$((up + 41000))
+            local ustart=$((up + 40000)) uend=$((ustart + width))
             iptables -t nat -A PREROUTING -p udp --dport "${ustart}:${uend}" -j REDIRECT --to-ports "$up" -m comment --comment "argov-sb-hy2-hop" 2>/dev/null || true
         done
     fi
@@ -2330,7 +2331,8 @@ if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CFG" ] && [ -n "$ip" ]; then
         local hy2_up; hy2_up=$(echo "$sb_ports" | $JQ -r '.hy2 // 0')
         if [ "$hy2_up" -gt 0 ]; then
             local hy2_pass; hy2_pass=$(echo "$sb_creds" | $JQ -r '.hy2_pass // ""')
-            local per_hy2_ustart=$((hy2_up + 40000)) per_hy2_uend=$((hy2_up + 41000))
+            local per_hy2_width=$((${SB_HY2_HOP_END:-48000} - ${SB_HY2_HOP_START:-47000}))
+            local per_hy2_ustart=$((hy2_up + 40000)) per_hy2_uend=$((per_hy2_ustart + per_hy2_width))
             [ "${SB_HY2_HOP_ENABLE:-false}" = "true" ] && per_hy2_hop="&mport=${per_hy2_ustart}-${per_hy2_uend}"
             [ -n "$hy2_pass" ] && links+="hy2://${hy2_pass}@${ip}:${hy2_up}?sni=${SB_SNI}&alpn=h3&insecure=1${per_hy2_hop}#${NODE_NAME}-HY2"$'\n'
         fi
