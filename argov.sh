@@ -1592,7 +1592,7 @@ load_conf() {
     ARGO_PORT="${ARGO_PORT:-8080}"; VLESS_WS_PORT="${VLESS_WS_PORT:-8081}"
     VMESS_WS_PORT="${VMESS_WS_PORT:-8082}"
     CDN_PORT="${CDN_PORT:-443}"; CDN_DOMAIN="${CDN_DOMAIN:-$CDN_DEFAULT}"
-    ARGO_MODE="${ARGO_MODE:-temp}"; ARGO_AUTH="${ARGO_AUTH:-}"
+    ARGO_MODE="${ARGO_MODE:-temp}"; [ "$ARGO_MODE" = "skip" ] && SKIP_ARGO=1 || SKIP_ARGO=0; ARGO_AUTH="${ARGO_AUTH:-}"
     ARGO_FIXED_DOMAIN="${ARGO_FIXED_DOMAIN:-}"; UUID_CUSTOM="${UUID_CUSTOM:-}"; LAST_ARGO_DOMAIN="${LAST_ARGO_DOMAIN:-}"
     REALITY_PORT="${REALITY_PORT:-0}"; HY2_PORT="${HY2_PORT:-0}"; HY2_MPORT="${HY2_MPORT:-}"
     HY2_CONGESTION="${HY2_CONGESTION:-bbr}"; HY2_UP_MBPS="${HY2_UP_MBPS:-}"; HY2_DOWN_MBPS="${HY2_DOWN_MBPS:-}"; SS_PORT="${SS_PORT:-0}"
@@ -2860,9 +2860,10 @@ show_node() {
 # MODULE: service lifecycle
 start_services() {
     yellow_msg "Starting..."
-    systemctl start xray argov-tunnel argov-stats argov-sb-stats 2>/dev/null || true
+    systemctl start xray argov-stats argov-sb-stats 2>/dev/null || true
+    [ "$SKIP_ARGO" != "1" ] && systemctl start argov-tunnel 2>/dev/null || true
     rc-service xray start 2>/dev/null || true
-    rc-service argov-tunnel start 2>/dev/null || true
+    [ "$SKIP_ARGO" != "1" ] && rc-service argov-tunnel start 2>/dev/null || true
     rc-service argov-stats start 2>/dev/null || true
     rc-service argov-sb-stats start 2>/dev/null || true
     [ "${SB_ENABLE:-false}" = "true" ] && { sb_start; }
@@ -2874,9 +2875,10 @@ start_services() {
 }
 stop_services()  {
     yellow_msg "Stopping..."
-    systemctl stop xray argov-tunnel argov-stats argov-sb-stats 2>/dev/null || true
+    systemctl stop xray argov-stats argov-sb-stats 2>/dev/null || true
+    [ "$SKIP_ARGO" != "1" ] && systemctl stop argov-tunnel 2>/dev/null || true
     rc-service xray stop 2>/dev/null || true
-    rc-service argov-tunnel stop 2>/dev/null || true
+    [ "$SKIP_ARGO" != "1" ] && rc-service argov-tunnel stop 2>/dev/null || true
     rc-service argov-stats stop 2>/dev/null || true
     rc-service argov-sb-stats stop 2>/dev/null || true
     [ "${SB_ENABLE:-false}" = "true" ] && { sb_stop; }
@@ -2888,9 +2890,10 @@ stop_services()  {
 restart_services() {
     yellow_msg "Restarting..."
     rm -f "$TUNNEL_LOG"
-    systemctl restart xray argov-tunnel argov-stats argov-sb-stats 2>/dev/null || true
+    systemctl restart xray argov-stats argov-sb-stats 2>/dev/null || true
+    [ "$SKIP_ARGO" != "1" ] && systemctl restart argov-tunnel 2>/dev/null || true
     rc-service xray restart 2>/dev/null || true
-    rc-service argov-tunnel restart 2>/dev/null || true
+    [ "$SKIP_ARGO" != "1" ] && rc-service argov-tunnel restart 2>/dev/null || true
     rc-service argov-stats restart 2>/dev/null || true
     rc-service argov-sb-stats restart 2>/dev/null || true
     [ "${SB_ENABLE:-false}" = "true" ] && { sb_restart; }
@@ -3288,14 +3291,22 @@ interactive_install() {
 
     echo -e " ${white}━━━ ③ 客户端端口 ━━━${re}"; echo -e "  ${yellow}CF: 443 8443 2053 2083 2087 2096${re}"; echo -ne "  [${CDN_PORT}]: "; read n ; [ -n "$n" ] && CDN_PORT="$n"; echo -e "  → ${green}${CDN_PORT}${re}\n"
     echo -e " ${white}━━━ ④ UUID ━━━${re}"; echo -ne "  [自动生成]: "; read n ; [ -n "$n" ] && UUID_CUSTOM="$n"; echo ""
-    echo -e " ${white}━━━ ⑤ Argo 隧道 ━━━${re}"; echo -e "  ${green}1${re}. 临时     ${green}2${re}. 固定 Token"; echo -ne "  [1]: "; read tt 
-    case "${tt:-1}" in 2) echo -ne "  域名: "; read ARGO_FIXED_DOMAIN; echo -ne "  Token: "; read ARGO_AUTH
-           [ -n "$ARGO_FIXED_DOMAIN" ] && [ -n "$ARGO_AUTH" ] && ARGO_MODE="fixed-token" ;; esac; echo ""
+    echo -e " ${white}━━━ ⑤ Argo 隧道 (VLESS / VMess over CF) ━━━${re}"
+    echo -e "  ${green}1${re}. 临时域名 (trycloudflare.com)    ${green}2${re}. 固定 Token"
+    echo -e "  ${red}3${re}. 跳过 — 不安装 Argo 隧道，仅部署直连协议"
+    echo -ne "  [1]: "; read tt
+    case "${tt:-1}" in
+        2) echo -ne "  域名: "; read ARGO_FIXED_DOMAIN; echo -ne "  Token: "; read ARGO_AUTH
+           [ -n "$ARGO_FIXED_DOMAIN" ] && [ -n "$ARGO_AUTH" ] && ARGO_MODE="fixed-token" ;;
+        3) ARGO_MODE="skip"; echo -e "  → ${red}跳过 Argo 隧道, 仅部署直连协议${re}\n" ;;
+    esac; echo ""
 
-    echo -e " ${white}━━━ ⑥ 内部端口 ━━━${re}"; echo -e "  ${cyan}Argo:${ARGO_PORT}  VLESS:${VLESS_WS_PORT}  VMess:${VMESS_WS_PORT}${re}"
-    echo -ne "  起始端口 [回车跳过]: "; read bp 
-    if [ -n "$bp" ] && is_port "$bp"; then ARGO_PORT="$bp"; VLESS_WS_PORT=$((bp+1)); VMESS_WS_PORT=$((bp+2)); fi
-    echo ""
+    if [ "$ARGO_MODE" != "skip" ]; then
+        echo -e " ${white}━━━ ⑥ 内部端口 ━━━${re}"; echo -e "  ${cyan}Argo:${ARGO_PORT}  VLESS:${VLESS_WS_PORT}  VMess:${VMESS_WS_PORT}${re}"
+        echo -ne "  起始端口 [回车跳过]: "; read bp
+        if [ -n "$bp" ] && is_port "$bp"; then ARGO_PORT="$bp"; VLESS_WS_PORT=$((bp+1)); VMESS_WS_PORT=$((bp+2)); fi
+        echo ""
+    fi
     echo -e " ${white}━━━ ⑦ 订阅域名（可选）━━━${re}"
     echo -e "  ${yellow}输入已指向本机IP的域名，订阅URL变为 https://域名:端口/sub?token=xxx${re}"
     echo -e "  ${yellow}使用CF代理端口 2096，DNS开小黄云即可，无需Origin Rules${re}"
@@ -3387,8 +3398,11 @@ do_install() {
 
     yellow_msg "[3/6] 下载..."
     download_xray_zip_checked "$ARCH_ARG" "${WORK_DIR}/xray.zip" || { red_msg "Xray 下载失败，请检查网络或校验配置！"; exit 1; }
-    download_cloudflared_checked "$CF_ARCH" "${WORK_DIR}/argo" || { red_msg "cloudflared 下载失败，请检查网络或校验配置！"; exit 1; }
-    unzip -o "${WORK_DIR}/xray.zip" -d "$WORK_DIR">/dev/null 2>&1; chmod +x "${WORK_DIR}/xray" "${WORK_DIR}/argo"; rm -f "${WORK_DIR}/xray.zip"
+    if [ "$ARGO_MODE" != "skip" ]; then
+        download_cloudflared_checked "$CF_ARCH" "${WORK_DIR}/argo" || { red_msg "cloudflared 下载失败，请检查网络或校验配置！"; exit 1; }
+    fi
+    unzip -o "${WORK_DIR}/xray.zip" -d "$WORK_DIR">/dev/null 2>&1; chmod +x "${WORK_DIR}/xray"; rm -f "${WORK_DIR}/xray.zip"
+    [ "$ARGO_MODE" != "skip" ] && chmod +x "${WORK_DIR}/argo"
     install_qrencode; green_msg "  完成"
 
     yellow_msg "[4/6] 端口检测..."
@@ -3480,8 +3494,18 @@ Restart=on-failure
 WantedBy=multi-user.target
 EOF
     fi
-    rebuild_tunnel "$ARGO_MODE"; rm -f "$TUNNEL_LOG"; systemctl daemon-reload
-    systemctl enable xray argov-tunnel 2>/dev/null; systemctl restart xray argov-tunnel; sleep 5
+    if [ "$ARGO_MODE" != "skip" ]; then
+        rebuild_tunnel "$ARGO_MODE"; rm -f "$TUNNEL_LOG"
+        systemctl enable argov-tunnel 2>/dev/null
+    fi
+    systemctl daemon-reload
+    systemctl enable xray 2>/dev/null
+    if [ "$ARGO_MODE" != "skip" ]; then
+        systemctl restart xray argov-tunnel
+    else
+        systemctl restart xray
+    fi
+    sleep 5
     if [ "$ENABLE_HY2" = 1 ] && [ -n "$HY2_MPORT" ]; then
         if ! apply_hy2_hop_rules "$HY2_PORT" "$HY2_MPORT"; then
             clear_hy2_mport_config
@@ -5268,12 +5292,34 @@ add_hy2_protocol() {
         fi
     fi
 
-    echo -ne "  Port hopping range [enter disable, e.g. 5000-6000]: "; read hm 
-    if [ -n "$hm" ]; then
-        if is_port_range "$hm"; then
-            h_mport="$hm"
+    # 端口跳跃 (Hi_Hysteria 同款交互)
+    echo ""
+    echo -e "  ${yellow}端口跳跃 (Port Hopping)?${re}"
+    echo -e "  Tip: 避免长时单端口 UDP 被限速/QoS/断流"
+    echo -e "  ${green}1${re}. 启用 (推荐)    ${green}2${re}. 跳过"
+    echo -ne "  → [2]: "; read hop_yn
+    if [ "${hop_yn:-2}" = "1" ]; then
+        while true; do
+            echo -ne "  起始端口 [47000]: "; read hs
+            [ -z "$hs" ] && hs=47000
+            is_port "$hs" || { echo -e "  ${red}端口范围错误${re}"; continue; }
+            echo -ne "  结束端口 [48000]: "; read he
+            [ -z "$he" ] && he=48000
+            is_port "$he" || { echo -e "  ${red}端口范围错误${re}"; continue; }
+            [ "$hs" -ge "$he" ] && { echo -e "  ${red}起始必须小于结束${re}"; continue; }
+            h_mport="${hs}-${he}"
+            break
+        done
+        echo -e "  ${yellow}跳跃时间模式:${re}"
+        echo -e "  ${green}1${re}. 固定间隔    ${green}2${re}. 随机间隔"
+        echo -ne "  → [1]: "; read hmode
+        if [ "${hmode:-1}" = "2" ]; then
+            echo -ne "  最小间隔(秒) [10]: "; read hmin
+            echo -ne "  最大间隔(秒) [30]: "; read hmax
+            echo -e "  随机间隔: ${green}${hmin:-10}s ~ ${hmax:-30}s${re}"
         else
-            red_msg "Invalid port hopping range, keep disabled."
+            echo -ne "  间隔(秒, ≥5) [30]: "; read hint
+            echo -e "  固定间隔: ${green}${hint:-30}s${re}"
         fi
     fi
 
