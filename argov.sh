@@ -3255,7 +3255,7 @@ select_protocols() {
                 [ "$ENABLE_SS" = 1 ] && { local sp; sp=$(find_free_port "$(shuf -i 10000-60000 -n 1)"); echo -ne "  ${cyan}Shadowsocks 端口 [随机 ${sp}]: ${re}"; read si; SS_PORT="${si:-$sp}"; echo -e "  → ${green}${SS_PORT}${re}"; }
                 echo ""
                 echo -e "  ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
-                echo -e "  ${white}即将安装:${re}  Argo: VLESS+VMess"
+                echo -e "  ${white}即将安装:${re}$([ "$ARGO_MODE" != "skip" ] && echo "  Argo: VLESS+VMess")"
                 [ "$ENABLE_REALITY" = 1 ] && echo -e "  Reality: 端口 ${green}${REALITY_PORT}${re}  (UUID/SNI/密钥 自动生成)"
                 [ "$ENABLE_HY2" = 1 ] && echo -e "  Hysteria2: 端口 ${green}${HY2_PORT}${re}  (UUID/证书 自动生成)"
                 [ "$ENABLE_HY2" = 1 ] && [ -n "$HY2_MPORT" ] && echo -e "  Hysteria2 跳跃: ${green}${HY2_MPORT}${re}  (UDP 转发到 ${HY2_PORT})"
