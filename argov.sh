@@ -2958,7 +2958,7 @@ change_config() {
         echo ""
         echo -e "  ${green}1${re}. 节点名称 — ${cyan}${NODE_NAME}${re}"
         echo -e "  ${green}2${re}. 更换 UUID"
-        echo -e "  ${green}3${re}. 切换 Argo 隧道 (临时↔固定)"
+        echo -e "  ${green}3${re}. $([ "$ARGO_MODE" = "skip" ] && echo "启用 Argo 隧道" || echo "切换 Argo 隧道 (临时↔固定)")"
         echo -e "  ${green}4${re}. SS 加密 — ${cyan}${SS_METHOD}${re}"
         echo -e "  ${green}5${re}. Reality 伪装域名 — ${cyan}${REALITY_SNI}${re}"
         echo -e "  ${green}6${re}. 管理协议节点 (添加/删除)"
@@ -3107,12 +3107,23 @@ EOF
 
 switch_argo_tunnel() {
     load_conf; clear
+
+    # 如果之前跳过了 Argo, 先下载 cloudflared
+    if [ "$ARGO_MODE" = "skip" ]; then
+        echo -e "  ${yellow}Argo 隧道未安装, 正在下载 cloudflared...${re}"
+        local cf_arch; cf_arch=$(cf_arch)
+        download_cloudflared_checked "$cf_arch" "${WORK_DIR}/argo" || { red_msg "cloudflared 下载失败"; return; }
+        chmod +x "${WORK_DIR}/argo"
+        ARGO_MODE="temp"
+        SKIP_ARGO=0
+    fi
+
     echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
     echo -e " ${purple}║${re}       ${white}切换 Argo 隧道${re}                       ${purple}║${re}"
     echo -e " ${purple}║${re}       ${yellow}当前: $([ "$ARGO_MODE" = "temp" ] && echo "临时" || echo "固定")${re}"
     echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
     echo ""; echo -e "  ${green}1${re}. 临时隧道     ${green}2${re}. 固定 Token    ${red}0${re}. 返回"
-    echo -ne "  请选择: "; read c 
+    echo -ne "  请选择: "; read c
     case "$c" in
         1) ARGO_MODE="temp"; ARGO_AUTH=""; ARGO_FIXED_DOMAIN=""; save_conf; rebuild_tunnel "temp"; restart_services ;;
         2) echo -ne "  域名: "; read ARGO_FIXED_DOMAIN; echo -ne "  Token: "; read ARGO_AUTH
