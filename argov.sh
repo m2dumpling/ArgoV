@@ -3288,37 +3288,45 @@ interactive_install() {
     echo -e "  ${cyan}🖥 检测到系统: ${green}${sys_type}${re}\n"
 
     echo -e " ${white}━━━ ① 节点名称 ━━━${re}"; echo -ne "  [${NODE_NAME}]: "; read n ; [ -n "$n" ] && NODE_NAME="$n"; echo -e "  → ${green}${NODE_NAME}${re}\n"
-    echo -e " ${white}━━━ ② CDN 地址 ━━━${re}"; echo -e "  ${green}1${re}. 默认 ${green}2${re}. 列表选 ${green}3${re}. 自定义"; echo -ne "  [1]: "; read ct 
-    case "${ct:-1}" in
-        2) for k in {1..14}; do echo -e "  ${green}${k}${re}. ${CDN_DOMAINS[$k]}"; done; echo -ne "  序号 [14]: "; read ci
-           case "${ci:-14}" in
-               1) CDN_DOMAIN="xx.cloudflare.182682.xyz" ;; 2) CDN_DOMAIN="bestcf.top" ;; 3) CDN_DOMAIN="cdn.31514926.xyz" ;;
-               4) CDN_DOMAIN="skk.moe" ;; 5) CDN_DOMAIN="ip.sb" ;; 6) CDN_DOMAIN="time.is" ;;
-               7) CDN_DOMAIN="cfip.xxxxxxxx.tk" ;; 8) CDN_DOMAIN="cf.090227.xyz" ;; 9) CDN_DOMAIN="yidong.19931101.xyz" ;;
-               10) CDN_DOMAIN="liantong.19931101.xyz" ;; 11) CDN_DOMAIN="dianxin.19931101.xyz" ;; 12) CDN_DOMAIN="cdn.2020111.xyz" ;; 13) CDN_DOMAIN="xn--b6gac.eu.org" ;;
-               14) CDN_DOMAIN="cdns.doon.eu.org" ;; esac ;;
-        3) echo -ne "  地址: "; read CDN_DOMAIN; [ -z "$CDN_DOMAIN" ] && CDN_DOMAIN="$CDN_DEFAULT" ;;
-    esac; echo -e "  → ${green}${CDN_DOMAIN}${re}\n"
 
-    echo -e " ${white}━━━ ③ 客户端端口 ━━━${re}"; echo -e "  ${yellow}CF: 443 8443 2053 2083 2087 2096${re}"; echo -ne "  [${CDN_PORT}]: "; read n ; [ -n "$n" ] && CDN_PORT="$n"; echo -e "  → ${green}${CDN_PORT}${re}\n"
-    echo -e " ${white}━━━ ④ UUID ━━━${re}"; echo -ne "  [自动生成]: "; read n ; [ -n "$n" ] && UUID_CUSTOM="$n"; echo ""
-    echo -e " ${white}━━━ ⑤ Argo 隧道 (VLESS / VMess over CF) ━━━${re}"
-    echo -e "  ${green}1${re}. 临时域名 (trycloudflare.com)    ${green}2${re}. 固定 Token"
-    echo -e "  ${red}3${re}. 跳过 — 不安装 Argo 隧道，仅部署直连协议"
+    echo -e " ${white}━━━ ② Argo 隧道 ━━━${re}"
+    echo -e "  ${green}1${re}. 启用 (VLESS/VMess over Cloudflare, 无需公网端口)"
+    echo -e "  ${red}2${re}. 跳过 — 仅部署 Reality / HY2 / SS 等直连协议"
     echo -ne "  [1]: "; read tt
     case "${tt:-1}" in
-        2) echo -ne "  域名: "; read ARGO_FIXED_DOMAIN; echo -ne "  Token: "; read ARGO_AUTH
-           [ -n "$ARGO_FIXED_DOMAIN" ] && [ -n "$ARGO_AUTH" ] && ARGO_MODE="fixed-token" ;;
-        3) ARGO_MODE="skip"; echo -e "  → ${red}跳过 Argo 隧道, 仅部署直连协议${re}\n" ;;
-    esac; echo ""
+        2) ARGO_MODE="skip"; echo -e "  → ${red}跳过 Argo, 仅部署直连协议${re}\n" ;;
+    esac
 
     if [ "$ARGO_MODE" != "skip" ]; then
-        echo -e " ${white}━━━ ⑥ 内部端口 ━━━${re}"; echo -e "  ${cyan}Argo:${ARGO_PORT}  VLESS:${VLESS_WS_PORT}  VMess:${VMESS_WS_PORT}${re}"
+        echo -e " ${white}━━━ ③ CDN 地址 ━━━${re}"; echo -e "  ${green}1${re}. 默认 ${green}2${re}. 列表选 ${green}3${re}. 自定义"; echo -ne "  [1]: "; read ct
+        case "${ct:-1}" in
+            2) for k in {1..14}; do echo -e "  ${green}${k}${re}. ${CDN_DOMAINS[$k]}"; done; echo -ne "  序号 [14]: "; read ci
+               case "${ci:-14}" in
+                   1) CDN_DOMAIN="xx.cloudflare.182682.xyz" ;; 2) CDN_DOMAIN="bestcf.top" ;; 3) CDN_DOMAIN="cdn.31514926.xyz" ;;
+                   4) CDN_DOMAIN="skk.moe" ;; 5) CDN_DOMAIN="ip.sb" ;; 6) CDN_DOMAIN="time.is" ;;
+                   7) CDN_DOMAIN="cfip.xxxxxxxx.tk" ;; 8) CDN_DOMAIN="cf.090227.xyz" ;; 9) CDN_DOMAIN="yidong.19931101.xyz" ;;
+                   10) CDN_DOMAIN="liantong.19931101.xyz" ;; 11) CDN_DOMAIN="dianxin.19931101.xyz" ;; 12) CDN_DOMAIN="cdn.2020111.xyz" ;; 13) CDN_DOMAIN="xn--b6gac.eu.org" ;;
+                   14) CDN_DOMAIN="cdns.doon.eu.org" ;; esac ;;
+            3) echo -ne "  地址: "; read CDN_DOMAIN; [ -z "$CDN_DOMAIN" ] && CDN_DOMAIN="$CDN_DEFAULT" ;;
+        esac; echo -e "  → ${green}${CDN_DOMAIN}${re}\n"
+
+        echo -e " ${white}━━━ ④ 客户端端口 ━━━${re}"; echo -e "  ${yellow}CF: 443 8443 2053 2083 2087 2096${re}"; echo -ne "  [${CDN_PORT}]: "; read n ; [ -n "$n" ] && CDN_PORT="$n"; echo -e "  → ${green}${CDN_PORT}${re}\n"
+        echo -e " ${white}━━━ ⑤ UUID ━━━${re}"; echo -ne "  [自动生成]: "; read n ; [ -n "$n" ] && UUID_CUSTOM="$n"; echo ""
+
+        echo -e " ${white}━━━ ⑥ 隧道模式 ━━━${re}"
+        echo -e "  ${green}1${re}. 临时域名 (trycloudflare.com)    ${green}2${re}. 固定 Token"
+        echo -ne "  [1]: "; read argo_type
+        case "${argo_type:-1}" in
+            2) echo -ne "  域名: "; read ARGO_FIXED_DOMAIN; echo -ne "  Token: "; read ARGO_AUTH
+               [ -n "$ARGO_FIXED_DOMAIN" ] && [ -n "$ARGO_AUTH" ] && ARGO_MODE="fixed-token" ;;
+        esac; echo ""
+
+        echo -e " ${white}━━━ ⑦ 内部端口 ━━━${re}"; echo -e "  ${cyan}Argo:${ARGO_PORT}  VLESS:${VLESS_WS_PORT}  VMess:${VMESS_WS_PORT}${re}"
         echo -ne "  起始端口 [回车跳过]: "; read bp
         if [ -n "$bp" ] && is_port "$bp"; then ARGO_PORT="$bp"; VLESS_WS_PORT=$((bp+1)); VMESS_WS_PORT=$((bp+2)); fi
         echo ""
     fi
-    echo -e " ${white}━━━ ⑦ 订阅域名（可选）━━━${re}"
+    echo -e " ${white}━━━ ⑧ 订阅域名（可选）━━━${re}"
     echo -e "  ${yellow}输入已指向本机IP的域名，订阅URL变为 https://域名:端口/sub?token=xxx${re}"
     echo -e "  ${yellow}使用CF代理端口 2096，DNS开小黄云即可，无需Origin Rules${re}"
     echo -e "  ${yellow}回车跳过则使用 http://IP:端口 格式${re}"
@@ -3351,10 +3359,10 @@ interactive_install() {
     fi
     echo ""
 
-    echo -e " ${white}━━━ ⑧ 额外协议（可选）━━━${re}"
+    echo -e " ${white}━━━ ⑨ 额外协议（可选）━━━${re}"
     select_protocols || { yellow_msg "安装已取消。"; return; }
 
-    echo -e " ${white}━━━ ⑨ Sing-box 内核（可选）━━━${re}"
+    echo -e " ${white}━━━ ⑩ Sing-box 内核（可选）━━━${re}"
     echo -e "  ${yellow}Sing-box 支持 TUIC、AnyTLS Reality 等 Xray 不支持的协议。${re}"
     echo -e "  ${yellow}HY2 走 Sing-box 不依赖 allowInsecure，未来更稳定。${re}"
     echo -ne "  是否安装 Sing-box？[y/N]: "; read sb_yn
