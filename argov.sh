@@ -5276,6 +5276,78 @@ update_xray_core() {
 #==============================================================================
 # 主菜单
 #==============================================================================
+add_argo_protocol() {
+    load_conf; clear
+    echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
+    echo -e " ${purple}║${re}    ${white}启用 Argo 隧道 (VLESS/VMess over CF)${re}       ${purple}║${re}"
+    echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
+    echo ""
+
+    # 1. 下载 cloudflared
+    yellow_msg "下载 cloudflared..."
+    local cf_arch; cf_arch=$(cf_arch)
+    download_cloudflared_checked "$cf_arch" "${WORK_DIR}/argo" || { red_msg "下载失败"; return; }
+    chmod +x "${WORK_DIR}/argo"
+    green_msg "cloudflared 就绪"
+
+    # 2. 选择隧道模式
+    echo ""
+    echo -e "  ${yellow}隧道模式:${re}"
+    echo -e "  ${green}1${re}. 临时 (trycloudflare.com)    ${green}2${re}. 固定 Token"
+    echo -ne "  → [1]: "; read tt
+    case "${tt:-1}" in
+        2) echo -ne "  域名: "; read ARGO_FIXED_DOMAIN; echo -ne "  Token: "; read ARGO_AUTH
+           [ -n "$ARGO_FIXED_DOMAIN" ] && [ -n "$ARGO_AUTH" ] && ARGO_MODE="fixed-token" || ARGO_MODE="temp" ;;
+        *) ARGO_MODE="temp"; ARGO_AUTH="" ;;
+    esac
+    SKIP_ARGO=0
+
+    # 3. 确保默认端口
+    is_port "$ARGO_PORT" || ARGO_PORT=8080
+    is_port "$VLESS_WS_PORT" || VLESS_WS_PORT=8081
+    is_port "$VMESS_WS_PORT" || VMESS_WS_PORT=8082
+
+    # 4. 构建 Argo inbound (插入现有 Xray config)
+    local uuid; uuid=$(get_uuid)
+    [ -z "$uuid" ] && uuid="${UUID_CUSTOM:-$(rand_uuid)}" && UUID_CUSTOM="$uuid"
+    local argo_inbound json_saved
+    # 检查是否已有 Argo inbound
+    if jq -e '.inbounds[]|select(.tag=="argo-in")' "$CONFIG_FILE" >/dev/null 2>&1; then
+        yellow_msg "Argo 隧道已存在, 跳过 inbound 构建"
+        json_saved="[]"
+    else
+        # 保存现有可选协议
+        json_saved=$(jq -c '[.inbounds[] | select(.tag=="reality" or .tag=="hy2" or .tag=="ss")]' "$CONFIG_FILE" 2>/dev/null)
+        [ -z "$json_saved" ] && json_saved="[]"
+
+        # 用 jq 临时移除可选协议, 调用 build_xray_config 只生成 Argo 部分
+        local tmp_cfg; tmp_cfg=$(mktemp)
+        jq 'del(.inbounds[] | select(.tag=="reality" or .tag=="hy2" or .tag=="ss"))' "$CONFIG_FILE" > "$tmp_cfg" 2>/dev/null || cp "$CONFIG_FILE" "$tmp_cfg"
+        # 强制重置, 让 build_xray_config 生成完整 Argo 部分
+        ENABLE_REALITY=0; ENABLE_HY2=0; ENABLE_SS=0
+        REALITY_PORT=0; HY2_PORT=0; SS_PORT=0
+        cp "$tmp_cfg" "$CONFIG_FILE"
+        build_xray_config "$uuid" ""
+        rm -f "$tmp_cfg"
+    fi
+
+    # 5. 合并回已保存的协议
+    if [ "$json_saved" != "[]" ]; then
+        jq --argjson saved "$json_saved" '.inbounds += $saved' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+    fi
+
+    # 6. 重建隧道 + 启动
+    rebuild_tunnel "$ARGO_MODE"
+    save_conf
+    systemctl daemon-reload
+    systemctl enable xray argov-tunnel 2>/dev/null
+    systemctl restart xray argov-tunnel
+    sleep 3
+
+    green_msg "Argo 隧道已启用！"
+    echo -ne "  按回车..."; read -r
+}
+
 add_hy2_protocol() {
     local uuid ip h_port h_sni h_mport new_inbound
     uuid=$(get_uuid)
@@ -5436,14 +5508,18 @@ manage_protocols() {
         echo -e " ${purple}└────────────────────────────────────────┘${re}"
         echo ""
 
-        local vl_port vm_port
+        local vl_port vm_port has_argo=0
         vl_port=$(jq -r '.inbounds[]|select(.tag=="vless-ws")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
         vm_port=$(jq -r '.inbounds[]|select(.tag=="vmess-ws")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
-        echo -e "  ${white}── Argo 隧道 ──${re}"
-        echo ""
-        echo -e "  ${green}e1${re}. VLESS + Argo    端口 ${cyan}${vl_port}${re}  路径 ${cyan}/vless-argo${re}"
-        echo -e "  ${green}e2${re}. VMess + Argo    端口 ${cyan}${vm_port}${re}  路径 ${cyan}/vmess-argo${re}"
-        echo ""
+        [ -n "$vl_port" ] || [ -n "$vm_port" ] && has_argo=1
+
+        if [ "$has_argo" = 1 ]; then
+            echo -e "  ${white}── Argo 隧道 ──${re}"
+            echo ""
+            echo -e "  ${green}e1${re}. VLESS + Argo    端口 ${cyan}${vl_port}${re}  路径 ${cyan}/vless-argo${re}"
+            echo -e "  ${green}e2${re}. VMess + Argo    端口 ${cyan}${vm_port}${re}  路径 ${cyan}/vmess-argo${re}"
+            echo ""
+        fi
 
         if [ "$has_reality" = 1 ] || [ "$has_hy2" = 1 ] || [ "$has_ss" = 1 ]; then
             echo -e "  ${white}── 可选协议 · 可编辑 ──${re}"
@@ -5469,9 +5545,10 @@ manage_protocols() {
             echo -e "  ${green}e5${re}. Shadowsocks       ${cyan}${sm}${re}  端口 ${cyan}${sp}${re}"
         fi
 
-        if [ "$has_reality" = 0 ] || [ "$has_hy2" = 0 ] || [ "$has_ss" = 0 ]; then
+        if [ "$has_argo" = 0 ] || [ "$has_reality" = 0 ] || [ "$has_hy2" = 0 ] || [ "$has_ss" = 0 ]; then
             echo ""; echo -e "  ${white}── 可添加 ──${re}"; echo ""
         fi
+        [ "$has_argo" = 0 ] && echo -e "  ${cyan}a0${re}. VLESS/VMess Argo (Cloudflare 隧道)"
         [ "$has_reality" = 0 ] && echo -e "  ${cyan}a1${re}. VLESS Reality"
         [ "$has_hy2" = 0 ] && echo -e "  ${cyan}a2${re}. Hysteria2"
         [ "$has_ss" = 0 ] && echo -e "  ${cyan}a3${re}. Shadowsocks"
@@ -5492,11 +5569,11 @@ manage_protocols() {
         echo -ne "  请输入: "; read ac; [ "$ac" = "0" ] && return
 
         case "$ac" in
-            e1) edit_protocol "vless-ws" "VLESS + Argo" ;;
-            e2) edit_protocol "vmess-ws" "VMess + Argo" ;;
+            e1|e2) [ "$has_argo" = 1 ] && { [ "$ac" = "e1" ] && edit_protocol "vless-ws" "VLESS + Argo" || edit_protocol "vmess-ws" "VMess + Argo"; } ;;
             e3) [ "$has_reality" = 1 ] && edit_protocol "reality" "VLESS Reality" ;;
             e4) [ "$has_hy2" = 1 ] && edit_hy2_protocol ;;
             e5) [ "$has_ss" = 1 ] && edit_protocol "ss" "Shadowsocks" ;;
+            a0) [ "$has_argo" = 0 ] && add_argo_protocol ;;
             a1) [ "$has_reality" = 0 ] && add_single_protocol "reality" ;;
             a2) [ "$has_hy2" = 0 ] && add_hy2_protocol ;;
             a3) [ "$has_ss" = 0 ] && add_single_protocol "ss" ;;
