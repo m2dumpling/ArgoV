@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #==============================================================================
-# ArgoV — Cloudflare Argo Tunnel 多协议交互式管理脚本
+# ArgoV — Xray + Sing-box 双核代理管理脚本
 # VLESS + VMess (Argo)  |  Shadowsocks  |  VLESS Reality  |  Hysteria2
 # 零公网暴露(Argo模式) · 无 Caddy/Nginx
 #==============================================================================
@@ -6076,7 +6076,7 @@ main_menu() {
         echo -e "  ${yellow}▶${re} 命令行输入 ${green}ag${re} 可随时启动本面板"
         echo ""
         echo -e " ${purple}╔══════════════════════════════════════════════════╗${re}"
-        echo -e " ${purple}║${re}     ${white}ArgoV  纯净版隧道管理面板${re}              ${purple}║${re}"
+        echo -e " ${purple}║${re}     ${white}ArgoV  双核代理${re}              ${purple}║${re}"
         echo -e " ${purple}║${re}     ${cyan}$(get_proto_summary)${re}"
         echo -e " ${purple}╚══════════════════════════════════════════════════╝${re}"
         echo ""

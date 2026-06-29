@@ -1,11 +1,11 @@
-# 🌐 ArgoV — 次世代代理管理面板
+# 🌐 ArgoV — 双核代理
 
 <p align="center">
   <img src="docs/assets/argov-logo.svg?v=3" alt="ArgoV" width="440">
 </p>
 
 <p align="center">
-  <strong>一键部署 · 双内核 · Argo 可选 · 动态链路路由</strong>
+  <strong>一键部署 · Xray + Sing-box · Argo 可选</strong>
 </p>
 
 <p align="center">

@@ -1,11 +1,11 @@
-# 🌐 ArgoV — Next-Gen Proxy Management Panel
+# 🌐 ArgoV — Dual-Core Proxy
 
 <p align="center">
   <img src="docs/assets/argov-logo.svg?v=3" alt="ArgoV" width="440">
 </p>
 
 <p align="center">
-  <strong>One-click · Dual-Core · Optional Argo · Dynamic Routing</strong>
+  <strong>One-click · Xray + Sing-box · Optional Argo</strong>
 </p>
 
 <p align="center">
