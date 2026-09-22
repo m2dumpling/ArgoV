@@ -72,6 +72,9 @@ func GenerateLinks(user config.User, argov map[string]string, xray *config.XrayC
 					rs = inbound.StreamSettings.RealitySettings.ServerNames[0]
 				}
 				rpub := inbound.StreamSettings.RealitySettings.PublicKey
+				if rpub == "" {
+					rpub = argov["REALITY_PUB"]
+				}
 				rsid := ""
 				if len(inbound.StreamSettings.RealitySettings.ShortIds) > 0 {
 					rsid = inbound.StreamSettings.RealitySettings.ShortIds[0]
@@ -81,8 +84,12 @@ func GenerateLinks(user config.User, argov map[string]string, xray *config.XrayC
 					rsidQuery = "&sid=" + rsid
 				}
 				if rport != nil && serverIP != "" {
-					links += fmt.Sprintf("vless://%s@%s:%v?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=%s&pbk=%s&fp=chrome%s#%s-Reality\n",
-						uuid, serverIP, rport, rs, rpub, rsidQuery, nodeName)
+					fp := argov["REALITY_FP"]
+					if fp == "" {
+						fp = "chrome"
+					}
+					links += fmt.Sprintf("vless://%s@%s:%v?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=%s&pbk=%s&fp=%s%s#%s-Reality\n",
+						uuid, serverIP, rport, rs, rpub, fp, rsidQuery, nodeName)
 				}
 			}
 

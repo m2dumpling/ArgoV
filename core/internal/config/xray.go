@@ -40,6 +40,8 @@ type TLSSettings struct {
 }
 
 type RealitySettings struct {
+	Target      string   `json:"target"`
+	Dest        string   `json:"dest"` // legacy Xray alias
 	ServerNames []string `json:"serverNames"`
 	PublicKey   string   `json:"publicKey"`
 	ShortIds    []string `json:"shortIds"`

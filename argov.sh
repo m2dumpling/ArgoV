@@ -74,6 +74,7 @@ SS_METHOD="${SS_METHOD:-aes-256-gcm}"
 REALITY_SNIS=("www.tesla.com" "www.nvidia.com" "www.amazon.com" "www.ebay.com"
               "www.paypal.com" "aws.amazon.com" "addons.mozilla.org" "www.microsoft.com")
 REALITY_SNI="${REALITY_SNI:-www.tesla.com}"
+REALITY_FP="${REALITY_FP:-chrome}"
 HY2_SNI="${HY2_SNI:-www.bing.com}"
 HY2_CERT_FILE="${HY2_CERT_FILE:-/etc/xray/argov-hy2.crt}"
 HY2_KEY_FILE="${HY2_KEY_FILE:-/etc/xray/argov-hy2.key}"
@@ -178,6 +179,21 @@ get_ip() {
     ip=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
     [ -z "$ip" ] && ip=$(ip -4 addr show 2>/dev/null | awk '/inet / && !/127\./ {print $2}' | cut -d/ -f1 | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
     echo "${ip:-NAT环境}"
+}
+normalize_xray_reality_config() {
+    [ -f "$CONFIG_FILE" ] || return 0
+    command -v jq >/dev/null 2>&1 || return 1
+    local legacy_pub
+    legacy_pub=$(jq -r '.inbounds[]?|select(.tag=="reality")|.streamSettings.realitySettings.publicKey//empty' "$CONFIG_FILE" 2>/dev/null | head -n 1)
+    [ -z "${REALITY_PUB:-}" ] && [ -n "$legacy_pub" ] && REALITY_PUB="$legacy_pub"
+    jq '(.inbounds // []) |= map(
+        if .tag == "reality" and (.streamSettings.realitySettings? != null) then
+            .streamSettings.realitySettings |= (
+                if ((has("target") | not) and has("dest")) then .target = .dest else . end
+                | del(.dest, .publicKey, .fingerprint)
+            )
+        else . end
+    )' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv -f "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
 }
 is_port() { [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
 is_port_range() {
@@ -424,6 +440,43 @@ SBCONFIGHEAD
   ]
 }
 SBCONFIGTAIL
+
+    # sing-box 1.14+ 使用顶层 up_mbps/down_mbps 表示 Hysteria2 Brutal。
+    # 旧版交互变量不能只保存而不落到内核配置，否则用户选择不会生效。
+    if [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ "${SB_HY2_CONGESTION:-bbr}" = "brutal" ]; then
+        local sb_py; sb_py=$(py_bin)
+        if [ -n "$sb_py" ]; then
+            "$sb_py" - "$SB_CONFIG_FILE" "${SB_HY2_UP_MBPS:-}" "${SB_HY2_DOWN_MBPS:-}" << 'PYSBHY2'
+import json, os, sys
+
+path, up_raw, down_raw = sys.argv[1:4]
+try:
+    up = int(up_raw)
+    down = int(down_raw)
+except (TypeError, ValueError):
+    up = down = 0
+
+if up <= 0 or down <= 0:
+    raise SystemExit("invalid Hysteria2 Brutal bandwidth")
+
+with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+for inbound in data.get("inbounds", []):
+    if inbound.get("type") == "hysteria2":
+        inbound["up_mbps"] = up
+        inbound["down_mbps"] = down
+
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(data, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
+PYSBHY2
+            [ "$?" -ne 0 ] && yellow_msg "Hysteria2 Brutal 带宽参数无效，已回退为客户端默认拥塞控制"
+        else
+            yellow_msg "未找到 Python，无法写入 Hysteria2 Brutal 带宽参数"
+        fi
+    fi
     rm -f "$TEMP_INBOUNDS" 2>/dev/null
 
     # 验证
@@ -827,6 +880,87 @@ sb_status() {
 }
 sb_is_installed() { command -v sing-box >/dev/null 2>&1; }
 
+singbox_version_string() {
+    sing-box version 2>/dev/null \
+        | sed -n 's/^sing-box version[[:space:]]*\([^[:space:]]*\).*/\1/p' \
+        | head -n 1
+}
+
+singbox_libc() {
+    if [ "${IS_ALPINE:-0}" = 1 ]; then
+        echo "musl"
+        return 0
+    fi
+    if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; then
+        echo "musl"
+    else
+        echo "glibc"
+    fi
+}
+
+singbox_latest_version() {
+    local requested="${SB_VERSION:-}" tag
+    if [ -n "$requested" ] && [ "$requested" != "latest" ]; then
+        printf '%s\n' "${requested#v}"
+        return 0
+    fi
+    tag=$(curl -fsSL --retry 3 --connect-timeout 15 \
+        -H 'Accept: application/vnd.github+json' \
+        -H 'User-Agent: ArgoV' \
+        'https://api.github.com/repos/SagerNet/sing-box/releases/latest' 2>/dev/null \
+        | sed -n 's/^[[:space:]]*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' \
+        | head -n 1)
+    tag="${tag#v}"
+    [ -n "$tag" ] && printf '%s\n' "$tag"
+}
+
+singbox_archive_url() {
+    local version="${1#v}" arch="$2" libc suffix=""
+    libc=$(singbox_libc)
+    [ "$libc" = "musl" ] && suffix="-musl"
+    printf 'https://github.com/SagerNet/sing-box/releases/download/v%s/sing-box-%s-linux-%s%s.tar.gz\n' \
+        "$version" "$version" "$arch" "$suffix"
+}
+
+install_singbox_archive() {
+    local version="$1" arch="$2" url tmp extract binary target
+    [ -n "$version" ] || return 1
+    url=$(singbox_archive_url "$version" "$arch")
+    tmp=$(mktemp -t singbox.XXXXXX) || return 1
+    extract=$(mktemp -d -t singbox-extract.XXXXXX) || { rm -f "$tmp" 2>/dev/null || true; return 1; }
+    if ! download_file "$url" "$tmp"; then
+        rm -f "$tmp" 2>/dev/null || true
+        rm -rf "$extract" 2>/dev/null || true
+        return 1
+    fi
+    if ! tar xzf "$tmp" -C "$extract" 2>/dev/null; then
+        rm -f "$tmp" 2>/dev/null || true
+        rm -rf "$extract" 2>/dev/null || true
+        return 1
+    fi
+    binary=$(find "$extract" -type f -name sing-box -print -quit 2>/dev/null)
+    if [ -z "$binary" ]; then
+        rm -f "$tmp" 2>/dev/null || true
+        rm -rf "$extract" 2>/dev/null || true
+        return 1
+    fi
+    target="/usr/bin/sing-box"
+    if sb_is_installed; then
+        target=$(command -v sing-box)
+    fi
+    install -m 0755 "$binary" "$target" 2>/dev/null || {
+        cp "$binary" "$target" 2>/dev/null || {
+            rm -f "$tmp" 2>/dev/null || true
+            rm -rf "$extract" 2>/dev/null || true
+            return 1
+        }
+        chmod 0755 "$target" 2>/dev/null || true
+    }
+    rm -f "$tmp" 2>/dev/null || true
+    rm -rf "$extract" 2>/dev/null || true
+    return 0
+}
+
 # SHA256 证书指纹 (证书固定 pinSHA256)
 cert_pin_sha256() {
     # Hysteria2 URL 格式: 大写十六进制+冒号 (BA:88:45:17:A1:...)
@@ -864,47 +998,64 @@ disable_sb_hy2_hop_rules() {
 }
 
 install_singbox() {
-    yellow_msg "安装 Sing-box..."
-    if sb_is_installed; then
-        local cur_ver; cur_ver=$(sing-box version 2>/dev/null | head -1 || echo "unknown")
-        green_msg "Sing-box 已安装: $cur_ver"
+    local action="${1:-install}" force_update=0 cur_ver sb_arch requested installer latest
+    [ "$action" = "update" ] && force_update=1
+    yellow_msg "$([ "$force_update" = 1 ] && echo '更新' || echo '安装') Sing-box..."
+
+    if sb_is_installed && [ "$force_update" != 1 ]; then
+        cur_ver=$(singbox_version_string)
+        green_msg "Sing-box 已安装: ${cur_ver:-unknown}"
         return 0
     fi
-    local sb_arch; sb_arch=$(detect_sb_arch)
-    if [ "$IS_ALPINE" = 1 ]; then
-        apk update || { red_msg "apk update 失败"; return 1; }
-        apk add --no-cache sing-box 2>/dev/null || {
-            apk add --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community sing-box || { red_msg "Sing-box 安装失败"; return 1; }
-        }
-    else
-        bash <(curl -fsSL https://sing-box.app/install.sh) || {
-            # 手动下载备选
-            local sb_url="https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-${sb_arch}.tar.gz"
-            local sb_tmp; sb_tmp=$(mktemp -t singbox.XXXXXX)
-            curl -fsSL --retry 3 -o "$sb_tmp" "$sb_url" || { red_msg "Sing-box 下载失败"; rm -f "$sb_tmp" 2>/dev/null; return 1; }
-            tar xzf "$sb_tmp" -C /usr/bin/ sing-box 2>/dev/null || { red_msg "解压失败"; rm -f "$sb_tmp" 2>/dev/null; return 1; }
-            chmod +x /usr/bin/sing-box 2>/dev/null
-            rm -f "$sb_tmp" 2>/dev/null
-        }
+
+    sb_arch=$(detect_sb_arch)
+    requested="${SB_VERSION:-}"
+    mkdir -p "$SB_WORK_DIR" "$SB_WORK_DIR/certs" 2>/dev/null || true
+
+    # 首次安装时优先使用发行版包；更新时必须走官方安装器或版本化 release，避免旧包阻塞更新。
+    if [ "$force_update" != 1 ] && [ "$IS_ALPINE" = 1 ]; then
+        apk update || yellow_msg "apk update 失败，将尝试官方安装源"
+        apk add --no-cache sing-box 2>/dev/null || \
+            apk add --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community sing-box 2>/dev/null || true
+    fi
+
+    if [ "$force_update" = 1 ] || ! sb_is_installed; then
+        if [ -n "$requested" ] && [ "$requested" != "latest" ]; then
+            install_singbox_archive "${requested#v}" "$sb_arch" || {
+                red_msg "指定 Sing-box 版本下载失败: $requested"
+                return 1
+            }
+        else
+            installer="${SB_WORK_DIR}/sing-box-install.sh"
+            if ! download_script_checked "https://sing-box.app/install.sh" "$installer" || ! bash "$installer"; then
+                latest=$(singbox_latest_version)
+                [ -n "$latest" ] || { red_msg "无法获取 Sing-box 最新稳定版本"; rm -f "$installer" 2>/dev/null || true; return 1; }
+                install_singbox_archive "$latest" "$sb_arch" || {
+                    red_msg "Sing-box 下载失败: v$latest ($sb_arch/$(singbox_libc))"
+                    rm -f "$installer" 2>/dev/null || true
+                    return 1
+                }
+            fi
+            rm -f "$installer" 2>/dev/null || true
+        fi
     fi
     if ! sb_is_installed; then
         red_msg "Sing-box 安装后未找到可执行文件"
         return 1
     fi
-    local sb_ver; sb_ver=$(sing-box version 2>/dev/null | head -1 || echo "unknown")
+    local sb_ver sb_bin; sb_ver=$(sing-box version 2>/dev/null | head -1 || echo "unknown"); sb_bin=$(command -v sing-box)
     green_msg "Sing-box 安装成功: $sb_ver"
 
     # 创建服务定义
-    mkdir -p "$SB_WORK_DIR" "$SB_WORK_DIR/certs" 2>/dev/null
     if [ "$IS_ALPINE" = 1 ]; then
-        cat > /etc/init.d/sing-box << 'SBOPENRC'
+        cat > /etc/init.d/sing-box << SBOPENRC
 #!/sbin/openrc-run
 name="sing-box"
 description="Sing-box Service"
 supervisor="supervise-daemon"
-command="/usr/bin/sing-box"
+command="${sb_bin}"
 command_args="run -c /etc/sing-box/config.json"
-pidfile="/run/${RC_SVCNAME}.pid"
+pidfile="/run/\${RC_SVCNAME}.pid"
 command_background="yes"
 output_log="/var/log/sing-box.log"
 error_log="/var/log/sing-box.err"
@@ -914,13 +1065,13 @@ SBOPENRC
         chmod +x /etc/init.d/sing-box
         rc-update add sing-box default 2>/dev/null || true
     else
-        cat > /etc/systemd/system/sing-box.service << 'SBSYSTEMD'
+        cat > /etc/systemd/system/sing-box.service << SBSYSTEMD
 [Unit]
 Description=Sing-box Service
 After=network.target
 [Service]
 Type=simple
-ExecStart=/usr/bin/sing-box run -c /etc/sing-box/config.json
+ExecStart=${sb_bin} run -c /etc/sing-box/config.json
 Restart=on-failure
 RestartSec=10s
 LimitNOFILE=1048576
@@ -1178,7 +1329,7 @@ is_safe_conf_file() {
         [[ "$line" =~ ^[A-Z][A-Z0-9_]*= ]] || return 1
         key="${line%%=*}"
         case "$key" in
-            NODE_NAME|ARGO_PORT|VLESS_WS_PORT|VMESS_WS_PORT|CDN_PORT|CDN_DOMAIN|ARGO_MODE|ARGO_AUTH|ARGO_FIXED_DOMAIN|UUID_CUSTOM|REALITY_PORT|HY2_PORT|HY2_MPORT|HY2_CONGESTION|HY2_UP_MBPS|HY2_DOWN_MBPS|SS_PORT|SUB_PORT|SUB_PATH|SUB_DOMAIN|SUB_TOKEN|REALITY_SNI|HY2_SNI|SS_METHOD|ENABLE_REALITY|ENABLE_HY2|ENABLE_SS|HY2_CERT_FILE|HY2_KEY_FILE|REALITY_PRIV|REALITY_PUB|REALITY_SHORTID|LAST_ARGO_DOMAIN|RELAY_ENABLED|RELAY_LINK|RELAY_MODE|XRAY_VERSION|XRAY_SHA256|CLOUDFLARED_VERSION|CLOUDFLARED_SHA256|AGG_TOKEN|SB_ENABLE|SB_VERSION|SB_HY2_ENABLE|SB_TUIC_ENABLE|SB_ANYTLS_ENABLE|SB_REALITY_ENABLE|SB_SS_ENABLE|SB_HY2_PORT|SB_TUIC_PORT|SB_ANYTLS_PORT|SB_REALITY_PORT|SB_SS_PORT|SB_REALITY_PRIV|SB_REALITY_PUB|SB_REALITY_SID|SB_ANYTLS_PSK|SB_TUIC_UUID|SB_TUIC_PSK|SB_HY2_PSK|SB_SS_PSK|SB_ANYTLS_USER|SB_SNI|SB_CERT_FILE|SB_KEY_FILE|TRAFFIC_IN|TRAFFIC_OUT|SB_HY2_HOP_ENABLE|SB_HY2_HOP_START|SB_HY2_HOP_END|SB_HY2_HOP_MODE|SB_HY2_HOP_INTERVAL|SB_HY2_HOP_MIN|SB_HY2_HOP_MAX|HY2_PIN_SHA256|SB_HY2_PIN_SHA256) ;;
+            NODE_NAME|ARGO_PORT|VLESS_WS_PORT|VMESS_WS_PORT|CDN_PORT|CDN_DOMAIN|ARGO_MODE|ARGO_AUTH|ARGO_FIXED_DOMAIN|UUID_CUSTOM|REALITY_PORT|HY2_PORT|HY2_MPORT|HY2_CONGESTION|HY2_UP_MBPS|HY2_DOWN_MBPS|SS_PORT|SUB_PORT|SUB_PATH|SUB_DOMAIN|SUB_TOKEN|REALITY_SNI|REALITY_FP|HY2_SNI|SS_METHOD|ENABLE_REALITY|ENABLE_HY2|ENABLE_SS|HY2_CERT_FILE|HY2_KEY_FILE|REALITY_PRIV|REALITY_PUB|REALITY_SHORTID|LAST_ARGO_DOMAIN|RELAY_ENABLED|RELAY_LINK|RELAY_MODE|XRAY_VERSION|XRAY_SHA256|CLOUDFLARED_VERSION|CLOUDFLARED_SHA256|AGG_TOKEN|SB_ENABLE|SB_VERSION|SB_HY2_ENABLE|SB_HY2_CONGESTION|SB_HY2_UP_MBPS|SB_HY2_DOWN_MBPS|SB_HY2_BBR_PROFILE|SB_TUIC_ENABLE|SB_ANYTLS_ENABLE|SB_REALITY_ENABLE|SB_SS_ENABLE|SB_HY2_PORT|SB_TUIC_PORT|SB_ANYTLS_PORT|SB_REALITY_PORT|SB_SS_PORT|SB_REALITY_PRIV|SB_REALITY_PUB|SB_REALITY_SID|SB_ANYTLS_PSK|SB_TUIC_UUID|SB_TUIC_PSK|SB_HY2_PSK|SB_SS_PSK|SB_ANYTLS_USER|SB_SNI|SB_CERT_FILE|SB_KEY_FILE|TRAFFIC_IN|TRAFFIC_OUT|SB_HY2_HOP_ENABLE|SB_HY2_HOP_START|SB_HY2_HOP_END|SB_HY2_HOP_MODE|SB_HY2_HOP_INTERVAL|SB_HY2_HOP_MIN|SB_HY2_HOP_MAX|HY2_PIN_SHA256|SB_HY2_PIN_SHA256) ;;
             *) return 1 ;;
         esac
         case "$line" in
@@ -1311,6 +1462,7 @@ PYEOF
 sync_xray_users() {
     [ -f "$CONFIG_FILE" ] || return 0
     ensure_users_file || return 1
+    normalize_xray_reality_config 2>/dev/null || true
     local py; py=$(py_bin); [ -z "$py" ] && return 1
     begin_argov_lock
     "$py" - "$CONFIG_FILE" "$ARGOV_USERS_FILE" << 'PYEOF'
@@ -1598,10 +1750,13 @@ load_conf() {
     HY2_CONGESTION="${HY2_CONGESTION:-bbr}"; HY2_UP_MBPS="${HY2_UP_MBPS:-}"; HY2_DOWN_MBPS="${HY2_DOWN_MBPS:-}"; SS_PORT="${SS_PORT:-0}"
     SUB_PORT="${SUB_PORT:-0}"; SUB_PATH="${SUB_PATH:-}"
     SUB_DOMAIN="${SUB_DOMAIN:-}"; SUB_TOKEN="${SUB_TOKEN:-}"; AGG_TOKEN="${AGG_TOKEN:-}"
-    REALITY_SNI="${REALITY_SNI:-www.tesla.com}"; HY2_SNI="${HY2_SNI:-www.bing.com}"; SS_METHOD="${SS_METHOD:-aes-256-gcm}"
+    REALITY_SNI="${REALITY_SNI:-www.tesla.com}"; REALITY_FP="${REALITY_FP:-chrome}"; HY2_SNI="${HY2_SNI:-www.bing.com}"; SS_METHOD="${SS_METHOD:-aes-256-gcm}"
     ENABLE_REALITY="${ENABLE_REALITY:-0}"; ENABLE_HY2="${ENABLE_HY2:-0}"; ENABLE_SS="${ENABLE_SS:-0}"
     HY2_CERT_FILE="${HY2_CERT_FILE:-/etc/xray/argov-hy2.crt}"; HY2_KEY_FILE="${HY2_KEY_FILE:-/etc/xray/argov-hy2.key}"
     REALITY_PRIV="${REALITY_PRIV:-}"; REALITY_PUB="${REALITY_PUB:-}"
+    if [ -z "$REALITY_PUB" ] && [ -f "$CONFIG_FILE" ] && command -v jq >/dev/null 2>&1; then
+        REALITY_PUB=$(jq -r '.inbounds[]?|select(.tag=="reality")|.streamSettings.realitySettings.publicKey//empty' "$CONFIG_FILE" 2>/dev/null | head -n 1)
+    fi
     REALITY_SHORTID="${REALITY_SHORTID:-}"
     RELAY_ENABLED="${RELAY_ENABLED:-0}"; RELAY_LINK="${RELAY_LINK:-}"
     RELAY_MODE="${RELAY_MODE:-all}"
@@ -1609,7 +1764,8 @@ load_conf() {
     CLOUDFLARED_VERSION="${CLOUDFLARED_VERSION:-latest}"; CLOUDFLARED_SHA256="${CLOUDFLARED_SHA256:-}"
     # Sing-box defaults
     SB_ENABLE="${SB_ENABLE:-false}"; SB_VERSION="${SB_VERSION:-}"
-    SB_HY2_ENABLE="${SB_HY2_ENABLE:-false}"; SB_TUIC_ENABLE="${SB_TUIC_ENABLE:-false}"; SB_ANYTLS_ENABLE="${SB_ANYTLS_ENABLE:-false}"
+    SB_HY2_ENABLE="${SB_HY2_ENABLE:-false}"; SB_HY2_CONGESTION="${SB_HY2_CONGESTION:-bbr}"; SB_HY2_UP_MBPS="${SB_HY2_UP_MBPS:-}"; SB_HY2_DOWN_MBPS="${SB_HY2_DOWN_MBPS:-}"; SB_HY2_BBR_PROFILE="${SB_HY2_BBR_PROFILE:-standard}"
+    SB_TUIC_ENABLE="${SB_TUIC_ENABLE:-false}"; SB_ANYTLS_ENABLE="${SB_ANYTLS_ENABLE:-false}"
     SB_REALITY_ENABLE="${SB_REALITY_ENABLE:-false}"; SB_SS_ENABLE="${SB_SS_ENABLE:-false}"
     SB_HY2_PORT="${SB_HY2_PORT:-}"; SB_TUIC_PORT="${SB_TUIC_PORT:-}"; SB_ANYTLS_PORT="${SB_ANYTLS_PORT:-}"
     SB_REALITY_PORT="${SB_REALITY_PORT:-}"; SB_SS_PORT="${SB_SS_PORT:-}"
@@ -1639,7 +1795,7 @@ save_conf() {
         save_var REALITY_PORT "$REALITY_PORT"; save_var HY2_PORT "$HY2_PORT"; save_var HY2_MPORT "$HY2_MPORT"
         save_var HY2_CONGESTION "$HY2_CONGESTION"; save_var HY2_UP_MBPS "$HY2_UP_MBPS"; save_var HY2_DOWN_MBPS "$HY2_DOWN_MBPS"
         save_var SS_PORT "$SS_PORT"; save_var SUB_PORT "$SUB_PORT"; save_var SUB_PATH "$SUB_PATH"; save_var SUB_DOMAIN "$SUB_DOMAIN"; save_var SUB_TOKEN "$SUB_TOKEN"; save_var AGG_TOKEN "$AGG_TOKEN"
-        save_var REALITY_SNI "$REALITY_SNI"; save_var HY2_SNI "$HY2_SNI"; save_var SS_METHOD "$SS_METHOD"
+        save_var REALITY_SNI "$REALITY_SNI"; save_var REALITY_FP "$REALITY_FP"; save_var HY2_SNI "$HY2_SNI"; save_var SS_METHOD "$SS_METHOD"
         save_var ENABLE_REALITY "$ENABLE_REALITY"; save_var ENABLE_HY2 "$ENABLE_HY2"; save_var ENABLE_SS "$ENABLE_SS"
         save_var HY2_CERT_FILE "$HY2_CERT_FILE"; save_var HY2_KEY_FILE "$HY2_KEY_FILE"
         save_var REALITY_PRIV "$REALITY_PRIV"; save_var REALITY_PUB "$REALITY_PUB"
@@ -1649,8 +1805,9 @@ save_conf() {
         save_var CLOUDFLARED_VERSION "$CLOUDFLARED_VERSION"; save_var CLOUDFLARED_SHA256 "$CLOUDFLARED_SHA256"
         # Sing-box
         save_var SB_ENABLE "$SB_ENABLE"; save_var SB_VERSION "$SB_VERSION"
-        save_var SB_HY2_ENABLE "$SB_HY2_ENABLE"; save_var SB_TUIC_ENABLE "$SB_TUIC_ENABLE"
-        save_var SB_ANYTLS_ENABLE "$SB_ANYTLS_ENABLE"; save_var SB_REALITY_ENABLE "$SB_REALITY_ENABLE"; save_var SB_SS_ENABLE "$SB_SS_ENABLE"
+        save_var SB_HY2_ENABLE "$SB_HY2_ENABLE"; save_var SB_HY2_CONGESTION "$SB_HY2_CONGESTION"; save_var SB_HY2_UP_MBPS "$SB_HY2_UP_MBPS"; save_var SB_HY2_DOWN_MBPS "$SB_HY2_DOWN_MBPS"; save_var SB_HY2_BBR_PROFILE "$SB_HY2_BBR_PROFILE"
+        save_var SB_TUIC_ENABLE "$SB_TUIC_ENABLE"; save_var SB_ANYTLS_ENABLE "$SB_ANYTLS_ENABLE"
+        save_var SB_REALITY_ENABLE "$SB_REALITY_ENABLE"; save_var SB_SS_ENABLE "$SB_SS_ENABLE"
         save_var SB_HY2_PORT "$SB_HY2_PORT"; save_var SB_TUIC_PORT "$SB_TUIC_PORT"; save_var SB_ANYTLS_PORT "$SB_ANYTLS_PORT"
         save_var SB_REALITY_PORT "$SB_REALITY_PORT"; save_var SB_SS_PORT "$SB_SS_PORT"
         save_var SB_REALITY_PRIV "$SB_REALITY_PRIV"; save_var SB_REALITY_PUB "$SB_REALITY_PUB"; save_var SB_REALITY_SID "$SB_REALITY_SID"
@@ -1687,7 +1844,7 @@ gen_ss_link() {
 gen_reality_link() {
     local sid=""
     [ -n "$6" ] && sid="&sid=$6"
-    local fp="$8"; [ -z "$fp" ] && fp="chrome"
+    local fp="$8"; [ -z "$fp" ] && fp="${REALITY_FP:-chrome}"
     printf '%s' "vless://$1@$2:$3?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=$4&pbk=$5&fp=${fp}${sid}#${7:-${NODE_NAME}-Reality}"
 }
 gen_hy2_link() {
@@ -2294,10 +2451,11 @@ fi
 if $JQ -e '.inbounds[]|select(.tag=="reality")' "$CFG" >/dev/null 2>&1 && [ -n "$ip" ]; then
     rport=$($JQ -r '.inbounds[]|select(.tag=="reality")|.port' "$CFG")
     rs=$($JQ -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames[0]' "$CFG")
-    rpub=$($JQ -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.publicKey' "$CFG")
+    rpub="${REALITY_PUB:-}"
+    [ -n "$rpub" ] || rpub=$($JQ -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.publicKey//empty' "$CFG")
     rsid=$($JQ -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.shortIds[0]//empty' "$CFG")
     [ -n "$rsid" ] && rsid="&sid=${rsid}" || rsid=""
-    [ -n "$rport" ] && links+="vless://${uuid}@${ip}:${rport}?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=${rs}&pbk=${rpub}&fp=chrome${rsid}#${NODE_NAME}-Reality"$'\n'
+    [ -n "$rport" ] && links+="vless://${uuid}@${ip}:${rport}?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=${rs}&pbk=${rpub}&fp=${REALITY_FP:-chrome}${rsid}#${NODE_NAME}-Reality"$'\n'
 fi
 # 自定义链接（用户自添加）
 if [ "$INCLUDE_CUSTOM" = "1" ] && [ -f /etc/xray/custom_links.txt ]; then
@@ -2772,7 +2930,8 @@ show_node() {
         local rport rsni rp
         rport=$(jq -r '.inbounds[]|select(.tag=="reality")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
         rsni=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames[0]//empty' "$CONFIG_FILE" 2>/dev/null)
-        rp=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.publicKey//empty' "$CONFIG_FILE" 2>/dev/null)
+        rp="${REALITY_PUB:-}"
+        [ -n "$rp" ] || rp=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.publicKey//empty' "$CONFIG_FILE" 2>/dev/null)
         echo -e "  ${white}── VLESS Reality (端口 ${rport}) ──${re}"
         echo ""
         echo -e "  ${green}$(gen_reality_link "$uuid" "$ip" "$rport" "$rsni" "$rp" "$REALITY_SHORTID")${re}"
@@ -3485,6 +3644,7 @@ do_install() {
             HY2_MPORT=$(jq -r '.inbounds[]|select(.tag=="hy2")|(.streamSettings.finalmask.quicParams.udpHop.ports//.streamSettings.hysteriaSettings.quicParams.udpHop.ports[0]//empty)' "$CONFIG_FILE" 2>/dev/null)
         fi
         echo "$saved_inbounds" | jq -e '.[] | select(.tag=="ss")'       &>/dev/null && ENABLE_SS=1
+        normalize_xray_reality_config 2>/dev/null || true
     fi
     sync_xray_users
     green_msg "  完成"
@@ -3618,7 +3778,7 @@ build_xray_config() {
     # 3. VMess WS
     inbounds+=',{"port":'"${VMESS_WS_PORT}"',"listen":"127.0.0.1","protocol":"vmess","tag":"vmess-ws","settings":{"clients":[{"id":"'"${uuid}"'","alterId":0,"email":"argov-default"}]},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vmess-argo"}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
     # 4. Reality (opt)
-    [ "$ENABLE_REALITY" = 1 ] && inbounds+=',{"port":'"${REALITY_PORT}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision","email":"argov-default"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${REALITY_SNI}"':443","serverNames":["'"${REALITY_SNI}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":["'"${REALITY_SHORTID}"'"],"fingerprint":"chrome"}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
+    [ "$ENABLE_REALITY" = 1 ] && inbounds+=',{"port":'"${REALITY_PORT}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision","email":"argov-default"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"target":"'"${REALITY_SNI}"':443","serverNames":["'"${REALITY_SNI}"'",""],"privateKey":"'"${REALITY_PRIV}"'","shortIds":["'"${REALITY_SHORTID}"'"]}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
     # 5. Hysteria2 (opt)
     if [ "$ENABLE_HY2" = 1 ]; then
         local hy2_inbound
@@ -4012,12 +4172,12 @@ edit_protocol() {
             SS_METHOD="$new_method"; SS_PORT="$new_port" ;;
         reality)
             jq --arg sni "$new_sni" --argjson pt "$new_port" \
-               '(.inbounds[]|select(.tag=="reality")|.port)=$pt|(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.dest)=($sni+":443")|(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames)=[$sni,""]' \
+               '(.inbounds[]|select(.tag=="reality")|.port)=$pt|(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.target)=($sni+":443")|(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings|=del(.dest,.publicKey,.fingerprint))|(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames)=[$sni,""]' \
                "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
             REALITY_PORT="$new_port"; REALITY_SNI="$new_sni"
             if [ "$rk" = "new" ] || [ "$rk" = "NEW" ]; then
-                jq --arg priv "$REALITY_PRIV" --arg pub "$REALITY_PUB" \
-                   '(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.privateKey)=$priv|(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.publicKey)=$pub' \
+                jq --arg priv "$REALITY_PRIV" \
+                   '(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.privateKey)=$priv|(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings|=del(.dest,.publicKey,.fingerprint))' \
                    "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
             fi
             if [ "$nsid" = "new" ] || [ "$nsid" = "NEW" ] || [ -n "$nsid" ]; then
@@ -4026,11 +4186,8 @@ edit_protocol() {
                    '(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.shortIds)=$s' \
                    "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
             fi
-            if [ -n "$new_fp" ]; then
-                jq --arg fp "$new_fp" \
-                   '(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.fingerprint)=$fp' \
-                   "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-            fi ;;
+            [ -n "$new_fp" ] && REALITY_FP="$new_fp"
+            ;;
     esac
     save_conf; yellow_msg "重启 Xray..."; systemctl restart xray 2>/dev/null; sleep 2; get_status; green_msg "完成"
 
@@ -4182,8 +4339,8 @@ add_single_protocol() {
             [ -z "$REALITY_PRIV" ] || [ "$REALITY_PRIV" = "REPLACE_ME" ] && gen_reality_keys
             REALITY_SHORTID="$r_sid"
             local sid_val="\"$REALITY_SHORTID\""
-            new_inbound='{"port":'"${r_port}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision","email":"argov-default"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"'"${r_sni}"':443","serverNames":["'"${r_sni}"'",""],"privateKey":"'"${REALITY_PRIV}"'","publicKey":"'"${REALITY_PUB}"'","shortIds":['"${sid_val}"'],"fingerprint":"'"${r_fp}"'"}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
-            REALITY_PORT="$r_port"; REALITY_SNI="$r_sni"; ENABLE_REALITY=1 ;;
+            new_inbound='{"port":'"${r_port}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision","email":"argov-default"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"target":"'"${r_sni}"':443","serverNames":["'"${r_sni}"'",""],"privateKey":"'"${REALITY_PRIV}"'","shortIds":['"${sid_val}"']}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
+            REALITY_PORT="$r_port"; REALITY_SNI="$r_sni"; REALITY_FP="$r_fp"; ENABLE_REALITY=1 ;;
     esac
     jq --argjson i "$new_inbound" '.inbounds+=[$i]' "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
     sync_xray_users
@@ -5343,6 +5500,7 @@ add_argo_protocol() {
     if [ "$json_saved" != "[]" ]; then
         jq --argjson saved "$json_saved" '.inbounds += $saved' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
     fi
+    normalize_xray_reality_config 2>/dev/null || true
 
     # 6. 重建隧道 + 启动
     rebuild_tunnel "$ARGO_MODE"
@@ -5717,7 +5875,7 @@ sb_menu() {
 
         case "$c" in
             s1|S1|1)
-                install_singbox || { echo -ne "  按回车返回..."; read -r; }
+                install_singbox update || { echo -ne "  按回车返回..."; read -r; }
                 if sb_is_installed; then
                     SB_ENABLE=true; save_conf; start_sub_server >/dev/null 2>&1 &
                     green_msg "Sing-box 安装成功！"
@@ -5743,7 +5901,7 @@ sb_menu() {
                     stop_sb_stats_service 2>/dev/null
                     disable_sb_hy2_hop_rules 2>/dev/null
                     systemctl disable sing-box 2>/dev/null; rc-update del sing-box default 2>/dev/null
-                    rm -rf "$SB_WORK_DIR" /etc/systemd/system/sing-box.service /etc/init.d/sing-box /var/log/sing-box.log /var/log/sing-box.err /usr/bin/sing-box 2>/dev/null
+                    rm -rf "$SB_WORK_DIR" /etc/systemd/system/sing-box.service /etc/init.d/sing-box /var/log/sing-box.log /var/log/sing-box.err /usr/bin/sing-box /usr/local/bin/sing-box 2>/dev/null
                     systemctl daemon-reload 2>/dev/null || true
                     SB_ENABLE=false
                     SB_HY2_ENABLE=false; SB_TUIC_ENABLE=false; SB_ANYTLS_ENABLE=false; SB_REALITY_ENABLE=false; SB_SS_ENABLE=false
@@ -6133,7 +6291,7 @@ main_menu() {
                    systemctl stop xray argov-tunnel argov-stats argov-sb-stats 2>/dev/null; systemctl disable xray argov-tunnel argov-stats argov-sb-stats 2>/dev/null
                    # Sing-box 清理
                    [ "${SB_ENABLE:-false}" = "true" ] && { sb_stop; systemctl disable sing-box 2>/dev/null; rc-update del sing-box default 2>/dev/null; }
-                    rm -rf "$WORK_DIR" "$SB_WORK_DIR"; rm -f /etc/systemd/system/xray.service /etc/systemd/system/argov-tunnel.service /etc/systemd/system/argov-sub.service /etc/systemd/system/argov-stats.service /etc/systemd/system/argov-sb-stats.service /etc/systemd/system/sing-box.service /etc/init.d/xray /etc/init.d/argov-tunnel /etc/init.d/argov-stats /etc/init.d/argov-sb-stats /etc/init.d/sing-box "$SCRIPT_PATH" "${WORK_DIR}/argov-tunnel.sh"
+                    rm -rf "$WORK_DIR" "$SB_WORK_DIR"; rm -f /usr/bin/sing-box /usr/local/bin/sing-box /etc/systemd/system/xray.service /etc/systemd/system/argov-tunnel.service /etc/systemd/system/argov-sub.service /etc/systemd/system/argov-stats.service /etc/systemd/system/argov-sb-stats.service /etc/systemd/system/sing-box.service /etc/init.d/xray /etc/init.d/argov-tunnel /etc/init.d/argov-stats /etc/init.d/argov-sb-stats /etc/init.d/sing-box "$SCRIPT_PATH" "${WORK_DIR}/argov-tunnel.sh"
                    systemctl daemon-reload; green_msg "卸载完成。"; fi ;;
             w|W) warp_menu ;;
             r|R) relay_menu ;;

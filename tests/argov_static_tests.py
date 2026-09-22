@@ -353,8 +353,12 @@ require(
     "initial Reality inbound must write REALITY_SHORTID into shortIds",
 )
 require(
-    r'"fingerprint":"chrome"',
-    "initial Reality inbound must include a Reality fingerprint",
+    r'"realitySettings":\{"target":"',
+    "initial Reality inbound must use the current Reality target field",
+)
+forbid(
+    r'build_xray_config\(\)[\s\S]*?realitySettings":\{[^}]*"publicKey"',
+    "Xray server Reality settings must not persist the client-only publicKey field",
 )
 require(
     r'HY2_PORT="\$\{HY2_PORT:-0\}"',
@@ -550,6 +554,22 @@ require(
 require(
     r"detect_sb_arch\(\)",
     "detect_sb_arch() must exist for sing-box architecture detection",
+)
+require(
+    r"singbox_archive_url\(\)[\s\S]*sing-box-%s-linux-%s%s\.tar\.gz",
+    "Sing-box fallback downloads must use versioned Linux release assets",
+)
+require(
+    r"install_singbox update",
+    "Sing-box management menu must request a real kernel update",
+)
+require(
+    r"SB_HY2_CONGESTION[\s\S]*save_var SB_HY2_CONGESTION[\s\S]*up_mbps[\s\S]*down_mbps",
+    "Sing-box Hysteria2 congestion settings must be persisted and emitted",
+)
+require(
+    r"normalize_xray_reality_config\(\)[\s\S]*target[\s\S]*del\(\.dest, \.publicKey, \.fingerprint\)",
+    "Xray Reality configuration must migrate legacy fields to target",
 )
 require(
     r"sb_menu\(\)",

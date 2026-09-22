@@ -8,8 +8,15 @@ if [ ! -f "$SCRIPT" ]; then
   exit 1
 fi
 
-bash -n "$SCRIPT"
-PYTHON_BIN="$(command -v python3 || command -v python || true)"
+BASH_BIN="${BASH:-bash}"
+"$BASH_BIN" -n "$SCRIPT"
+PYTHON_BIN=""
+for candidate in python3 python; do
+  if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import sys' >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v "$candidate")"
+    break
+  fi
+done
 if [ -z "$PYTHON_BIN" ]; then
   echo "python3 or python is required for static tests" >&2
   exit 1
