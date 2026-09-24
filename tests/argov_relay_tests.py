@@ -35,7 +35,7 @@ def test_ss_relay() -> None:
         singbox_path = Path(directory) / "sing-box.json"
         config_path.write_bytes(FIXTURE.read_bytes())
         singbox_path.write_text(json.dumps({
-            "inbounds": [{"type": "hysteria2", "tag": "sb-hy2-in"}],
+            "inbounds": [],
             "outbounds": [{"type": "direct", "tag": "direct-out"}],
         }), encoding="utf-8")
         program = relay_python().replace("'${CONFIG_FILE}'", repr(str(config_path)))
