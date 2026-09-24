@@ -166,7 +166,7 @@ The default user receives shared nodes and custom links. Quota users receive onl
 
 ### Landing Relay and Subscription Aggregation
 
-Landing relay sends outbound traffic to another SS, VLESS, VMess, or Trojan node. Subscription aggregation merges multiple VPS or external feeds, removes duplicates, and serves the result through the local subscription endpoint.
+Landing relay sends traffic received by both Xray and Sing-box proxy inbounds to another SS, VLESS, VMess, or Trojan node. “All” covers client traffic received by either proxy core, not traffic initiated by the server itself. When both cores offer the same protocol, Sing-box subscription names include a core label to make the endpoints distinguishable. Subscription aggregation merges multiple VPS or external feeds, removes duplicates, and serves the result through the local subscription endpoint.
 
 ## Operations
 

@@ -461,7 +461,7 @@ require(
     "relay split domains must be normalized to Xray domain matchers so bare domains, wildcards, and URLs route through relay-out reliably",
 )
 require(
-    r'RELAY_LINK_ENV="\$RELAY_LINK" RELAY_MODE_ENV="\$RELAY_MODE" python3',
+    r'RELAY_LINK_ENV="\$RELAY_LINK" RELAY_MODE_ENV="\$RELAY_MODE" SB_CONFIG_ENV="\$SB_CONFIG_FILE" SB_ENABLED_ENV="\$\{SB_ENABLE:-false\}" python3',
     "relay links must be passed to Python through environment variables so quotes in share links cannot break the script",
 )
 require(

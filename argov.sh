@@ -283,6 +283,11 @@ EOF
 }
 build_singbox_config() {
     mkdir -p "$SB_WORK_DIR" 2>/dev/null
+    local relay_snapshot=""
+    if [ "${RELAY_ENABLED:-0}" = "1" ] && [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CONFIG_FILE" ]; then
+        relay_snapshot=$(mktemp -t argov-sb-relay.XXXXXX) || relay_snapshot=""
+        [ -n "$relay_snapshot" ] && cp "$SB_CONFIG_FILE" "$relay_snapshot" || relay_snapshot=""
+    fi
     sb_sync_users 2>/dev/null || true
     local TEMP_INBOUNDS; TEMP_INBOUNDS=$(mktemp -t sbin.XXXXXX)
     > "$TEMP_INBOUNDS"
@@ -476,6 +481,61 @@ PYSBHY2
         else
             yellow_msg "未找到 Python，无法写入 Hysteria2 Brutal 带宽参数"
         fi
+    fi
+
+    # Protocol/user edits rebuild the generated Sing-box config. Carry the active
+    # relay outbound and route across that rebuild so HY2 does not silently go direct.
+    if [ -n "$relay_snapshot" ] && [ -s "$relay_snapshot" ]; then
+        local sb_py; sb_py=$(py_bin)
+        if [ -n "$sb_py" ]; then
+            "$sb_py" - "$SB_CONFIG_FILE" "$relay_snapshot" << 'PYSBRELAYMERGE'
+import json, os, sys
+
+current_path, previous_path = sys.argv[1:3]
+with open(current_path, "r", encoding="utf-8") as f:
+    current = json.load(f)
+with open(previous_path, "r", encoding="utf-8") as f:
+    previous = json.load(f)
+
+relay_outbounds = [o for o in previous.get("outbounds", [])
+                   if o.get("tag") == "argov-relay"]
+if relay_outbounds:
+    current.setdefault("outbounds", [])
+    current["outbounds"] = [o for o in current["outbounds"]
+                            if o.get("tag") != "argov-relay"] + relay_outbounds
+    old_route = previous.get("route", {})
+    route = current.setdefault("route", {})
+    relay_rules = [r for r in old_route.get("rules", [])
+                   if r.get("outbound") == "argov-relay"]
+    if any(r.get("domain") for r in relay_rules) and not any(
+        r.get("action") == "sniff" for r in route.get("rules", [])
+    ):
+        route.setdefault("rules", []).insert(0, {"action": "sniff"})
+    route["rules"] = relay_rules + [
+        r for r in route.get("rules", []) if r.get("outbound") != "argov-relay"
+    ]
+    if old_route.get("final") == "argov-relay":
+        route["final"] = "argov-relay"
+    old_dns = previous.get("dns", {})
+    old_servers = [s for s in old_dns.get("servers", [])
+                   if s.get("tag") == "argov-relay-dns"]
+    if old_servers:
+        dns = current.setdefault("dns", {})
+        dns.setdefault("servers", [])
+        dns["servers"] = [s for s in dns["servers"]
+                          if s.get("tag") != "argov-relay-dns"] + old_servers
+    if old_route.get("default_domain_resolver") == "argov-relay-dns":
+        current.setdefault("route", {})["default_domain_resolver"] = "argov-relay-dns"
+
+tmp = current_path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(current, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+os.replace(tmp, current_path)
+PYSBRELAYMERGE
+            [ "$?" -ne 0 ] && yellow_msg "无法保留 Sing-box 落地中继，请重新应用中继设置"
+        fi
+        rm -f "$relay_snapshot" 2>/dev/null || true
     fi
     rm -f "$TEMP_INBOUNDS" 2>/dev/null
 
@@ -2480,6 +2540,12 @@ fi
 SB_CFG="/etc/sing-box/config.json"
 if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CFG" ] && [ -n "$ip" ]; then
     SB_SNI="${SB_SNI:-addons.mozilla.org}"
+    sb_hy2_name="${NODE_NAME}-HY2"
+    sb_reality_name="${NODE_NAME}-Reality"
+    sb_ss_name="${NODE_NAME}-SS"
+    $JQ -e '.inbounds[]|select(.tag=="hy2")' "$CFG" >/dev/null 2>&1 && sb_hy2_name="${NODE_NAME}-SingBox-HY2"
+    $JQ -e '.inbounds[]|select(.tag=="reality")' "$CFG" >/dev/null 2>&1 && sb_reality_name="${NODE_NAME}-SingBox-Reality"
+    $JQ -e '.inbounds[]|select(.tag=="ss")' "$CFG" >/dev/null 2>&1 && sb_ss_name="${NODE_NAME}-SingBox-SS"
     if [ "$IS_DEFAULT_USER" = "1" ]; then
         # 共享节点 — 仅 default 用户. 直接读 conf 变量, 不 jq 查 config.json
         local sb_hy2_hop=""
@@ -2487,7 +2553,7 @@ if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CFG" ] && [ -n "$ip" ]; then
         if [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ -n "${SB_HY2_PORT:-}" ] && [ -n "${SB_HY2_PSK:-}" ]; then
             local sb_hy2_pin=""
             [ -n "${SB_HY2_PIN_SHA256:-}" ] && sb_hy2_pin="&pinSHA256=${SB_HY2_PIN_SHA256}"
-            links+="hy2://${SB_HY2_PSK}@${ip}:${SB_HY2_PORT}?sni=${SB_SNI}&alpn=h3&insecure=1${sb_hy2_hop}${sb_hy2_pin}#${NODE_NAME}-HY2"$'\n'
+            links+="hy2://${SB_HY2_PSK}@${ip}:${SB_HY2_PORT}?sni=${SB_SNI}&alpn=h3&insecure=1${sb_hy2_hop}${sb_hy2_pin}#${sb_hy2_name}"$'\n'
         fi
         if [ "${SB_TUIC_ENABLE:-false}" = "true" ] && [ -n "${SB_TUIC_PORT:-}" ] && [ -n "${SB_TUIC_UUID:-}" ]; then
             links+="tuic://${SB_TUIC_UUID}:${SB_TUIC_PSK}@${ip}:${SB_TUIC_PORT}?congestion_control=bbr&alpn=h3&sni=${SB_SNI}&insecure=1#${NODE_NAME}-TUIC"$'\n'
@@ -2496,11 +2562,11 @@ if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CFG" ] && [ -n "$ip" ]; then
             links+="anytls://${SB_ANYTLS_PSK}@${ip}:${SB_ANYTLS_PORT}?security=reality&sni=${SB_SNI}&fp=chrome&pbk=${SB_REALITY_PUB:-}&sid=${SB_REALITY_SID:-}#${NODE_NAME}-AnyTLS"$'\n'
         fi
         if [ "${SB_REALITY_ENABLE:-false}" = "true" ] && [ -n "${SB_REALITY_PORT:-}" ]; then
-            links+="vless://${uuid}@${ip}:${SB_REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SB_SNI}&pbk=${SB_REALITY_PUB:-}&fp=chrome&sid=${SB_REALITY_SID:-}#${NODE_NAME}-Reality"$'\n'
+            links+="vless://${uuid}@${ip}:${SB_REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SB_SNI}&pbk=${SB_REALITY_PUB:-}&fp=chrome&sid=${SB_REALITY_SID:-}#${sb_reality_name}"$'\n'
         fi
         if [ "${SB_SS_ENABLE:-false}" = "true" ] && [ -n "${SB_SS_PORT:-}" ] && [ -n "${SB_SS_PSK:-}" ]; then
             sb_ss_b64=$(printf '%s' "${SS_METHOD:-aes-256-gcm}:${SB_SS_PSK}" | base64 -w0 2>/dev/null || printf '%s' "${SS_METHOD:-aes-256-gcm}:${SB_SS_PSK}" | base64 | tr -d '\n')
-            links+="ss://${sb_ss_b64}@${ip}:${SB_SS_PORT}#${NODE_NAME}-SS"$'\n'
+            links+="ss://${sb_ss_b64}@${ip}:${SB_SS_PORT}#${sb_ss_name}"$'\n'
         fi
     else
     # v2: 限额用户获取自己专属的 Sing-box 节点 (独立端口+密码, 可追踪流量)
@@ -2523,14 +2589,14 @@ if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CFG" ] && [ -n "$ip" ]; then
         # Reality per-user
         local reality_up; reality_up=$(echo "$sb_ports" | $JQ -r '.reality // 0')
         if [ "$reality_up" -gt 0 ]; then
-            links+="vless://${uuid}@${ip}:${reality_up}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SB_SNI}&pbk=${SB_REALITY_PUB:-}&fp=chrome&sid=${SB_REALITY_SID:-}#${NODE_NAME}-Reality"$'\n'
+            links+="vless://${uuid}@${ip}:${reality_up}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SB_SNI}&pbk=${SB_REALITY_PUB:-}&fp=chrome&sid=${SB_REALITY_SID:-}#${sb_reality_name}"$'\n'
         fi
         # SS per-user
         local ss_up; ss_up=$(echo "$sb_ports" | $JQ -r '.ss // 0')
         if [ "$ss_up" -gt 0 ]; then
             local ss_pass; ss_pass=$(echo "$sb_creds" | $JQ -r '.ss_pass // ""')
             local ss_m; ss_m="${SS_METHOD:-aes-256-gcm}"
-            [ -n "$ss_pass" ] && { local ss_b64; ss_b64=$(printf '%s' "${ss_m}:${ss_pass}" | base64 -w0 2>/dev/null || printf '%s' "${ss_m}:${ss_pass}" | base64 | tr -d '\n'); links+="ss://${ss_b64}@${ip}:${ss_up}#${NODE_NAME}-SS"$'\n'; }
+            [ -n "$ss_pass" ] && { local ss_b64; ss_b64=$(printf '%s' "${ss_m}:${ss_pass}" | base64 -w0 2>/dev/null || printf '%s' "${ss_m}:${ss_pass}" | base64 | tr -d '\n'); links+="ss://${ss_b64}@${ip}:${ss_up}#${sb_ss_name}"$'\n'; }
         fi
     fi   # close else (IS_DEFAULT_USER != 1)
 fi   # close SB_ENABLE check
@@ -2966,6 +3032,10 @@ show_node() {
 
     # Sing-box 节点
     if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CONFIG_FILE" ] && [ -n "$ip" ]; then
+        local sb_hy2_name="${NODE_NAME}-HY2" sb_reality_name="${NODE_NAME}-Reality" sb_ss_name="${NODE_NAME}-SS"
+        jq -e '.inbounds[]|select(.tag=="hy2")' "$CONFIG_FILE" >/dev/null 2>&1 && sb_hy2_name="${NODE_NAME}-SingBox-HY2"
+        jq -e '.inbounds[]|select(.tag=="reality")' "$CONFIG_FILE" >/dev/null 2>&1 && sb_reality_name="${NODE_NAME}-SingBox-Reality"
+        jq -e '.inbounds[]|select(.tag=="ss")' "$CONFIG_FILE" >/dev/null 2>&1 && sb_ss_name="${NODE_NAME}-SingBox-SS"
         echo ""
         echo -e "  ${white}── Sing-box 节点 ──${re}"
         echo ""
@@ -2975,7 +3045,7 @@ show_node() {
             sbhy2_pass=$(jq -r '.inbounds[]|select(.type=="hysteria2").users[0].password//empty' "$SB_CONFIG_FILE" 2>/dev/null)
             local sb_hy2_hop_range=""
             [ "${SB_HY2_HOP_ENABLE:-false}" = "true" ] && sb_hy2_hop_range="${SB_HY2_HOP_START}-${SB_HY2_HOP_END}"
-            [ -n "$sbhy2_pass" ] && echo -e "  ${yellow}HY2${re}  ${green}$(gen_sb_hy2_link "$sbhy2_pass" "$ip" "$sbhy2_port" "${SB_SNI:-www.bing.com}" "${NODE_NAME}-HY2" "$sb_hy2_hop_range")${re}\n"
+            [ -n "$sbhy2_pass" ] && echo -e "  ${yellow}HY2${re}  ${green}$(gen_sb_hy2_link "$sbhy2_pass" "$ip" "$sbhy2_port" "${SB_SNI:-www.bing.com}" "$sb_hy2_name" "$sb_hy2_hop_range")${re}\n"
             [ -n "$sb_hy2_hop_range" ] && echo -e "  ${cyan}跳变${re}: ${sb_hy2_hop_range}  mode: ${SB_HY2_HOP_MODE:-fixed}"
         fi
         if [ "${SB_TUIC_ENABLE:-false}" = "true" ] && [ -n "${SB_TUIC_PORT:-}" ]; then
@@ -2990,11 +3060,11 @@ show_node() {
         fi
         if [ "${SB_REALITY_ENABLE:-false}" = "true" ] && [ -n "${SB_REALITY_PORT:-}" ]; then
             local sbreal_uuid; sbreal_uuid=$(get_uuid)
-            echo -e "  ${yellow}Reality${re}  ${green}$(gen_sb_reality_link "$sbreal_uuid" "$ip" "$SB_REALITY_PORT" "${SB_SNI}" "${SB_REALITY_PUB}" "${SB_REALITY_SID}" "${NODE_NAME}-Reality")${re}\n"
+            echo -e "  ${yellow}Reality${re}  ${green}$(gen_sb_reality_link "$sbreal_uuid" "$ip" "$SB_REALITY_PORT" "${SB_SNI}" "${SB_REALITY_PUB}" "${SB_REALITY_SID}" "$sb_reality_name")${re}\n"
         fi
         if [ "${SB_SS_ENABLE:-false}" = "true" ] && [ -n "${SB_SS_PORT:-}" ]; then
             local sbss_pass; sbss_pass=$(jq -r '.inbounds[]|select(.type=="shadowsocks").password//empty' "$SB_CONFIG_FILE" 2>/dev/null)
-            [ -n "$sbss_pass" ] && echo -e "  ${yellow}SS${re}  ${green}$(gen_sb_ss_link "${SS_METHOD:-aes-256-gcm}" "$sbss_pass" "$ip" "$SB_SS_PORT" "${NODE_NAME}-SS")${re}\n"
+            [ -n "$sbss_pass" ] && echo -e "  ${yellow}SS${re}  ${green}$(gen_sb_ss_link "${SS_METHOD:-aes-256-gcm}" "$sbss_pass" "$ip" "$SB_SS_PORT" "$sb_ss_name")${re}\n"
         fi
     fi
 
@@ -4576,7 +4646,7 @@ relay_menu() {
                 ;;
             r4|R4)
                 if [ -z "$RELAY_LINK" ]; then red_msg "请先设置落地节点 (r1)"; sleep 1; continue; fi
-                RELAY_ENABLED=1; save_conf; relay_apply; echo ""; echo -ne "  按回车返回..."; read -r
+                relay_apply; echo ""; echo -ne "  按回车返回..."; read -r
                 ;;
             r5|R5)
                 [ "$RELAY_ENABLED" != "1" ] && { yellow_msg "中继未启用。"; sleep 1; continue; }
@@ -4664,13 +4734,16 @@ relay_apply() {
 
     [ "$mode" != "restore" ] && yellow_msg "正在应用落地中继..."
     cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
+    [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CONFIG_FILE" ] && cp "$SB_CONFIG_FILE" "${SB_CONFIG_FILE}.bak"
 
     local py_err; py_err=$(mktemp /tmp/relay_err.XXXXXX)
-    RELAY_LINK_ENV="$RELAY_LINK" RELAY_MODE_ENV="$RELAY_MODE" python3 2>"$py_err" << PYEOF
+    RELAY_LINK_ENV="$RELAY_LINK" RELAY_MODE_ENV="$RELAY_MODE" SB_CONFIG_ENV="$SB_CONFIG_FILE" SB_ENABLED_ENV="${SB_ENABLE:-false}" python3 2>"$py_err" << PYEOF
 import json, base64, os, re, sys
 from urllib.parse import parse_qs, unquote, urlsplit
 
 CONFIG = '${CONFIG_FILE}'
+SB_CONFIG = os.environ.get('SB_CONFIG_ENV', '/etc/sing-box/config.json')
+SB_ENABLED = os.environ.get('SB_ENABLED_ENV', 'false') == 'true'
 RELAY_LINK = os.environ.get('RELAY_LINK_ENV', '')
 RELAY_MODE = os.environ.get('RELAY_MODE_ENV', 'all')
 DOMAINS = ${domains_json}
@@ -4764,6 +4837,7 @@ def normalize_relay_domains(items):
 
 proto = addr = port = ''
 out = {}  # Xray outbound
+sb_out = {}  # Sing-box outbound, when Sing-box is installed
 
 if RELAY_LINK.startswith('ss://'):
     # 支持两种格式:
@@ -4801,6 +4875,8 @@ if RELAY_LINK.startswith('ss://'):
         "domainStrategy": "AsIs",
         "settings": {"servers": [{"address": addr, "port": port, "method": method, "password": password}]}
     }
+    sb_out = {"type": "shadowsocks", "tag": "argov-relay", "server": addr,
+              "server_port": port, "method": method, "password": password}
 
 elif RELAY_LINK.startswith('vless://'):
     proto = 'vless'
@@ -4822,6 +4898,30 @@ elif RELAY_LINK.startswith('vless://'):
     security = qs.get('security', ['none'])[0]
     sni = qs.get('sni', qs.get('servername', ['']))[0]
     apply_stream(out, network, security, sni, qs)
+    sb_out = {"type": "vless", "tag": "argov-relay", "server": addr,
+              "server_port": port, "uuid": uuid}
+    if flow:
+        sb_out["flow"] = flow
+    if security == 'reality':
+        reality = {"enabled": True, "public_key": qs.get('pbk', [''])[0],
+                   "short_id": qs.get('sid', [''])[0]}
+        tls = {"enabled": True, "server_name": sni, "reality": reality}
+        if qs.get('fp', [''])[0]:
+            tls["utls"] = {"enabled": True, "fingerprint": qs['fp'][0]}
+        sb_out["tls"] = tls
+    elif security == 'tls':
+        tls = {"enabled": True}
+        if sni:
+            tls["server_name"] = sni
+        if qs.get('allowInsecure', qs.get('insecure', ['']))[0].lower() in ('1', 'true', 'yes'):
+            tls["insecure"] = True
+        sb_out["tls"] = tls
+    if network == 'ws':
+        transport = {"type": "ws", "path": unquote(qs.get('path', ['/'])[0] or '/')}
+        host = qs.get('host', [''])[0]
+        if host:
+            transport["headers"] = {"Host": host}
+        sb_out["transport"] = transport
 
 elif RELAY_LINK.startswith('vmess://'):
     proto = 'vmess'
@@ -4833,6 +4933,8 @@ elif RELAY_LINK.startswith('vmess://'):
     uuid = vm.get('id', '')
     sni = vm.get('sni', addr)
     network = vm.get('net', 'tcp') or 'tcp'
+    method = vm.get('scy', 'auto') or 'auto'
+    alter_id = int(vm.get('aid', 0))
     out = {
         "tag": "relay-out",
         "protocol": "vmess",
@@ -4841,6 +4943,17 @@ elif RELAY_LINK.startswith('vmess://'):
     }
     qs = {"path": [vm.get('path', '/')], "host": [vm.get('host', '')]}
     apply_stream(out, network, 'tls' if vm.get('tls') == 'tls' else 'none', sni, qs)
+    sb_out = {"type": "vmess", "tag": "argov-relay", "server": addr,
+              "server_port": port, "uuid": uuid, "security": method,
+              "alter_id": alter_id}
+    if vm.get('tls') == 'tls':
+        sb_out["tls"] = {"enabled": True, "server_name": sni or addr}
+    if network == 'ws':
+        transport = {"type": "ws", "path": unquote(vm.get('path', '/') or '/')}
+        host = vm.get('host', '')
+        if host:
+            transport["headers"] = {"Host": host}
+        sb_out["transport"] = transport
 
 elif RELAY_LINK.startswith('trojan://'):
     proto = 'trojan'
@@ -4858,6 +4971,24 @@ elif RELAY_LINK.startswith('trojan://'):
     sni = qs.get('sni', qs.get('peer', ['']))[0]
     security = qs.get('security', ['tls' if sni else 'none'])[0]
     apply_stream(out, network, security, sni, qs)
+    sb_out = {"type": "trojan", "tag": "argov-relay", "server": addr,
+              "server_port": port, "password": password}
+    if security in ('tls', 'reality'):
+        tls = {"enabled": True}
+        if sni:
+            tls["server_name"] = sni
+        if security == 'reality':
+            tls["reality"] = {"enabled": True, "public_key": qs.get('pbk', [''])[0],
+                               "short_id": qs.get('sid', [''])[0]}
+        elif qs.get('allowInsecure', qs.get('insecure', ['']))[0].lower() in ('1', 'true', 'yes'):
+            tls["insecure"] = True
+        sb_out["tls"] = tls
+    if network == 'ws':
+        transport = {"type": "ws", "path": unquote(qs.get('path', ['/'])[0] or '/')}
+        host = qs.get('host', [''])[0]
+        if host:
+            transport["headers"] = {"Host": host}
+        sb_out["transport"] = transport
 
 else:
     raise ValueError(f'Unsupported protocol: {proto}')
@@ -4877,8 +5008,12 @@ config['outbounds'] = [o for o in config['outbounds'] if o.get('tag') != 'relay-
 config.setdefault('routing', {}).setdefault('rules', [])
 config['routing']['rules'] = [r for r in config['routing']['rules'] if r.get('outboundTag') != 'relay-out']
 
-# 注入 relay-out
-config['outbounds'].append(out)
+# In all mode the first outbound is the fallback when no routing rule matches.
+# Keep relay first so a missed rule cannot silently use the local direct exit.
+if RELAY_MODE == 'all':
+    config['outbounds'].insert(0, out)
+else:
+    config['outbounds'].append(out)
 
 # 构造 routing rule
 if RELAY_MODE == 'all':
@@ -4889,38 +5024,98 @@ else:
         raise ValueError('分流模式但无分流域名')
     relay_rule = {"type": "field", "domain": relay_domains, "outboundTag": "relay-out"}
 
-config['routing']['rules'].insert(0, relay_rule)
+# API traffic must retain its own outbound. A catch-all relay rule ahead of it
+# breaks StatsService and can make the panel report misleading traffic data.
+api_rules = [r for r in config['routing']['rules'] if r.get('outboundTag') == 'api']
+other_rules = [r for r in config['routing']['rules'] if r.get('outboundTag') != 'api']
+config['routing']['rules'] = api_rules + [relay_rule] + other_rules
 
 # 写回
 with open(CONFIG, 'w') as f:
     json.dump(config, f, indent=2, ensure_ascii=False)
 
+# Apply the same relay to Sing-box. Its Hysteria2 listeners are separate from
+# Xray's router, so updating config.json alone leaves Sing-box traffic direct.
+if SB_ENABLED and os.path.isfile(SB_CONFIG):
+    with open(SB_CONFIG, 'r', encoding='utf-8') as f:
+        sb_config = json.load(f)
+    sb_config['outbounds'] = [o for o in sb_config.get('outbounds', [])
+                              if o.get('tag') != 'argov-relay']
+    sb_config['outbounds'].append(sb_out)
+    route = sb_config.setdefault('route', {})
+    rules = [r for r in route.get('rules', []) if r.get('outbound') != 'argov-relay']
+    if RELAY_MODE == 'all':
+        rules.insert(0, {"action": "route", "outbound": "argov-relay"})
+        route['final'] = 'argov-relay'
+    else:
+        relay_domains = normalize_relay_domains(DOMAINS)
+        if not relay_domains:
+            raise ValueError('分流模式但无分流域名')
+        rules = [r for r in rules if r.get('action') != 'sniff']
+        rules.insert(0, {"action": "sniff"})
+        rules.insert(1, {"domain": relay_domains, "action": "route", "outbound": "argov-relay"})
+        route.setdefault('final', 'direct-out')
+    route['rules'] = rules
+
+    if not re.match(r'^\d{1,3}(?:\.\d{1,3}){3}$', addr) and ':' not in addr:
+        dns = sb_config.setdefault('dns', {})
+        servers = dns.setdefault('servers', [])
+        if not any(s.get('tag') == 'argov-relay-dns' for s in servers):
+            servers.append({"type": "local", "tag": "argov-relay-dns"})
+        route['default_domain_resolver'] = 'argov-relay-dns'
+
+    with open(SB_CONFIG, 'w', encoding='utf-8') as f:
+        json.dump(sb_config, f, indent=2, ensure_ascii=False)
+
 print(f'RELAY_OK|{proto}|{addr}:{port}')
 PYEOF
 
     local result=$?
-    # 校验 JSON + 重启
-    if python3 -c "import json; json.load(open('${CONFIG_FILE}'))" 2>/dev/null && [ "$result" = 0 ]; then
-        systemctl restart xray 2>/dev/null; sleep 2
-        if systemctl is-active xray 2>/dev/null; then
+    # Validate all configured cores before restarting services.
+    local config_ok=1
+    if [ "$result" -ne 0 ] || ! python3 -c "import json; json.load(open('${CONFIG_FILE}'))" 2>"$py_err" || \
+       [ ! -x "${WORK_DIR}/xray" ] || ! "${WORK_DIR}/xray" run -test -config "$CONFIG_FILE" >"$py_err" 2>&1; then
+        config_ok=0
+    fi
+    if [ "$config_ok" = 1 ] && [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CONFIG_FILE" ]; then
+        if ! command -v sing-box >/dev/null 2>&1 || ! sing-box check -c "$SB_CONFIG_FILE" >"$py_err" 2>&1; then
+            config_ok=0
+        fi
+    fi
+
+    if [ "$config_ok" = 1 ]; then
+        systemctl restart xray 2>/dev/null
+        [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CONFIG_FILE" ] && sb_restart 2>/dev/null
+        sleep 2
+        if systemctl is-active xray 2>/dev/null && { [ "${SB_ENABLE:-false}" != "true" ] || [ ! -f "$SB_CONFIG_FILE" ] || sb_status; }; then
+            RELAY_ENABLED=1; save_conf
             [ "$mode" != "restore" ] && green_msg "落地中继已生效！"
+            rm -f "$py_err"
+            return 0
         else
-            red_msg "Xray 启动失败！自动回滚备份。"
+            red_msg "代理内核启动失败！自动回滚中继配置。"
             cp "${CONFIG_FILE}.bak" "$CONFIG_FILE"
             systemctl restart xray 2>/dev/null; sleep 2
+            if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "${SB_CONFIG_FILE}.bak" ]; then
+                cp "${SB_CONFIG_FILE}.bak" "$SB_CONFIG_FILE"
+                sb_restart 2>/dev/null || true
+            fi
         fi
     else
         red_msg "中继配置失败！"
-        local emsg; emsg=$(head -3 "$py_err" 2>/dev/null)
+        local emsg; emsg=$(tail -n 1 "$py_err" 2>/dev/null)
         [ -n "$emsg" ] && echo -e "  ${yellow}${emsg}${re}"
         cp "${CONFIG_FILE}.bak" "$CONFIG_FILE"
+        [ "${SB_ENABLE:-false}" = "true" ] && [ -f "${SB_CONFIG_FILE}.bak" ] && cp "${SB_CONFIG_FILE}.bak" "$SB_CONFIG_FILE"
     fi
     rm -f "$py_err"
+    return 1
 }
 
 relay_clear() {
     if [ -f "$CONFIG_FILE" ]; then
         cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
+        [ -f "$SB_CONFIG_FILE" ] && cp "$SB_CONFIG_FILE" "${SB_CONFIG_FILE}.bak"
         python3 << PYEOF
 import json
 with open('${CONFIG_FILE}', 'r') as f:
@@ -4931,11 +5126,63 @@ config['routing']['rules'] = [r for r in config['routing']['rules'] if r.get('ou
 with open('${CONFIG_FILE}', 'w') as f:
     json.dump(config, f, indent=2, ensure_ascii=False)
 PYEOF
-        if python3 -c "import json; json.load(open('${CONFIG_FILE}'))" 2>/dev/null; then
-            RELAY_ENABLED=0; save_conf
-            systemctl restart xray 2>/dev/null; sleep 2; get_status; green_msg "中继已关闭。"
+
+        if [ -f "$SB_CONFIG_FILE" ]; then
+            python3 - "$SB_CONFIG_FILE" << 'PYCLEARSBRELAY'
+import json, os, sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as f:
+    config = json.load(f)
+config["outbounds"] = [o for o in config.get("outbounds", [])
+                       if o.get("tag") != "argov-relay"]
+route = config.setdefault("route", {})
+route["rules"] = [r for r in route.get("rules", [])
+                  if r.get("outbound") != "argov-relay"]
+if route.get("final") == "argov-relay":
+    route["final"] = "direct-out"
+if route.get("default_domain_resolver") == "argov-relay-dns":
+    route.pop("default_domain_resolver", None)
+dns = config.get("dns", {})
+dns["servers"] = [s for s in dns.get("servers", [])
+                  if s.get("tag") != "argov-relay-dns"]
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(config, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
+PYCLEARSBRELAY
+        fi
+
+        local clear_ok=1
+        python3 -c "import json; json.load(open('${CONFIG_FILE}'))" 2>/dev/null || clear_ok=0
+        [ "$clear_ok" = 1 ] && [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CONFIG_FILE" ] && \
+            { ! command -v sing-box >/dev/null 2>&1 || ! sing-box check -c "$SB_CONFIG_FILE" >/dev/null 2>&1; } && clear_ok=0
+        [ "$clear_ok" = 1 ] && [ -x "${WORK_DIR}/xray" ] && \
+            "${WORK_DIR}/xray" run -test -config "$CONFIG_FILE" >/dev/null 2>&1 || clear_ok=0
+
+        if [ "$clear_ok" = 1 ]; then
+            systemctl restart xray 2>/dev/null
+            [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CONFIG_FILE" ] && sb_restart 2>/dev/null
+            sleep 2
+            if systemctl is-active xray 2>/dev/null && { [ "${SB_ENABLE:-false}" != "true" ] || [ ! -f "$SB_CONFIG_FILE" ] || sb_status; }; then
+                RELAY_ENABLED=0; save_conf
+                get_status; green_msg "中继已关闭。"
+                return 0
+            fi
+            clear_ok=0
+        fi
+
+        if [ "$clear_ok" != 1 ]; then
+            cp "${CONFIG_FILE}.bak" "$CONFIG_FILE"
+            if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "${SB_CONFIG_FILE}.bak" ]; then
+                cp "${SB_CONFIG_FILE}.bak" "$SB_CONFIG_FILE"
+            fi
+            systemctl restart xray 2>/dev/null
+            [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CONFIG_FILE" ] && sb_restart 2>/dev/null
+            red_msg "关闭中继失败，已恢复原配置。"
         else
-            cp "${CONFIG_FILE}.bak" "$CONFIG_FILE"; red_msg "回滚失败。"
+            red_msg "关闭中继失败。"
         fi
     fi
 }
