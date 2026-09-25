@@ -191,6 +191,32 @@ Important files:
 | `/etc/sing-box/config.json` | Sing-box runtime configuration |
 | `/etc/xray/argo.log` | Temporary Argo tunnel URL log |
 
+### Troubleshooting services
+
+If a node or subscription stops working, check the service for the feature you enabled before reinstalling. On systemd systems, inspect the Xray service and recent logs:
+
+```bash
+systemctl status xray
+journalctl -u xray -n 50 --no-pager
+```
+
+For Argo tunnel issues, check `argov-tunnel` and the tunnel URL log:
+
+```bash
+systemctl status argov-tunnel
+journalctl -u argov-tunnel -n 50 --no-pager
+tail -n 50 /etc/xray/argo.log
+```
+
+On Alpine / OpenRC, use `rc-service` for service status:
+
+```bash
+rc-service xray status
+rc-service argov-tunnel status
+```
+
+`argov-tunnel` is absent when Argo is disabled. The `sing-box` and `argov-sub` services are present only when those optional features are enabled. Redact tokens, UUIDs, and domains before sharing logs in an issue.
+
 ## Clients and Notes
 
 Common link formats work with `v2rayN`, Nekoray, Shadowrocket, sing-box, Mihomo / Clash Verge, Karing, and similar applications, subject to each client's core version and protocol support.
