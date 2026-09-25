@@ -200,14 +200,17 @@ systemctl status xray
 journalctl -u xray -n 50 --no-pager
 ```
 
-For Argo tunnel issues, check `argov-tunnel` and the tunnel URL log. On Alpine / OpenRC, use `rc-service` for service status:
+For Argo tunnel issues, check `argov-tunnel` and the tunnel URL log:
 
 ```bash
 systemctl status argov-tunnel
 journalctl -u argov-tunnel -n 50 --no-pager
 tail -n 50 /etc/xray/argo.log
+```
 
-# Alpine / OpenRC equivalents for service status
+On Alpine / OpenRC, use `rc-service` for service status:
+
+```bash
 rc-service xray status
 rc-service argov-tunnel status
 ```

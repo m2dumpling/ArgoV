@@ -189,6 +189,32 @@ rc-service xray status
 | `/etc/sing-box/config.json` | Sing-box 运行配置 |
 | `/etc/xray/argo.log` | 临时 Argo 隧道域名日志 |
 
+### 服务故障排查
+
+节点或订阅无法使用时，先检查已启用功能对应的服务。使用 systemd 的系统可以查看 Xray 状态和最近的日志：
+
+```bash
+systemctl status xray
+journalctl -u xray -n 50 --no-pager
+```
+
+如果启用了 Argo，再检查隧道服务和域名日志：
+
+```bash
+systemctl status argov-tunnel
+journalctl -u argov-tunnel -n 50 --no-pager
+tail -n 50 /etc/xray/argo.log
+```
+
+在 Alpine / OpenRC 上，用以下命令查看服务状态：
+
+```bash
+rc-service xray status
+rc-service argov-tunnel status
+```
+
+未启用 Argo 时不会有 argov-tunnel 服务；Sing-box 和订阅服务也只在启用相应功能后出现。公开日志前请遮盖 Token、UUID 和域名。
+
 ## 客户端与注意事项
 
 常见链接格式可用于 `v2rayN`、Nekoray、Shadowrocket、sing-box、Mihomo / Clash Verge、Karing 等客户端；实际可用性取决于客户端内核版本和协议支持。
