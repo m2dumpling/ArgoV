@@ -200,11 +200,10 @@ rc-service xray status
 
 ## 贡献
 
-欢迎提交 Issue 或 Pull Request。提交前请至少运行：
+欢迎提交 Issue 或 Pull Request。提交前请在仓库根目录运行完整检查（需要 Bash 和 Python）：
 
 ```bash
-python tests/argov_static_tests.py argov.sh
-python tests/argov_compat_tests.py argov.sh
-python tests/argov_subscription_tests.py argov.sh
-python tests/argov_user_migration_tests.py argov.sh
+bash tests/argov_static_tests.sh argov.sh
 ```
+
+该脚本检查 Bash 语法、全部五组 Python 测试（包括中继配置），以及隧道服务的日志设置。

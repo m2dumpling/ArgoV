@@ -202,11 +202,10 @@ Common link formats work with `v2rayN`, Nekoray, Shadowrocket, sing-box, Mihomo 
 
 ## Contributing
 
-Issues and pull requests are welcome. At minimum, run the following before submitting a change:
+Issues and pull requests are welcome. From the repository root, run the complete check before submitting a change (Bash and Python are required):
 
 ```bash
-python tests/argov_static_tests.py argov.sh
-python tests/argov_compat_tests.py argov.sh
-python tests/argov_subscription_tests.py argov.sh
-python tests/argov_user_migration_tests.py argov.sh
+bash tests/argov_static_tests.sh argov.sh
 ```
+
+This checks Bash syntax, all five Python suites (including relay configuration), and the tunnel service log settings.
