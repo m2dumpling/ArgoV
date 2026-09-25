@@ -7,7 +7,7 @@
 
 # --- 颜色 ---
 re="\033[0m"; red="\e[1;31m"; green="\e[1;32m"; yellow="\e[1;33m"
-purple="\e[1;35m"; cyan="\e[1;36m"; white="\e[1;37m"
+purple="\e[1;35m"; cyan="\e[1;36m"; blue="\e[1;34m"; white="\e[1;37m"
 red_msg()    { echo -e "${red}$1${re}"; }
 green_msg()  { echo -e "${green}$1${re}"; }
 yellow_msg() { echo -e "${yellow}$1${re}"; }
