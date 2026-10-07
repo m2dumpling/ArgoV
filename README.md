@@ -217,6 +217,31 @@ rc-service argov-tunnel status
 
 `argov-tunnel` is absent when Argo is disabled. The `sing-box` and `argov-sub` services are present only when those optional features are enabled. Redact tokens, UUIDs, and domains before sharing logs in an issue.
 
+### Troubleshooting subscriptions
+
+If nodes connect but the subscription fails to update, check the subscription service separately from Xray and Argo. On systemd systems:
+
+```bash
+systemctl status argov-sub
+journalctl -u argov-sub -n 50 --no-pager
+```
+
+On Alpine / OpenRC:
+
+```bash
+rc-service argov-sub status
+```
+
+The service exists only after subscriptions are enabled. Use the current subscription address shown by the panel; for a per-user subscription, use that user's address from the `u` menu.
+
+| Symptom | What to check |
+| --- | --- |
+| Connection refused or timeout | Confirm `argov-sub` is running, the URL uses the configured subscription port, and that TCP port is allowed by both the host firewall and cloud security group. Argo does not automatically expose the subscription service. |
+| HTTPS certificate error | Check the subscription domain and certificate separately from the proxy node's certificate. |
+| HTTP 404 | Check the address and token, then confirm the user is enabled and has not been disabled by their quota. A valid user's subscription can also briefly return 404 while its cache is being generated; retry after the refresh rather than immediately reinstalling. |
+
+Subscription URLs contain credentials. Do not post the complete URL, user database, or configuration file in a public issue; share the error and redacted diagnostic output instead.
+
 ## Clients and Notes
 
 Common link formats work with `v2rayN`, Nekoray, Shadowrocket, sing-box, Mihomo / Clash Verge, Karing, and similar applications, subject to each client's core version and protocol support.
