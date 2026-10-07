@@ -215,6 +215,31 @@ rc-service argov-tunnel status
 
 未启用 Argo 时不会有 argov-tunnel 服务；Sing-box 和订阅服务也只在启用相应功能后出现。公开日志前请遮盖 Token、UUID 和域名。
 
+### 订阅故障排查
+
+节点可以连接，但订阅无法更新时，需要单独检查订阅服务，而不只是 Xray 或 Argo。systemd 系统执行：
+
+```bash
+systemctl status argov-sub
+journalctl -u argov-sub -n 50 --no-pager
+```
+
+Alpine / OpenRC 系统执行：
+
+```bash
+rc-service argov-sub status
+```
+
+只有启用订阅功能后才会有 `argov-sub` 服务。请使用面板显示的最新订阅地址；独立用户的订阅地址应从 `u` 菜单获取。
+
+| 现象 | 检查方向 |
+| --- | --- |
+| 连接被拒绝或超时 | 检查服务是否运行、订阅地址的端口是否正确，以及服务器防火墙和云安全组是否放行该 TCP 端口。Argo 不会自动代理订阅服务。 |
+| HTTPS 证书错误 | 单独检查订阅域名和订阅服务证书，不要与代理节点的证书混淆。 |
+| HTTP 404 | 检查地址和 Token，并确认用户已启用、未因配额被禁用。有效用户的订阅也可能在缓存生成期间短暂返回 404，可稍后重试，不必立即重装。 |
+
+订阅地址包含访问凭据。公开提问时，不要上传完整订阅地址、用户数据库或配置文件；请只提供错误信息和已脱敏的排查结果。
+
 ## 客户端与注意事项
 
 常见链接格式可用于 `v2rayN`、Nekoray、Shadowrocket、sing-box、Mihomo / Clash Verge、Karing 等客户端；实际可用性取决于客户端内核版本和协议支持。
