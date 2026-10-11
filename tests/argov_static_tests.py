@@ -560,10 +560,6 @@ require(
     "Sing-box fallback downloads must use versioned Linux release assets",
 )
 require(
-    r"install_singbox update",
-    "Sing-box management menu must request a real kernel update",
-)
-require(
     r"SB_HY2_CONGESTION[\s\S]*up_mbps[\s\S]*down_mbps[\s\S]*save_var SB_HY2_CONGESTION",
     "Sing-box Hysteria2 congestion settings must be persisted and emitted",
 )

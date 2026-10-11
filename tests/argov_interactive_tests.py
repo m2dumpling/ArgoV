@@ -477,6 +477,73 @@ if install_singbox update; then exit 1; fi
         self.assertIn("候选内核预检拒绝", result.stdout)
         self.assertNotIn("下载失败", result.stdout)
 
+    def test_singbox_release_version_accepts_compact_and_pretty_json(self):
+        release = {"assets": [{"tag_name": "v9.9.9"}], "tag_name": "v1.14.3", "prerelease": False}
+        for body in (json.dumps(release, separators=(",", ":")), json.dumps(release, indent=2)):
+            for requested in ("", "latest"):
+                with self.subTest(compact="\n" not in body, requested=requested):
+                    (self.root / "release.json").write_text(body)
+                    result = self.run_shell("SB_VERSION=" + shlex.quote(requested) + "\n" + r'''
+curl() { cat "$TEST_ROOT/release.json"; }
+singbox_latest_version
+''')
+                    self.assertEqual(result.stdout, "1.14.3\n")
+
+    def test_pinned_singbox_version_does_not_query_latest(self):
+        for version in ("1.14.3", "v1.14.3", "1.15.0-alpha.12"):
+            with self.subTest(version=version):
+                result = self.run_shell("SB_VERSION=" + shlex.quote(version) + "\n" + r'''
+curl() { exit 2; }
+singbox_latest_version
+''')
+                self.assertEqual(result.stdout, (version[1:] if version.startswith("v") else version) + "\n")
+
+    def test_singbox_version_fetch_failure_cannot_modify_deployed_nodes(self):
+        cases = ((6, '{"tag_name":"v1.14.3"}', "API 请求失败"),
+                 (22, '{"message":"API rate limit exceeded"}', "API 请求失败"),
+                 (0, '{"message":"API rate limit exceeded"}', "版本 JSON"),
+                 (0, '<html>unavailable</html>', "版本 JSON"),
+                 (0, '{"tag_name":null}', "版本 JSON"),
+                 (0, '{"tag_name":""}', "无效的版本号"),
+                 (0, '{"tag_name":"v1.14.3/invalid"}', "无效的版本号"))
+        for status, body, diagnostic in cases:
+            with self.subTest(status=status, body=body):
+                (self.root / "release.json").write_text(body)
+                result = self.run_shell(f"CURL_STATUS={status}\n" + r'''
+mkdir -p "$SB_WORK_DIR"
+printf '{"legacy":true}' > "$SB_CONFIG_FILE"
+printf 'deployed-binary' > "$TEST_ROOT/sing-box"
+printf 'deployed-certificate' > "$SB_HY2_CERT_FILE"
+SB_VERSION=latest; SB_ENABLE=true; SB_HY2_ENABLE=true; SB_HY2_PSK=deployed-secret
+save_conf || exit 1
+sha256sum "$SB_CONFIG_FILE" "$TEST_ROOT/sing-box" "$SB_HY2_CERT_FILE" "$USER_CONF" > "$TEST_ROOT/before"
+curl() { cat "$TEST_ROOT/release.json"; return "$CURL_STATUS"; }
+core_service_active() { return 1; }
+install_singbox_archive() { exit 2; }
+configure_singbox_service() { exit 3; }
+restart_protocol_runtime() { exit 4; }
+if install_singbox update; then exit 5; fi
+sha256sum -c "$TEST_ROOT/before" || exit 6
+''')
+                self.assertIn(diagnostic, result.stderr)
+                self.assertIn("现有节点未修改", result.stdout)
+
+    def test_singbox_menu_selects_install_or_update_from_actual_state(self):
+        for installed, running in ((False, False), (True, False), (True, True), (False, True)):
+            with self.subTest(installed=installed, running=running):
+                result = self.run_shell(f"INSTALLED={int(installed)}\nRUNNING={int(running)}\n" + r'''
+get_status() { :; }
+sb_is_installed() { [ "$INSTALLED" = 1 ]; }
+sb_status() { [ "$RUNNING" = 1 ]; }
+singbox_version_string() { printf '1.14.3'; }
+install_singbox() { printf '%s' "$1" > "$TEST_ROOT/menu-action"; return 1; }
+sb_menu
+''', "s1\n\ns0\n")
+                self.assertEqual((self.root / "menu-action").read_text(), "update" if installed or running else "install")
+                self.assertIn("版本:", result.stdout)
+                if not installed and not running:
+                    self.assertEqual(result.stdout.count("未安装"), 2, "Only the status column should say not installed")
+
     def test_singbox_uninstall_cannot_delete_files_when_stop_failed(self):
         result = self.run_shell(r'''
 mkdir -p "$SB_WORK_DIR"

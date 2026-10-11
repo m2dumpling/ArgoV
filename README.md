@@ -66,6 +66,8 @@ Script updates retain deployed protocols, domains, ports, credentials, and certi
 
 If Sing-box is still running after its installed binary was deleted, the panel identifies the missing files and blocks installation or upgrade. Restore missing configurations from backup before restarting. Uninstallation also refuses to delete files if the service remains running. Upgrade checks for active services use their actual `-c` / `-C` configuration paths and working directory.
 
+Earlier scripts could fail to resolve the Sing-box version when GitHub returned compact JSON. The current script accepts compact and multiline responses; fetch it through `ag` or menu `8`, then retry `s → s1`. API request failures and invalid version responses report their cause and cancel the operation while preserving deployed nodes. An explicitly configured `SB_VERSION` remains in use.
+
 HY2/TUIC exports read certificate fingerprints from the active configuration and keep legacy URI compatibility options. Mihomo profiles preserve certificate pins, VLESS encryption, and supported transport settings. See the [core compatibility review in Chinese](docs/CORE_COMPATIBILITY_REVIEW_CN.md) for implemented fixes, version limits, and optional follow-up features.
 
 ### Before You Start

@@ -1271,19 +1271,29 @@ singbox_libc() {
 }
 
 singbox_latest_version() {
-    local requested="${SB_VERSION:-}" tag
+    local requested="${SB_VERSION:-}" tag response
     if [ -n "$requested" ] && [ "$requested" != "latest" ]; then
         printf '%s\n' "${requested#v}"
         return 0
     fi
-    tag=$(curl -fsSL --retry 3 --connect-timeout 15 \
+    command -v jq >/dev/null 2>&1 || { red_msg "获取 Sing-box 版本需要 jq，请先安装 jq。" >&2; return 1; }
+    if ! response=$(curl -fsSL --retry 3 --connect-timeout 15 --max-time 30 \
         -H 'Accept: application/vnd.github+json' \
         -H 'User-Agent: ArgoV' \
-        'https://api.github.com/repos/SagerNet/sing-box/releases/latest' 2>/dev/null \
-        | sed -n 's/^[[:space:]]*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' \
-        | head -n 1)
+        'https://api.github.com/repos/SagerNet/sing-box/releases/latest'); then
+        red_msg "获取 Sing-box 版本失败：GitHub API 请求失败，请检查网络、TLS 或 HTTP 限流提示。" >&2
+        return 1
+    fi
+    tag=$(printf '%s' "$response" | jq -er '.tag_name | select(type == "string")' 2>/dev/null) || {
+        red_msg "获取 Sing-box 版本失败：GitHub API 未返回有效的版本 JSON。" >&2
+        return 1
+    }
     tag="${tag#v}"
-    [ -n "$tag" ] && printf '%s\n' "$tag"
+    [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]] || {
+        red_msg "获取 Sing-box 版本失败：GitHub API 返回了无效的版本号。" >&2
+        return 1
+    }
+    printf '%s\n' "$tag"
 }
 
 singbox_archive_url() {
@@ -1553,8 +1563,8 @@ install_singbox() {
     sb_arch=$(detect_sb_arch)
     mkdir -p "$SB_WORK_DIR" "$SB_WORK_DIR/certs" 2>/dev/null || true
     # 首次也只安装 release 内核，避免发行版安装器自动启动尚无节点配置的服务。
-    latest=$(singbox_latest_version)
-    [ -n "$latest" ] || { red_msg "无法获取 Sing-box 目标版本，原内核未修改。"; return 1; }
+    latest=$(singbox_latest_version) || { red_msg "无法获取 Sing-box 目标版本，已取消安装/更新；现有节点未修改。"; return 1; }
+    [ -n "$latest" ] || { red_msg "无法获取 Sing-box 目标版本，已取消安装/更新；现有节点未修改。"; return 1; }
     install_singbox_archive "$latest" "$sb_arch" || return 1
     if ! sb_is_installed; then
         red_msg "Sing-box 安装后未找到可执行文件"
@@ -1720,12 +1730,12 @@ reset_traffic_counters() {
 # MODULE: download and supply-chain helpers
 begin_argov_lock() {
     mkdir -p "$WORK_DIR" 2>/dev/null || true
-    exec 9>"${WORK_DIR}/.argov.lock" 2>/dev/null || return 0
+    { exec 9>"${WORK_DIR}/.argov.lock"; } 2>/dev/null || return 0
     command -v flock >/dev/null 2>&1 && flock -x 9 2>/dev/null || true
 }
 end_argov_lock() {
     command -v flock >/dev/null 2>&1 && flock -u 9 2>/dev/null || true
-    exec 9>&- 2>/dev/null || true
+    { exec 9>&-; } 2>/dev/null || true
 }
 download_file() {
     local url="$1" dest="$2" tmp
@@ -6886,22 +6896,25 @@ sb_menu() {
         echo ""
 
         # 状态
-        local sb_ver="未安装"
-        sb_is_installed && sb_ver="$(singbox_version_string)"
+        local sb_ver="—"
+        if sb_is_installed; then
+            sb_ver="$(singbox_version_string)"
+            sb_ver="${sb_ver:-版本未知}"
+        fi
         local sb_st_display="未安装"
         if sb_status; then
             if sb_is_installed; then
                 sb_st_display="${green}● 运行中${re}"
             else
                 sb_st_display="${yellow}● 进程仍运行，安装文件丢失${re}"
-                sb_ver="${sb_ver/未安装/版本未知}"
+                sb_ver="版本未知"
                 local running_ver; running_ver=$(singbox_version_string)
                 [ -n "$running_ver" ] && sb_ver="$running_ver"
             fi
         elif sb_is_installed; then
             [ -f "$SB_CONFIG_FILE" ] && sb_st_display="${red}○ 已停止${re}" || sb_st_display="${cyan}○ 内核已安装，待增配节点${re}"
         fi
-        echo -e "  Sing-box: ${sb_st_display}    ${cyan}${sb_ver}${re}"
+        echo -e "  Sing-box: ${sb_st_display}    版本: ${cyan}${sb_ver}${re}"
 
         # 启用的协议
         local proto_list=""
@@ -6925,7 +6938,9 @@ sb_menu() {
 
         case "$c" in
             s1|S1|1)
-                if install_singbox update; then
+                local sb_action=install
+                if sb_is_installed || sb_status; then sb_action=update; fi
+                if install_singbox "$sb_action"; then
                     SB_ENABLE=true; save_conf; start_sub_server >/dev/null 2>&1 &
                     green_msg "Sing-box 安装/更新成功！"
                 else
