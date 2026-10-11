@@ -332,12 +332,40 @@ prompt_hy2_congestion() {
     done
     if [ "$_hc_mode" = brutal ]; then
         prompt_positive_integer _hc_up "${_hc_up:-100}" "服务器上传 Mbps（客户端的下载）" || return 1
-        prompt_positive_integer _hc_down "${_hc_down:-100}" "服务器下载 Mbps（客户端的上传）" || return 1
+        prompt_positive_integer _hc_down "${_hc_down:-200}" "服务器下载 Mbps（客户端的上传）" || return 1
         yellow_msg "Brutal 仍需客户端设置带宽；通用分享链接不能替客户端选择算法。"
     fi
     printf -v "$_hc_mode_var" '%s' "$_hc_mode"
     printf -v "$_hc_up_var" '%s' "$_hc_up"
     printf -v "$_hc_down_var" '%s' "$_hc_down"
+}
+udp_range_in_use() {
+    local start="$1" end="$2" ignore="${3:-0}" file slot address rest port
+    is_port "$ignore" && ignore=$((10#$ignore)) || ignore=0
+    for file in /proc/net/udp /proc/net/udp6; do
+        [ -r "$file" ] || continue
+        while read -r slot address rest; do
+            port="${address##*:}"
+            [[ "$port" =~ ^[[:xdigit:]]{4}$ ]] || continue
+            port=$((16#$port))
+            [ "$port" = "$ignore" ] && continue
+            (( port >= 10#$start && port <= 10#$end )) && return 0
+        done < "$file"
+    done
+    return 1
+}
+default_hy2_hop_range() {
+    local owner="$1" preferred=47000 start end
+    [ "$owner" = SB_HY2_PORT ] && preferred=49000
+    for start in "$preferred" {10000..64000..1000}; do
+        end=$((start+1000))
+        if ! configured_port_conflict "$start" "$owner" "$end" && ! udp_range_in_use "$start" "$end" "${!owner}"; then
+            printf '%s-%s' "$start" "$end"
+            return 0
+        fi
+    done
+    red_msg "没有可用的默认跳跃范围，请先调整已选协议端口。" >&2
+    return 1
 }
 prompt_hy2_hopping() {
     local _hh_target="$1" _hh_current="$2" _hh_owner="${3:-HY2_PORT}" _hh_input _hh_start _hh_end
@@ -352,6 +380,9 @@ prompt_hy2_hopping() {
         _hh_start="${_hh_input%-*}"; _hh_end="${_hh_input#*-}"
         configured_port_conflict "$_hh_start" "$_hh_owner" "$_hh_end" && {
             red_msg "跳跃范围与其他协议、订阅端口或另一组 HY2 跳跃范围冲突，请重新输入。"; continue
+        }
+        udp_range_in_use "$_hh_start" "$_hh_end" "${!_hh_owner}" && {
+            red_msg "跳跃范围内已有其他 UDP 监听，请更换范围，避免影响已有节点。"; continue
         }
         _hh_input="$((10#$_hh_start))-$((10#$_hh_end))"
         printf -v "$_hh_target" '%s' "$_hh_input"
@@ -460,7 +491,7 @@ EOF
         cat > /etc/systemd/system/argov-hy2-hop.service << EOF
 [Unit]
 Description=ArgoV Hysteria2 Port Hopping Rules
-After=network.target
+After=network.target firewalld.service ufw.service
 [Service]
 Type=oneshot
 ExecStart=${WORK_DIR}/hy2-hop.sh
@@ -1344,24 +1375,61 @@ certificate_uri_options() {
 # Sing-box HY2 端口跳跃
 apply_sb_hy2_hop_rules() {
     [ "${SB_HY2_HOP_ENABLE:-false}" != "true" ] && return 0
-    local port="${SB_HY2_PORT:-}"
-    [ -z "$port" ] && return 1
-    disable_sb_hy2_hop_rules 2>/dev/null || true
-    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
-
-    # 共享端口跳变
+    local port="${SB_HY2_PORT:-}" hop_candidate
     local shared_start="${SB_HY2_HOP_START:-47000}" shared_end="${SB_HY2_HOP_END:-48000}"
     is_port "$port" && is_port_range "${shared_start}-${shared_end}" || return 1
     command -v iptables >/dev/null 2>&1 || { yellow_msg "未找到 iptables，无法启用 HY2 跳跃。"; return 1; }
-    iptables -t nat -A PREROUTING -p udp --dport "${shared_start}:${shared_end}" -j REDIRECT --to-ports "$port" -m comment --comment "argov-sb-hy2-hop" || return 1
-
-    # 每用户 HY2 跳变已移除 — 仅共享端口跳变
+    mkdir -p "$SB_WORK_DIR" || return 1
+    hop_candidate=$(mktemp "${SB_WORK_DIR}/hy2-hop.sh.new.XXXXXX") || return 1
+    cat > "$hop_candidate" << EOF
+#!/usr/bin/env bash
+set -e
+iptables -t nat -C PREROUTING -p udp --dport "${shared_start}:${shared_end}" -j REDIRECT --to-ports "$port" -m comment --comment "argov-sb-hy2-hop" 2>/dev/null || \\
+iptables -t nat -A PREROUTING -p udp --dport "${shared_start}:${shared_end}" -j REDIRECT --to-ports "$port" -m comment --comment "argov-sb-hy2-hop"
+EOF
+    [ "$?" = 0 ] || { rm -f "$hop_candidate"; return 1; }
+    chmod 700 "$hop_candidate" || { rm -f "$hop_candidate"; return 1; }
+    disable_sb_hy2_hop_rules
+    mv -f "$hop_candidate" "${SB_WORK_DIR}/hy2-hop.sh" || { rm -f "$hop_candidate"; return 1; }
+    "${SB_WORK_DIR}/hy2-hop.sh" || return 1
+    if [ "$IS_ALPINE" = 1 ]; then
+        cat > /etc/init.d/argov-sb-hy2-hop << EOF
+#!/sbin/openrc-run
+name=argov-sb-hy2-hop
+command="${SB_WORK_DIR}/hy2-hop.sh"
+command_background=false
+depend() { need net; after firewall; }
+EOF
+        [ "$?" = 0 ] || return 1
+        chmod +x /etc/init.d/argov-sb-hy2-hop || return 1
+        rc-update add argov-sb-hy2-hop default && rc-service argov-sb-hy2-hop start
+    else
+        cat > /etc/systemd/system/argov-sb-hy2-hop.service << EOF
+[Unit]
+Description=ArgoV Sing-box Hysteria2 Port Hopping Rules
+After=network.target firewalld.service ufw.service
+[Service]
+Type=oneshot
+ExecStart=${SB_WORK_DIR}/hy2-hop.sh
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target
+EOF
+        [ "$?" = 0 ] || return 1
+        systemctl daemon-reload && systemctl enable argov-sb-hy2-hop && systemctl start argov-sb-hy2-hop
+    fi
 }
 disable_sb_hy2_hop_rules() {
+    systemctl stop argov-sb-hy2-hop 2>/dev/null || true
+    systemctl disable argov-sb-hy2-hop 2>/dev/null || true
+    rc-service argov-sb-hy2-hop stop 2>/dev/null || true
+    rc-update del argov-sb-hy2-hop default 2>/dev/null || true
     while iptables -t nat -L PREROUTING -n --line-numbers 2>/dev/null | grep -q "argov-sb-hy2-hop"; do
         local ln; ln=$(iptables -t nat -L PREROUTING -n --line-numbers 2>/dev/null | grep "argov-sb-hy2-hop" | head -1 | awk '{print $1}')
         [ -n "$ln" ] && iptables -t nat -D PREROUTING "$ln" 2>/dev/null || break
     done
+    rm -f "${SB_WORK_DIR}/hy2-hop.sh" /etc/systemd/system/argov-sb-hy2-hop.service /etc/init.d/argov-sb-hy2-hop
+    systemctl daemon-reload 2>/dev/null || true
 }
 
 install_singbox() {
@@ -4040,7 +4108,7 @@ add_sb_protocol() {
     )
 }
 prompt_xray_hy2() {
-    local def_port="$HY2_PORT" current=""
+    local def_port="$HY2_PORT" current="" hop_default="$HY2_MPORT"
     is_port "$def_port" || def_port=$(find_free_any_port "$(shuf -i 10000-60000 -n 1)")
     [ -f "$CONFIG_FILE" ] && [ "${ENABLE_HY2:-0}" = 1 ] && current="$HY2_PORT"
     echo "  HY2 使用自签证书；SNI 是握手域名，不会将流量转发到该网站。"
@@ -4048,7 +4116,10 @@ prompt_xray_hy2() {
     prompt_port HY2_PORT "$def_port" "HY2 UDP 端口" HY2_PORT "$current" || return 1
     prompt_hy2_congestion HY2_CONGESTION HY2_UP_MBPS HY2_DOWN_MBPS xray \
         "${HY2_CONGESTION:-bbr}" "$HY2_UP_MBPS" "$HY2_DOWN_MBPS" || return 1
-    prompt_hy2_hopping HY2_MPORT "$HY2_MPORT" || return 1
+    if [ -z "$hop_default" ] && ! jq -e '.inbounds[]?|select(.tag=="hy2")' "$CONFIG_FILE" >/dev/null 2>&1; then
+        hop_default=$(default_hy2_hop_range HY2_PORT) || return 1
+    fi
+    prompt_hy2_hopping HY2_MPORT "$hop_default" || return 1
     echo "  HY2: ${HY2_SNI}:${HY2_PORT}，算法 ${HY2_CONGESTION}，跳跃 ${HY2_MPORT:-关闭}"
     [ "$HY2_CONGESTION" = brutal ] && echo "  服务端带宽: 上传 ${HY2_UP_MBPS} Mbps / 下载 ${HY2_DOWN_MBPS} Mbps"
     return 0
@@ -4100,6 +4171,10 @@ configure_sb_protocol() {
                 prompt_choice SB_HY2_BBR_PROFILE "$SB_HY2_BBR_PROFILE" "BBR 预设" standard conservative aggressive || return 1
             fi
             [ "$SB_HY2_HOP_ENABLE" = true ] && hop_range="${SB_HY2_HOP_START}-${SB_HY2_HOP_END}"
+            if [ "${!enabled_key}" != true ] && [ -z "$hop_range" ] &&
+                ! jq -e '.inbounds[]?|select(.tag=="sb-hy2")' "$SB_CONFIG_FILE" >/dev/null 2>&1; then
+                hop_range=$(default_hy2_hop_range SB_HY2_PORT) || return 1
+            fi
             prompt_hy2_hopping hop_range "$hop_range" SB_HY2_PORT || return 1
             if [ -n "$hop_range" ]; then
                 SB_HY2_HOP_ENABLE=true; SB_HY2_HOP_START="${hop_range%-*}"; SB_HY2_HOP_END="${hop_range#*-}"
@@ -4337,10 +4412,10 @@ do_install() {
     green_msg "  完成"
 
     yellow_msg "[2/6] 依赖..."
-    if command -v apt &>/dev/null; then DEBIAN_FRONTEND=noninteractive apt-get update -y -qq && apt-get install -y -qq jq unzip curl lsof openssl
-    elif command -v yum &>/dev/null; then yum install -y -q jq unzip curl lsof openssl
-    elif command -v dnf &>/dev/null; then dnf install -y -q jq unzip curl lsof openssl
-    elif command -v apk &>/dev/null; then apk update -q && apk add -q jq unzip curl lsof openssl iproute2; fi; green_msg "  完成"
+    if command -v apt &>/dev/null; then DEBIAN_FRONTEND=noninteractive apt-get update -y -qq && apt-get install -y -qq jq unzip curl lsof openssl iptables
+    elif command -v yum &>/dev/null; then yum install -y -q jq unzip curl lsof openssl iptables
+    elif command -v dnf &>/dev/null; then dnf install -y -q jq unzip curl lsof openssl iptables
+    elif command -v apk &>/dev/null; then apk update -q && apk add -q jq unzip curl lsof openssl iproute2 iptables; fi; green_msg "  完成"
 
     mkdir -p "$WORK_DIR" && secure_work_dir_permissions
     local ARCH_ARG CF_ARCH; ARCH_ARG=$(detect_arch); CF_ARCH=$(cf_arch)
@@ -4490,6 +4565,11 @@ EOF
             # 生成 SS 密码
             if [ "${SB_SS_ENABLE:-false}" = true ] && [ -z "${SB_SS_PSK:-}" ]; then
                 if [[ "$SB_SS_METHOD" == 2022-* ]]; then SB_SS_PSK=$(gen_ss2022_pass "$SB_SS_METHOD"); else SB_SS_PSK=$(rand_token); fi
+            fi
+            if [ "${SB_HY2_ENABLE:-false}" = true ] && [ "${SB_HY2_HOP_ENABLE:-false}" = true ] && ! apply_sb_hy2_hop_rules; then
+                disable_sb_hy2_hop_rules
+                SB_HY2_HOP_ENABLE=false
+                yellow_msg "  Sing-box HY2 跳跃规则安装失败，已关闭跳跃；请使用监听端口连接。"
             fi
             build_singbox_config || return 1
             sb_start

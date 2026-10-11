@@ -11,7 +11,7 @@
 ```bash
 sudo -i
 apt-get update
-apt-get install -y ca-certificates curl git jq openssl unzip python3 iproute2
+apt-get install -y ca-certificates curl git jq openssl unzip python3 iproute2 iptables
 git clone --branch hy2-compatibility-update --single-branch \
   https://github.com/m2dumpling/ArgoV.git /root/argov-canary
 cd /root/argov-canary
@@ -20,6 +20,13 @@ bash -n argov.sh
 ```
 
 核对提交号与推送时给出的提交号相同。分支之后继续更新时，可用 `git checkout <本次提交号>` 固定测试内容。
+
+如果已有检出目录（包括固定在旧提交的情况），获取修订后再固定到本次提供的提交号：
+
+```bash
+git -C /root/argov-canary fetch origin hy2-compatibility-update
+git -C /root/argov-canary checkout <本次提交号>
+```
 
 ## 二、干净安装
 
@@ -35,13 +42,13 @@ XRAY_VERSION=v26.3.27 SB_VERSION=1.14.3 bash ./argov.sh
 | 名称 | `canary-vps` |
 | Argo 隧道 | 先选择跳过；直连通过后单独验证 Argo |
 | 订阅域名 | 回车跳过，HTTP 端口选择 `18080` |
-| Xray 协议 | 选择 HY2，端口 `32443`；输入自己想用的 SNI 域名，算法选 BBR，先关闭跳跃 |
-| Sing-box | 安装；选择 HY2、TUIC，端口分别为 `33443`、`34443`；使用两个不同 SNI 域名，HY2 选 Brutal 并输入服务器上传、下载带宽 |
+| Xray 协议 | 选择 HY2，端口 `32443`；输入自己想用的 SNI 域名，算法选 BBR，回车接受跳跃范围（通常 `47000-48000`） |
+| Sing-box | 安装；选择 HY2、TUIC，端口分别为 `33443`、`34443`；使用两个不同 SNI 域名，HY2 选 Brutal；无已有值时服务器上传默认 100、下载默认 200 Mbps，可改为实际可用值；回车接受跳跃范围（通常 `49000-50000`） |
 | 确认 | 核对摘要后确认安装 |
 
 HY2 / TUIC 的域名用于自签证书与 TLS 握手，连接地址仍为 VPS IP；不要求这些域名指向 VPS。订阅 HTTPS 域名则是另外一种配置，后续验证时需要实际 DNS 与证书设置。
 
-在云安全组和 VPS 防火墙放行本轮选择的 TCP `18080`，以及 UDP `32443`、`33443`、`34443`。如果安装时改选其他端口，按最终配置放行；SSH 端口保持开放。
+在云安全组和 VPS 防火墙放行本轮选择的 TCP `18080`，以及 UDP `32443`、`33443`、`34443` 和两个完整跳跃范围（通常是 `47000-48000`、`49000-50000`）。冲突时默认范围会调整，以最终摘要为准；SSH 端口保持开放。跳跃由 NAT 转发到单个监听端口，`ss` 不会显示整个范围都有监听。
 
 安装结束后，在另一个 SSH 会话检查：
 
@@ -51,6 +58,8 @@ sing-box version
 XRAY_LOCATION_ASSET=/etc/xray /etc/xray/xray run -test -config /etc/xray/config.json
 sing-box check -c /etc/sing-box/config.json
 systemctl is-active xray sing-box argov-sub
+systemctl is-enabled argov-hy2-hop argov-sb-hy2-hop
+iptables -t nat -S PREROUTING
 ss -lntup
 journalctl -u xray -u sing-box -u argov-sub -n 80 --no-pager
 ```
@@ -78,7 +87,9 @@ journalctl -u xray -u sing-box -u argov-sub -n 80 --no-pager
 bash /root/argov-canary/argov.sh
 ```
 
-Xray HY2 使用 `a → e4`；Sing-box 使用 `s → s2 → e1` 编辑 HY2，其余编号按菜单显示。最后再测试跳跃：选择一个未占用的 UDP 范围，同时放行整个范围，核查防火墙规则，测试重启后是否仍可连接。Sing-box 跳跃的开机持久化仍是已记录的待改进项，不能仅凭重启前连通就认定通过。
+Xray HY2 使用 `a → e4`；Sing-box 使用 `s → s2 → e1` 编辑 HY2，其余编号按菜单显示。测试改变跳跃范围和输入 `off` 关闭，再启用：每次放行最终完整 UDP 范围，刷新客户端订阅，核查 NAT 规则与开机恢复服务。双核均应在重启后恢复规则并继续连接。若需要区分基础连接和跳跃问题，主动输入 `off`，先用三个监听端口验证，再逐核开启跳跃。
+
+仅运行新版脚本不自动改变已有节点的跳跃开关、范围或带宽；旧节点需要主动进入上述编辑入口才会应用新的规则恢复流程。
 
 直连通过后，再测试 Reality / SS、Argo 的 VLESS / VMess、HTTPS 订阅、普通与限额用户，以及已有生产环境实际使用的中继 / WARP / 聚合功能。每次新增一种能力，先核查配置和服务，再使用外部客户端连接；Argo 临时域名变化需要刷新订阅。
 

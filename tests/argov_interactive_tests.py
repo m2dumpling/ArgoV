@@ -118,6 +118,56 @@ printf '\n__RESULT__\n'; jq -n --arg mode "$mode" '{mode:$mode}'
 ''', "2\ncancel\n")
         self.assertEqual(self.result_json(result)["mode"], "bbr")
 
+    def test_brutal_download_default_and_existing_bandwidth(self):
+        for core in ("xray", "singbox"):
+            with self.subTest(core=core):
+                result = self.run_shell(f"CORE={core}\n" + r'''
+prompt_hy2_congestion mode up down "$CORE" bbr "" "" || exit 1
+[ "$up" = 100 ] && [ "$down" = 200 ] || exit 2
+prompt_hy2_congestion mode up down "$CORE" brutal 80 120 || exit 1
+printf '\n__RESULT__\n'; jq -n --arg up "$up" --arg down "$down" '{up:$up,down:$down}'
+''', "brutal\n\n\n\n\n\n")
+                self.assertEqual(self.result_json(result), {"up": "80", "down": "120"})
+
+    def test_new_hy2_defaults_enable_distinct_hopping_ranges(self):
+        result = self.run_shell(r'''
+ENABLE_HY2=1
+udp_range_in_use() { return 1; }
+singbox_supports_bbr_profile() { return 1; }
+prompt_xray_hy2 || exit 1
+configure_sb_protocol HY2 || exit 1
+printf '\n__RESULT__\n'
+jq -n --arg xray "$HY2_MPORT" --arg sb "$SB_HY2_HOP_START-$SB_HY2_HOP_END" --arg enabled "$SB_HY2_HOP_ENABLE" '{xray:$xray,sb:$sb,enabled:$enabled}'
+''', "xray.example.com\n24567\n\n\n34567\nsb.example.com\n\n\n\n")
+        self.assertEqual(self.result_json(result), {"xray": "47000-48000", "sb": "49000-50000", "enabled": "true"})
+
+    def test_deployed_hy2_keeps_disabled_hopping_on_enter(self):
+        result = self.run_shell(r'''
+ENABLE_HY2=1; HY2_PORT=24567; HY2_SNI=old-xray.example.com; HY2_MPORT=""
+SB_HY2_ENABLE=true; SB_HY2_PORT=34567; SB_HY2_SNI=old-sb.example.com; SB_HY2_HOP_ENABLE=false
+mkdir -p "$SB_WORK_DIR"
+printf '{"inbounds":[{"tag":"hy2"}]}' > "$CONFIG_FILE"
+printf '{"inbounds":[{"tag":"sb-hy2"}]}' > "$SB_CONFIG_FILE"
+singbox_supports_bbr_profile() { return 1; }
+prompt_xray_hy2 || exit 1
+configure_sb_protocol HY2 || exit 1
+printf '\n__RESULT__\n'
+jq -n --arg xray "$HY2_MPORT" --arg sb "$SB_HY2_HOP_ENABLE" '{xray:$xray,sb:$sb}'
+''', "\n\n\n\n\n\n\n\n\n")
+        self.assertEqual(self.result_json(result), {"xray": "", "sb": "false"})
+
+    def test_default_hopping_avoids_deployed_ranges_and_ports(self):
+        result = self.run_shell(r'''
+ENABLE_HY2=1; HY2_PORT=24567
+SB_HY2_ENABLE=true; SB_HY2_PORT=34567; SB_HY2_HOP_ENABLE=true; SB_HY2_HOP_START=47000; SB_HY2_HOP_END=48000
+ENABLE_REALITY=1; REALITY_PORT=10500
+udp_range_in_use() { return 1; }
+value=$(default_hy2_hop_range HY2_PORT) || exit 1
+configured_port_conflict "${value%-*}" HY2_PORT "${value#*-}" && exit 2
+printf '\n__RESULT__\n'; jq -n --arg value "$value" '{value:$value}'
+''')
+        self.assertNotEqual(self.result_json(result)["value"], "47000-48000")
+
     def test_port_retries_and_preserves_current_listener(self):
         result = self.run_shell(r'''
 SUB_PORT=24567
@@ -151,6 +201,12 @@ if find_free_any_port 65535; then exit 8; fi
             listener.bind(("::1", 0))
             self.run_shell(f"port_in_use_udp {listener.getsockname()[1]}")
 
+    def test_hopping_detects_other_udp_listeners_and_ignores_own_port(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+            self.run_shell(f"udp_range_in_use {port} {port} || exit 1\nif udp_range_in_use {port} {port} {port}; then exit 2; fi")
+
     def test_hopping_retries_and_can_be_disabled(self):
         result = self.run_shell(r'''
 prompt_hy2_hopping range "" || exit 1
@@ -158,6 +214,122 @@ prompt_hy2_hopping range "$range" || exit 1
 printf '\n__RESULT__\n'; jq -n --arg value "$range" '{value:$value}'
 ''', "60000-1000\nabc\n47000-48000\noff\n")
         self.assertEqual(self.result_json(result)["value"], "")
+
+    def test_singbox_hopping_persistence_is_idempotent_and_cleanup_is_scoped(self):
+        service = self.root / "argov-sb-hy2-hop.service"
+        init = self.root / "argov-sb-hy2-hop.init"
+        sandbox = self.root / "hop-library.sh"
+        sandbox.write_text(self.library.read_text(encoding="utf-8")
+                           .replace("/etc/systemd/system/argov-sb-hy2-hop.service", str(service))
+                           .replace("/etc/init.d/argov-sb-hy2-hop", str(init)), encoding="utf-8")
+        fake_bin = self.root / "bin"
+        fake_bin.mkdir()
+        iptables = fake_bin / "iptables"
+        iptables.write_text('''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+root = Path(os.environ["TEST_ROOT"])
+path = root / "rules.json"
+rules = json.loads(path.read_text())
+args = sys.argv[1:]
+op, key = args[2], args[3:]
+if op == "-C":
+    sys.exit(0 if key in rules else 1)
+elif op == "-A":
+    rules.append(key)
+elif op == "-D":
+    rules.pop(int(args[4]) - 1)
+elif op == "-L":
+    for number, rule in enumerate(rules, 1):
+        print(number, " ".join(rule))
+    sys.exit(0)
+else:
+    sys.exit(2)
+path.write_text(json.dumps(rules))
+''', encoding="utf-8")
+        iptables.chmod(0o755)
+        foreign = ["PREROUTING", "foreign-rule"]
+        for alpine in (0, 1):
+            with self.subTest(alpine=alpine):
+                (self.root / "rules.json").write_text(json.dumps([foreign]), encoding="utf-8")
+                body = f"source {shlex.quote(str(sandbox))}\nIS_ALPINE={alpine}\n" + r'''
+export TEST_ROOT
+export PATH="$TEST_ROOT/bin:$PATH"
+SB_WORK_DIR="$TEST_ROOT/sb"
+SB_HY2_ENABLE=true; SB_HY2_HOP_ENABLE=true
+SB_HY2_PORT=24567; SB_HY2_HOP_START=49000; SB_HY2_HOP_END=50000
+systemctl() {
+    printf 'systemctl %s\n' "$*" >> "$TEST_ROOT/services.log"
+    [ "$1" != start ] || "$SB_WORK_DIR/hy2-hop.sh"
+}
+rc-update() { printf 'rc-update %s\n' "$*" >> "$TEST_ROOT/services.log"; }
+rc-service() {
+    printf 'rc-service %s\n' "$*" >> "$TEST_ROOT/services.log"
+    [ "$2" != start ] || "$SB_WORK_DIR/hy2-hop.sh"
+}
+apply_sb_hy2_hop_rules || exit 1
+[ -x "$SB_WORK_DIR/hy2-hop.sh" ] || exit 2
+bash -n "$SB_WORK_DIR/hy2-hop.sh" || exit 3
+"$SB_WORK_DIR/hy2-hop.sh" || exit 4
+cp "$TEST_ROOT/rules.json" "$TEST_ROOT/applied.json"
+cp "$SB_WORK_DIR/hy2-hop.sh" "$TEST_ROOT/script-before"
+SB_HY2_PORT=invalid
+if apply_sb_hy2_hop_rules; then exit 5; fi
+cmp "$TEST_ROOT/rules.json" "$TEST_ROOT/applied.json" || exit 6
+cmp "$SB_WORK_DIR/hy2-hop.sh" "$TEST_ROOT/script-before" || exit 7
+SB_HY2_PORT=24567
+jq '[.[] | select(index("argov-sb-hy2-hop") == null)]' "$TEST_ROOT/rules.json" > "$TEST_ROOT/cleared.json"
+mv "$TEST_ROOT/cleared.json" "$TEST_ROOT/rules.json"
+"$SB_WORK_DIR/hy2-hop.sh" || exit 8
+cmp "$TEST_ROOT/rules.json" "$TEST_ROOT/applied.json" || exit 9
+if [ "$IS_ALPINE" = 1 ]; then
+    grep -q 'after firewall' "$TEST_ROOT/argov-sb-hy2-hop.init" || exit 10
+    grep -q 'rc-update add argov-sb-hy2-hop default' "$TEST_ROOT/services.log" || exit 11
+else
+    grep -q 'After=network.target firewalld.service ufw.service' "$TEST_ROOT/argov-sb-hy2-hop.service" || exit 12
+    grep -q 'systemctl enable argov-sb-hy2-hop' "$TEST_ROOT/services.log" || exit 13
+fi
+disable_sb_hy2_hop_rules
+[ ! -f "$SB_WORK_DIR/hy2-hop.sh" ] || exit 14
+[ ! -f "$TEST_ROOT/argov-sb-hy2-hop.service" ] || exit 15
+[ ! -f "$TEST_ROOT/argov-sb-hy2-hop.init" ] || exit 16
+'''
+                self.run_shell(body)
+                applied = json.loads((self.root / "applied.json").read_text())
+                self.assertEqual(len(applied), 2, "Starting/re-running recovery must not duplicate rules")
+                self.assertIn(foreign, applied)
+                self.assertEqual(json.loads((self.root / "rules.json").read_text()), [foreign])
+
+    def test_first_singbox_install_applies_hopping_before_config_and_disables_on_failure(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+        section = source.split("    # Sing-box 安装 (如果启用)\n", 1)[1].split("\n    save_conf\n", 1)[0]
+        for mode in ("success", "failure", "disabled"):
+            with self.subTest(mode=mode):
+                body = f"MODE={mode}\ninstall_fixture() {{\n{section}\n}}\n" + r'''
+SB_ENABLE=true; SB_HY2_ENABLE=true; SB_HY2_PSK=existing-secret
+SB_HY2_HOP_ENABLE=true
+[ "$MODE" != disabled ] || SB_HY2_HOP_ENABLE=false
+SB_REALITY_ENABLE=false; SB_ANYTLS_ENABLE=false; SB_TUIC_ENABLE=false; SB_SS_ENABLE=false
+install_singbox() { :; }
+sb_is_installed() { return 0; }
+generate_singbox_hy2_cert() { :; }
+apply_sb_hy2_hop_rules() {
+    printf 'apply\n' >> "$TEST_ROOT/install-order"
+    [ "$MODE" = success ]
+}
+disable_sb_hy2_hop_rules() { printf 'disable\n' >> "$TEST_ROOT/install-order"; }
+build_singbox_config() { printf 'build:%s\n' "$SB_HY2_HOP_ENABLE" >> "$TEST_ROOT/install-order"; }
+sb_start() { printf 'start\n' >> "$TEST_ROOT/install-order"; }
+install_fixture || exit 1
+'''
+                (self.root / "install-order").unlink(missing_ok=True)
+                self.run_shell(body)
+                expected = {
+                    "success": ["apply", "build:true", "start"],
+                    "failure": ["apply", "disable", "build:false", "start"],
+                    "disabled": ["build:false", "start"],
+                }
+                self.assertEqual((self.root / "install-order").read_text().splitlines(), expected[mode])
 
     def test_new_singbox_form_and_independent_domains(self):
         result = self.run_shell(r'''

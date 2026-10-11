@@ -50,7 +50,9 @@ You can also preset a node name:
 NODE_NAME=Tokyo bash <(curl -fsSL https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
 ```
 
-HY2 setup requires an SNI/TLS domain, then asks for the port, congestion control, and optional port hopping. Xray offers BBR, Brutal, Reno, and automatic negotiation; Sing-box offers BBR, Brutal, and client negotiation. Brutal asks for server upload and download bandwidth in Mbps. The domain identifies the generated self-signed certificate and TLS handshake; domain ownership is not required and traffic is not forwarded to that website.
+HY2 setup requires an SNI/TLS domain, then asks for the port, congestion control, and port hopping. Xray offers BBR, Brutal, Reno, and automatic negotiation; Sing-box offers BBR, Brutal, and client negotiation. Brutal asks for server upload and download bandwidth in Mbps; when no existing values are available, upload defaults to 100 and download to 200. Server download corresponds to client upload. The domain identifies the generated self-signed certificate and TLS handshake; domain ownership is not required and traffic is not forwarded to that website.
+
+New HY2 nodes enable port hopping by default, preferring UDP `47000-48000` for Xray and `49000-50000` for Sing-box. The form chooses another available range on conflict; enter `off` to disable hopping. Open the entire selected UDP range in both the cloud security group and host firewall. Both cores restore their rules at boot. Updating the script alone preserves existing bandwidth values, hopping switches, and ranges.
 
 Edit Xray HY2 through `ag → a → e4`. All five Sing-box protocols have edit actions under `ag → s → s2` (`e1` for HY2). Enter keeps the current value, invalid input retries, and `0` or `cancel` returns. HY2/Sing-box edits validate generated configurations and restore configuration, users, and certificates on failure. Refresh subscriptions after changing a domain or certificate. See the [usability review in Chinese](docs/USABILITY_REVIEW_CN.md) for completed fixes and remaining improvements.
 
