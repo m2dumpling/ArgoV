@@ -38,7 +38,11 @@ ArgoV 把 Xray、Cloudflare Tunnel（Argo）和 Sing-box 组合为一个交互�
 bash <(curl -fsSL https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
 ```
 
-安装向导会依次询问节点名称、是否启用 Argo、订阅方式、直连协议及可选 Sing-box 内核。完成后运行：
+安装向导会依次询问节点名称、是否启用 Argo、订阅方式、直连协议及可选 Sing-box 内核。
+
+Sing-box 在首次安装中只询问是否安装内核；选择安装后准备内核和服务定义，暂不创建节点、证书或启动空服务。安装完成后，从 `s → s2` 添加 HY2、TUIC 等协议，配置验证通过后才启动节点并设置开机运行。已有 Sing-box 节点继续保留原配置。
+
+完成后运行：
 
 ```bash
 ag
@@ -61,6 +65,8 @@ NODE_NAME=Tokyo bash <(curl -fsSL https://raw.githubusercontent.com/m2dumpling/A
 开发分支的真实服务器测试步骤见 [VPS 灰度验证指南](docs/VPS_CANARY_VALIDATION_CN.md)，包含干净安装、旧部署升级、检查命令和验收标准。
 
 更新脚本会保留存量节点的协议、域名、端口、凭据和证书。主动更新 Xray 或 Sing-box 内核时，先用新内核校验现有配置；不兼容则取消升级，启动失败则恢复旧二进制。原本停止的服务保持停止，成功升级后旧内核保存在当前二进制旁的 `.argov-previous` 文件中。
+
+若 Sing-box 进程仍运行但内核文件已删除，面板会显示“进程仍运行，安装文件丢失”，并阻止安装/更新；缺失的配置需要从备份恢复，脚本不会强行重启。卸载时若服务仍运行，也会取消删除文件。运行中使用自定义 `-c` / `-C` 配置路径的服务，会按实际进程参数和工作目录进行升级预检。
 
 HY2/TUIC 订阅会从正在使用的证书读取指纹，保留旧 URI 客户端的兼容参数；Mihomo 订阅使用证书指纹验证。TLS 中继会传递 `pcs` / `pinSHA256`，缺少指纹的旧跳过验证链接不会自动改写现有中继。完整修复状态、版本限制和剩余可选功能见 [内核兼容性审视](docs/CORE_COMPATIBILITY_REVIEW_CN.md)。
 

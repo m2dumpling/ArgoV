@@ -38,7 +38,11 @@ Run this as `root`, or from an account with `sudo` access:
 bash <(curl -fsSL https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
 ```
 
-The installer walks through node name, optional Argo, subscriptions, direct protocols, and the optional Sing-box core. When it finishes, open the panel with:
+The installer walks through node name, optional Argo, subscriptions, direct protocols, and the optional Sing-box core.
+
+The initial Sing-box step only asks whether to install the core. It prepares the binary and service definition without creating nodes or certificates, or starting an empty service. Add HY2, TUIC, or other protocols later through `s → s2`; after configuration validation, the first node starts the service and enables it at boot. Existing Sing-box node configurations are preserved.
+
+When it finishes, open the panel with:
 
 ```bash
 ag
@@ -59,6 +63,8 @@ Edit Xray HY2 through `ag → a → e4`. All five Sing-box protocols have edit a
 For testing the development branch on a real server, see the [VPS canary validation guide in Chinese](docs/VPS_CANARY_VALIDATION_CN.md), covering fresh installation, deployed-user upgrades, checks, and acceptance criteria.
 
 Script updates retain deployed protocols, domains, ports, credentials, and certificates. Core upgrades validate the existing configuration with the candidate binary before replacement, reject incompatible configurations, and restore the previous binary if service startup fails. Stopped services remain stopped; successful upgrades keep the former binary next to the current one as `.argov-previous`.
+
+If Sing-box is still running after its installed binary was deleted, the panel identifies the missing files and blocks installation or upgrade. Restore missing configurations from backup before restarting. Uninstallation also refuses to delete files if the service remains running. Upgrade checks for active services use their actual `-c` / `-C` configuration paths and working directory.
 
 HY2/TUIC exports read certificate fingerprints from the active configuration and keep legacy URI compatibility options. Mihomo profiles preserve certificate pins, VLESS encryption, and supported transport settings. See the [core compatibility review in Chinese](docs/CORE_COMPATIBILITY_REVIEW_CN.md) for implemented fixes, version limits, and optional follow-up features.
 

@@ -764,7 +764,7 @@ PYSBRELAYMERGE
     if ! jq empty "$sb_output" >/dev/null 2>&1; then
         red_msg "Sing-box 配置不是有效 JSON，原配置未替换。"; rm -f "$sb_output"; return 1
     fi
-    if command -v sing-box >/dev/null 2>&1; then
+    if sb_is_installed; then
         local check_result
         check_result=$(sing-box check -c "$sb_output" 2>&1) || {
             red_msg "Sing-box 配置验证失败，原配置未替换："
@@ -1173,20 +1173,87 @@ ARGOWRAP
 #==============================================================================
 # Sing-box 内核管理
 #==============================================================================
-sb_start()   { systemctl start sing-box 2>/dev/null || rc-service sing-box start 2>/dev/null || true; }
-sb_stop()    { systemctl stop sing-box 2>/dev/null || rc-service sing-box stop 2>/dev/null || true; }
-sb_restart() { systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || true; }
-sb_status() {
-    if [ "$IS_ALPINE" = 1 ]; then
-        (rc-service sing-box status 2>/dev/null | grep -qE "started|crashed" || pgrep -x sing-box &>/dev/null) && return 0 || return 1
-    else
-        systemctl is-active sing-box 2>/dev/null && return 0 || return 1
+singbox_runtime_config_ready() {
+    [ -f "$SB_CONFIG_FILE" ] && return 0
+    local binary
+    if sb_status && binary=$(singbox_binary_path) && singbox_preflight_current_config "$binary" "$SB_CONFIG_FILE" >/dev/null 2>&1; then
+        return 0
     fi
+    yellow_msg "Sing-box 没有可验证的节点配置，已取消启动/重启；请从 s → s2 增配节点，或先恢复丢失的配置。"
+    return 1
 }
-sb_is_installed() { command -v sing-box >/dev/null 2>&1; }
+sb_start() {
+    singbox_runtime_config_ready || return 1
+    if [ "$IS_ALPINE" = 1 ]; then rc-service sing-box start; else systemctl start sing-box; fi
+}
+sb_stop() {
+    if [ "$IS_ALPINE" = 1 ]; then rc-service sing-box stop; else systemctl stop sing-box; fi
+}
+sb_restart() {
+    singbox_runtime_config_ready || return 1
+    if [ "$IS_ALPINE" = 1 ]; then rc-service sing-box restart; else systemctl restart sing-box; fi
+}
+stop_singbox_for_uninstall() {
+    sb_stop
+    if sb_status || singbox_service_pid >/dev/null 2>&1; then
+        red_msg "Sing-box 进程仍在运行，已取消卸载；内核、配置与证书未删除。请先检查服务停止失败的原因。"
+        return 1
+    fi
+    return 0
+}
+sb_status() {
+    core_service_active sing-box
+}
+singbox_service_pid() {
+    local pid
+    if [ "${IS_ALPINE:-0}" = 1 ]; then
+        IFS= read -r pid < /run/sing-box.pid 2>/dev/null || return 1
+    else
+        pid=$(command systemctl show sing-box -p MainPID --value 2>/dev/null) || return 1
+    fi
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] && [ -r "/proc/$pid/cmdline" ] || return 1
+    printf '%s' "$pid"
+}
+singbox_running_binary() {
+    local pid binary version
+    pid=$(singbox_service_pid) || return 1
+    binary=$(readlink "/proc/$pid/exe") || return 1
+    [ -x "$binary" ] || return 1
+    version=$("$binary" version 2>/dev/null) || return 1
+    [[ "$version" == 'sing-box version '* ]] || return 1
+    printf '%s' "$binary"
+}
+singbox_binary_path() {
+    local binary
+    binary=$(singbox_running_binary) && { printf '%s' "$binary"; return 0; }
+    binary=$(type -P sing-box)
+    [ -n "$binary" ] && [ -x "$binary" ] && { printf '%s' "$binary"; return 0; }
+    for binary in /usr/local/bin/sing-box /usr/bin/sing-box "${SB_WORK_DIR}/sing-box"; do
+        [ -x "$binary" ] && { printf '%s' "$binary"; return 0; }
+    done
+    return 1
+}
+sing-box() {
+    local binary
+    binary=$(singbox_binary_path) || { red_msg "未找到 Sing-box 可执行文件。" >&2; return 127; }
+    "$binary" "$@"
+}
+sb_is_installed() { singbox_binary_path >/dev/null 2>&1; }
+sb_has_protocols() {
+    local key
+    for key in SB_HY2_ENABLE SB_TUIC_ENABLE SB_ANYTLS_ENABLE SB_REALITY_ENABLE SB_SS_ENABLE; do
+        [ "${!key}" = true ] && return 0
+    done
+    return 1
+}
 
 singbox_version_string() {
-    sing-box version 2>/dev/null \
+    local binary pid
+    binary=$(singbox_binary_path) || {
+        pid=$(singbox_service_pid) || return 1
+        binary="/proc/$pid/exe"
+    }
+    "$binary" version 2>/dev/null \
         | sed -n 's/^sing-box version[[:space:]]*\([^[:space:]]*\).*/\1/p' \
         | head -n 1
 }
@@ -1235,20 +1302,51 @@ core_service_active() {
     fi
 }
 
+singbox_preflight_current_config() {
+    local candidate="$1" fallback="$2" pid cwd arg i has_config=0
+    local -a args=() check_args=()
+    if core_service_active sing-box && pid=$(singbox_service_pid) && singbox_running_binary >/dev/null; then
+        while IFS= read -r -d '' arg; do args+=("$arg"); done < "/proc/$pid/cmdline"
+        for ((i=1; i<${#args[@]}; i++)); do
+            case "${args[$i]}" in
+                -c|--config|-C|--config-directory)
+                    arg="${args[$i]}"; ((i++))
+                    [ "$i" -lt "${#args[@]}" ] || return 1
+                    check_args+=("$arg" "${args[$i]}")
+                    has_config=1
+                    ;;
+                --config=*|--config-directory=*) check_args+=("${args[$i]}"); has_config=1 ;;
+                -D|--directory) ((i++)) ;;
+            esac
+        done
+        if [ "$has_config" = 1 ]; then
+            cwd=$(readlink "/proc/$pid/cwd") || return 1
+            (cd "$cwd" && "$candidate" check -D "$cwd" "${check_args[@]}")
+            return $?
+        fi
+    fi
+    if [ -f "$fallback" ]; then "$candidate" check -c "$fallback"; return $?; fi
+    if core_service_active sing-box; then
+        red_msg "运行中的 Sing-box 配置路径无法确认，且 $fallback 不存在；已取消升级，原服务保持运行。"
+        return 1
+    fi
+    return 0
+}
+
 # 升级只替换二进制；用现有配置预检，不迁移协议、用户或证书。
 activate_core_binary() {
     local core="$1" candidate="$2" target="$3" config="$4" check_result stage backup="" was_running=0 i healthy=1
     [ -x "$candidate" ] || { red_msg "候选内核不可执行，原内核未修改。"; return 1; }
     "$candidate" version >/dev/null 2>&1 || { red_msg "候选内核无法运行，原内核未修改。"; return 1; }
-    if [ ! -f "$config" ] && core_service_active "$core"; then
+    if [ "$core" != sing-box ] && [ ! -f "$config" ] && core_service_active "$core"; then
         red_msg "运行中的服务缺少现有配置文件，无法安全预检，已取消升级。"
         return 1
     fi
-    if [ -f "$config" ]; then
+    if [ "$core" = sing-box ] || [ -f "$config" ]; then
         if [ "$core" = xray ]; then
             check_result=$(XRAY_LOCATION_ASSET="$(dirname "$target")" "$candidate" run -test -config "$config" 2>&1)
         else
-            check_result=$("$candidate" check -c "$config" 2>&1)
+            check_result=$(singbox_preflight_current_config "$candidate" "$config" 2>&1)
         fi
         if [ "$?" -ne 0 ]; then
             red_msg "新内核不兼容现有配置，已取消升级，原服务继续使用原内核。"
@@ -1300,24 +1398,27 @@ install_singbox_archive() {
     tmp=$(mktemp -t singbox.XXXXXX) || return 1
     extract=$(mktemp -d -t singbox-extract.XXXXXX) || { rm -f "$tmp" 2>/dev/null || true; return 1; }
     if ! download_file "$url" "$tmp"; then
+        red_msg "Sing-box 内核下载失败: $version ($arch/$(singbox_libc))"
         rm -f "$tmp" 2>/dev/null || true
         rm -rf "$extract" 2>/dev/null || true
         return 1
     fi
     if ! tar xzf "$tmp" -C "$extract" 2>/dev/null; then
+        red_msg "Sing-box 下载的压缩包无法解压: $version"
         rm -f "$tmp" 2>/dev/null || true
         rm -rf "$extract" 2>/dev/null || true
         return 1
     fi
     binary=$(find "$extract" -type f -name sing-box -print -quit 2>/dev/null)
     if [ -z "$binary" ]; then
+        red_msg "Sing-box 压缩包中没有内核文件: $version"
         rm -f "$tmp" 2>/dev/null || true
         rm -rf "$extract" 2>/dev/null || true
         return 1
     fi
     target="/usr/bin/sing-box"
     if sb_is_installed; then
-        target=$(command -v sing-box)
+        target=$(singbox_binary_path) || { rm -f "$tmp"; rm -rf "$extract"; return 1; }
     fi
     if ! activate_core_binary sing-box "$binary" "$target" "$SB_CONFIG_FILE"; then
         rm -f "$tmp"; rm -rf "$extract"; return 1
@@ -1433,9 +1534,15 @@ disable_sb_hy2_hop_rules() {
 }
 
 install_singbox() {
-    local action="${1:-install}" force_update=0 cur_ver sb_arch requested installer latest
+    local action="${1:-install}" force_update=0 cur_ver sb_arch latest
     [ "$action" = "update" ] && force_update=1
     yellow_msg "$([ "$force_update" = 1 ] && echo '更新' || echo '安装') Sing-box..."
+
+    if core_service_active sing-box && ! singbox_running_binary >/dev/null; then
+        red_msg "Sing-box 服务仍在运行，但运行内核的安装路径不可用；已取消安装/更新，避免重启后旧节点失效。"
+        yellow_msg "请先恢复原内核、配置和服务文件；无需保留节点的测试机应先清理残留服务，再安装。"
+        return 1
+    fi
 
     if sb_is_installed && [ "$force_update" != 1 ]; then
         cur_ver=$(singbox_version_string)
@@ -1444,53 +1551,36 @@ install_singbox() {
     fi
 
     sb_arch=$(detect_sb_arch)
-    requested="${SB_VERSION:-}"
     mkdir -p "$SB_WORK_DIR" "$SB_WORK_DIR/certs" 2>/dev/null || true
-
-    # 存量升级使用候选 release，避免官方安装器在预检前改包或重启服务。
-    if [ "$force_update" = 1 ] && sb_is_installed; then
-        latest=$(singbox_latest_version)
-        [ -n "$latest" ] || { red_msg "无法获取 Sing-box 目标版本，原内核未修改。"; return 1; }
-        install_singbox_archive "$latest" "$sb_arch" || return 1
-        green_msg "Sing-box 内核更新完成: $(singbox_version_string)；原配置已保留。"
-        return 0
-    fi
-
-    # 首次安装时优先使用发行版包；更新时必须走官方安装器或版本化 release，避免旧包阻塞更新。
-    if [ "$force_update" != 1 ] && [ "$IS_ALPINE" = 1 ]; then
-        apk update || yellow_msg "apk update 失败，将尝试官方安装源"
-        apk add --no-cache sing-box 2>/dev/null || \
-            apk add --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community sing-box 2>/dev/null || true
-    fi
-
-    if [ "$force_update" = 1 ] || ! sb_is_installed; then
-        if [ -n "$requested" ] && [ "$requested" != "latest" ]; then
-            install_singbox_archive "${requested#v}" "$sb_arch" || {
-                red_msg "指定 Sing-box 版本下载失败: $requested"
-                return 1
-            }
-        else
-            installer="${SB_WORK_DIR}/sing-box-install.sh"
-            if ! download_script_checked "https://sing-box.app/install.sh" "$installer" || ! bash "$installer"; then
-                latest=$(singbox_latest_version)
-                [ -n "$latest" ] || { red_msg "无法获取 Sing-box 最新稳定版本"; rm -f "$installer" 2>/dev/null || true; return 1; }
-                install_singbox_archive "$latest" "$sb_arch" || {
-                    red_msg "Sing-box 下载失败: v$latest ($sb_arch/$(singbox_libc))"
-                    rm -f "$installer" 2>/dev/null || true
-                    return 1
-                }
-            fi
-            rm -f "$installer" 2>/dev/null || true
-        fi
-    fi
+    # 首次也只安装 release 内核，避免发行版安装器自动启动尚无节点配置的服务。
+    latest=$(singbox_latest_version)
+    [ -n "$latest" ] || { red_msg "无法获取 Sing-box 目标版本，原内核未修改。"; return 1; }
+    install_singbox_archive "$latest" "$sb_arch" || return 1
     if ! sb_is_installed; then
         red_msg "Sing-box 安装后未找到可执行文件"
         return 1
     fi
-    local sb_ver sb_bin; sb_ver=$(sing-box version 2>/dev/null | head -1 || echo "unknown"); sb_bin=$(command -v sing-box)
-    green_msg "Sing-box 安装成功: $sb_ver"
+    configure_singbox_service || return 1
+    SB_ENABLE=true
+    save_conf || return 1
+    green_msg "Sing-box 内核安装/更新成功: $(singbox_version_string)"
+    if ! sb_has_protocols && [ ! -f "$SB_CONFIG_FILE" ]; then
+        yellow_msg "内核已就绪，尚未配置节点；稍后从 s → s2 添加协议。"
+    fi
+}
 
-    # 创建服务定义
+configure_singbox_service() {
+    local sb_bin
+    sb_bin=$(singbox_binary_path) || return 1
+    # 已有定义（包括发行版单元和用户自定义路径）继续保留。
+    if [ "$IS_ALPINE" = 1 ]; then
+        [ -f /etc/init.d/sing-box ] && return 0
+    else
+        [ -n "$(command systemctl show sing-box -p FragmentPath --value 2>/dev/null)" ] && return 0
+        [ -f /etc/systemd/system/sing-box.service ] && return 0
+    fi
+
+    # 首次仅创建未启用的服务，增配首个协议成功后再设置开机启动。
     if [ "$IS_ALPINE" = 1 ]; then
         cat > /etc/init.d/sing-box << SBOPENRC
 #!/sbin/openrc-run
@@ -1498,7 +1588,7 @@ name="sing-box"
 description="Sing-box Service"
 supervisor="supervise-daemon"
 command="${sb_bin}"
-command_args="run -c /etc/sing-box/config.json"
+command_args="run -c ${SB_CONFIG_FILE}"
 pidfile="/run/\${RC_SVCNAME}.pid"
 command_background="yes"
 output_log="/var/log/sing-box.log"
@@ -1506,8 +1596,7 @@ error_log="/var/log/sing-box.err"
 depend() { need net; after firewall; }
 start_pre() { checkpath --directory --mode 0755 /var/log /run; }
 SBOPENRC
-        chmod +x /etc/init.d/sing-box
-        rc-update add sing-box default 2>/dev/null || true
+        [ "$?" = 0 ] && chmod +x /etc/init.d/sing-box || return 1
     else
         cat > /etc/systemd/system/sing-box.service << SBSYSTEMD
 [Unit]
@@ -1515,19 +1604,18 @@ Description=Sing-box Service
 After=network.target
 [Service]
 Type=simple
-ExecStart=${sb_bin} run -c /etc/sing-box/config.json
+ExecStart=${sb_bin} run -c ${SB_CONFIG_FILE}
 Restart=on-failure
 RestartSec=10s
 LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 SBSYSTEMD
-        systemctl daemon-reload
-        systemctl enable sing-box 2>/dev/null || true
+        [ "$?" = 0 ] && systemctl daemon-reload || return 1
     fi
-    SB_ENABLE=true
-    save_conf
-    green_msg "Sing-box 服务已配置"
+}
+enable_singbox_service() {
+    if [ "$IS_ALPINE" = 1 ]; then rc-update add sing-box default; else systemctl enable sing-box; fi
 }
 
 generate_singbox_cert() {
@@ -2037,7 +2125,7 @@ restart_user_runtime() {
         systemctl restart xray 2>/dev/null || true
     fi
     # v2: 同步 Sing-box 每用户端口 + 重建设置 + 启动流量守护进程
-    if [ "${SB_ENABLE:-false}" = "true" ] && sb_is_installed 2>/dev/null; then
+    if [ "${SB_ENABLE:-false}" = "true" ] && sb_has_protocols && sb_is_installed 2>/dev/null; then
         sb_sync_users 2>/dev/null || true
         build_singbox_config 2>/dev/null || true
         sb_restart 2>/dev/null || true
@@ -4073,7 +4161,8 @@ add_sb_protocol() {
     (
         load_conf
         sb_is_installed || { red_msg "请先安装 Sing-box 内核。"; return 1; }
-        local proto="$1" sb_keys
+        local proto="$1" sb_keys first_protocol=0
+        [ -f "$SB_CONFIG_FILE" ] || first_protocol=1
         configure_sb_protocol "$proto" || return 1
         confirm_changes "应用以上设置？连接参数变化后客户端需刷新订阅" || return 1
         begin_protocol_edit singbox || return 1
@@ -4094,6 +4183,7 @@ add_sb_protocol() {
         esac
         build_singbox_config || return 1
         save_conf || return 1
+        configure_singbox_service || return 1
         restart_protocol_runtime singbox || { red_msg "Sing-box 重启失败。"; return 1; }
         if [ "$proto" = HY2 ]; then
             disable_sb_hy2_hop_rules
@@ -4101,6 +4191,9 @@ add_sb_protocol() {
                 SB_HY2_HOP_ENABLE=false; save_conf
                 yellow_msg "跳跃规则安装失败，已关闭跳跃；监听端口保持可用。"
             fi
+        fi
+        if [ "$first_protocol" = 1 ]; then
+            enable_singbox_service || yellow_msg "节点已启动，但开机启动设置失败，请检查 Sing-box 服务。"
         fi
         EDIT_COMMITTED=1
         start_sub_server >/dev/null 2>&1 &
@@ -4207,7 +4300,7 @@ select_protocols() {
         echo -e " ${purple}║${re}     ${white}选择额外协议（可选）${re}                    ${purple}║${re}"
         echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
         echo ""
-        [ "$ARGO_MODE" != skip ] && echo -e "  ${white}已启用：VLESS-Argo + VMess-Argo${re}" || echo "  Argo 已跳过；选择直连协议，也可下一步只安装 Sing-box。"
+        [ "$ARGO_MODE" != skip ] && echo -e "  ${white}已启用：VLESS-Argo + VMess-Argo${re}" || echo "  Argo 已跳过，请选择 Xray 直连协议；Sing-box 节点可在安装后增配。"
         echo ""
         echo -e "  ${green}1${re}. VLESS Reality ${cyan}[$( [ "$ENABLE_REALITY" = 1 ] && echo "●● 已选" || echo "○○" )]${re}"
         echo -e "     XTLS Vision + Reality，需开放端口，抗封锁"
@@ -4272,6 +4365,7 @@ select_protocols() {
 #==============================================================================
 # MODULE: install and update
 interactive_install() {
+    local install_sb_core=false
     load_conf; clear
     echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
     echo -e " ${purple}║${re}  ${white}ArgoV · 交互式安装向导${re}              ${purple}║${re}"
@@ -4358,30 +4452,14 @@ interactive_install() {
     select_protocols || { yellow_msg "安装已取消。"; return 1; }
 
     echo -e " ${white}━━━ ⑩ Sing-box 内核（可选）━━━${re}"
-    echo -e "  ${yellow}Sing-box 支持 TUIC、AnyTLS Reality 等 Xray 不支持的协议。${re}"
-    echo -e "  ${yellow}Sing-box HY2 同样使用 TLS；自签证书通过指纹固定校验。${re}"
+    echo -e "  ${yellow}此处只安装内核；节点协议可在安装后从 s → s2 增配。${re}"
     echo -ne "  是否安装 Sing-box？[y/N]: "; read sb_yn
     if [ "$sb_yn" = "y" ] || [ "$sb_yn" = "Y" ]; then
         SB_ENABLE=true
+        install_sb_core=true
         echo -e "  → ${green}将安装 Sing-box 内核${re}"
-        echo ""
-        echo -e "  ${white}选择 Sing-box 协议 (多个用空格分隔):${re}"
-        echo -e "  ${green}1${re}. Hysteria2    ${green}2${re}. TUIC    ${green}3${re}. AnyTLS Reality"
-        echo -e "  ${green}4${re}. VLESS Reality  ${green}5${re}. Shadowsocks"
-        echo -ne "  协议编号: "; read sb_protos
-
-        local selected_proto
-        for num in $sb_protos; do
-            case "$num" in
-                1) selected_proto=HY2 ;; 2) selected_proto=TUIC ;; 3) selected_proto=ANYTLS ;;
-                4) selected_proto=REALITY ;; 5) selected_proto=SS ;;
-                *) red_msg "未知 Sing-box 协议编号：${num}"; return 1 ;;
-            esac
-            configure_sb_protocol "$selected_proto" || { yellow_msg "安装已取消，未写入配置。"; return 1; }
-        done
-        echo -e "  → ${green}已选择 Sing-box 协议${re}"
     else
-        SB_ENABLE=false
+        echo "  → 跳过本次 Sing-box 内核安装，已有节点设置保留。"
     fi
 
 
@@ -4391,13 +4469,14 @@ interactive_install() {
     fi
     confirm_changes "保存全部设置并开始安装？" || return 1
     save_conf || return 1
-    do_install
+    do_install "$install_sb_core"
 }
 
 #==============================================================================
 # 安装
 #==============================================================================
 do_install() {
+    local install_sb_core="${1:-${SB_ENABLE:-false}}"
     load_conf; clear
     echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
     echo -e " ${purple}║${re}   ${white}ArgoV · 部署中...${re}                    ${purple}║${re}"
@@ -4544,36 +4623,8 @@ EOF
     install_ag_wrapper
 
     # Sing-box 安装 (如果启用)
-    if [ "${SB_ENABLE:-false}" = "true" ]; then
+    if [ "$install_sb_core" = true ]; then
         install_singbox || yellow_msg "Sing-box 安装失败，可稍后重试"
-        if sb_is_installed; then
-            # 生成 Reality 密钥
-            if [ "${SB_REALITY_ENABLE:-false}" = "true" ] || [ "${SB_ANYTLS_ENABLE:-false}" = "true" ]; then
-                if [ -z "${SB_REALITY_PRIV:-}" ]; then
-                    local sb_keys; sb_keys=$(sing-box generate reality-keypair 2>/dev/null)
-                    SB_REALITY_PRIV=$(echo "$sb_keys" | awk '/PrivateKey/{print $2}')
-                    SB_REALITY_PUB=$(echo "$sb_keys" | awk '/PublicKey/{print $2}')
-                fi
-                [ -z "${SB_REALITY_SID:-}" ] && SB_REALITY_SID=$(sing-box generate rand 8 --hex 2>/dev/null | tr -d '\n')
-            fi
-            # 生成 TLS 证书 (HY2/TUIC)
-
-            if [ "${SB_HY2_ENABLE:-false}" = true ]; then generate_singbox_hy2_cert || return 1; fi
-            if [ "${SB_TUIC_ENABLE:-false}" = true ]; then generate_singbox_cert || return 1; fi
-            # 生成 HY2 密码
-            [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ -z "${SB_HY2_PSK:-}" ] && SB_HY2_PSK=$(rand_token)
-            # 生成 SS 密码
-            if [ "${SB_SS_ENABLE:-false}" = true ] && [ -z "${SB_SS_PSK:-}" ]; then
-                if [[ "$SB_SS_METHOD" == 2022-* ]]; then SB_SS_PSK=$(gen_ss2022_pass "$SB_SS_METHOD"); else SB_SS_PSK=$(rand_token); fi
-            fi
-            if [ "${SB_HY2_ENABLE:-false}" = true ] && [ "${SB_HY2_HOP_ENABLE:-false}" = true ] && ! apply_sb_hy2_hop_rules; then
-                disable_sb_hy2_hop_rules
-                SB_HY2_HOP_ENABLE=false
-                yellow_msg "  Sing-box HY2 跳跃规则安装失败，已关闭跳跃；请使用监听端口连接。"
-            fi
-            build_singbox_config || return 1
-            sb_start
-        fi
     fi
     save_conf
 
@@ -4586,8 +4637,10 @@ EOF
 
     start_sub_server
     start_stats_service
-    sb_sync_users 2>/dev/null || true
-    start_sb_stats_service 2>/dev/null || true
+    if sb_has_protocols; then
+        sb_sync_users 2>/dev/null || true
+        start_sb_stats_service 2>/dev/null || true
+    fi
     setup_traffic_counters 2>/dev/null || true
 
     echo ""; echo -e " ${purple}╔══════════════════════════════════════════════════╗${re}"
@@ -5874,7 +5927,7 @@ PYEOF
         config_ok=0
     fi
     if [ "$config_ok" = 1 ] && [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CONFIG_FILE" ]; then
-        if ! command -v sing-box >/dev/null 2>&1 || ! sing-box check -c "$SB_CONFIG_FILE" >"$py_err" 2>&1; then
+        if ! sb_is_installed || ! sing-box check -c "$SB_CONFIG_FILE" >"$py_err" 2>&1; then
             config_ok=0
         fi
     fi
@@ -5953,7 +6006,7 @@ PYCLEARSBRELAY
         local clear_ok=1
         python3 -c "import json; json.load(open('${CONFIG_FILE}'))" 2>/dev/null || clear_ok=0
         [ "$clear_ok" = 1 ] && [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CONFIG_FILE" ] && \
-            { ! command -v sing-box >/dev/null 2>&1 || ! sing-box check -c "$SB_CONFIG_FILE" >/dev/null 2>&1; } && clear_ok=0
+            { ! sb_is_installed || ! sing-box check -c "$SB_CONFIG_FILE" >/dev/null 2>&1; } && clear_ok=0
         [ "$clear_ok" = 1 ] && [ -x "${WORK_DIR}/xray" ] && \
             "${WORK_DIR}/xray" run -test -config "$CONFIG_FILE" >/dev/null 2>&1 || clear_ok=0
 
@@ -6831,9 +6884,20 @@ sb_menu() {
 
         # 状态
         local sb_ver="未安装"
-        sb_is_installed && sb_ver=$(sing-box version 2>/dev/null | head -1 || echo "installed")
+        sb_is_installed && sb_ver="$(singbox_version_string)"
         local sb_st_display="未安装"
-        sb_status && sb_st_display="${green}● 运行中${re}" || { sb_is_installed && sb_st_display="${red}○ 已停止${re}"; }
+        if sb_status; then
+            if sb_is_installed; then
+                sb_st_display="${green}● 运行中${re}"
+            else
+                sb_st_display="${yellow}● 进程仍运行，安装文件丢失${re}"
+                sb_ver="${sb_ver/未安装/版本未知}"
+                local running_ver; running_ver=$(singbox_version_string)
+                [ -n "$running_ver" ] && sb_ver="$running_ver"
+            fi
+        elif sb_is_installed; then
+            [ -f "$SB_CONFIG_FILE" ] && sb_st_display="${red}○ 已停止${re}" || sb_st_display="${cyan}○ 内核已安装，待增配节点${re}"
+        fi
         echo -e "  Sing-box: ${sb_st_display}    ${cyan}${sb_ver}${re}"
 
         # 启用的协议
@@ -6872,16 +6936,16 @@ sb_menu() {
                 echo -e "  ${green}1${re}. 启动    ${red}2${re}. 停止    ${yellow}3${re}. 重启"
                 echo -ne "  选择: "; read sc
                 case "${sc:-1}" in
-                    1) sb_start; green_msg "Sing-box 已启动" ;;
-                    2) sb_stop; red_msg "Sing-box 已停止" ;;
-                    3) sb_restart; green_msg "Sing-box 已重启" ;;
+                    1) sb_start && green_msg "Sing-box 已启动" || red_msg "Sing-box 未启动，请检查上述提示。" ;;
+                    2) sb_stop && green_msg "Sing-box 已停止" || red_msg "Sing-box 停止失败，请检查服务日志。" ;;
+                    3) sb_restart && green_msg "Sing-box 已重启" || red_msg "Sing-box 未重启，请检查上述提示。" ;;
                 esac
                 sleep 1
                 ;;
             s5|S5|5)
                 echo -ne "  ${red}⚠ 确定卸载 Sing-box? (y/N): ${re}"; read cf
                 if [ "$cf" = "y" ] || [ "$cf" = "Y" ]; then
-                    sb_stop 2>/dev/null
+                    stop_singbox_for_uninstall || { echo -ne "  按回车返回..."; read -r; continue; }
                     stop_sb_stats_service 2>/dev/null
                     disable_sb_hy2_hop_rules 2>/dev/null
                     systemctl disable sing-box 2>/dev/null; rc-update del sing-box default 2>/dev/null

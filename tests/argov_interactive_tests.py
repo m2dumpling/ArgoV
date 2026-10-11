@@ -11,6 +11,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -54,6 +55,8 @@ SB_HY2_CERT_FILE="$TEST_ROOT/sb-hy2.crt"; SB_HY2_KEY_FILE="$TEST_ROOT/sb-hy2.key
 ARGO_MODE=skip
 clear() { :; }
 load_conf
+configure_singbox_service() { :; }
+enable_singbox_service() { :; }
 '''
         result = subprocess.run(
             ["bash", "-c", prefix + body], input=inputs, text=True, capture_output=True, timeout=30
@@ -300,36 +303,202 @@ disable_sb_hy2_hop_rules
                 self.assertIn(foreign, applied)
                 self.assertEqual(json.loads((self.root / "rules.json").read_text()), [foreign])
 
-    def test_first_singbox_install_applies_hopping_before_config_and_disables_on_failure(self):
+    def test_first_singbox_install_only_installs_core_and_preserves_existing_nodes(self):
         source = SCRIPT.read_text(encoding="utf-8")
         section = source.split("    # Sing-box 安装 (如果启用)\n", 1)[1].split("\n    save_conf\n", 1)[0]
-        for mode in ("success", "failure", "disabled"):
+        for mode in ("new", "existing", "skip"):
             with self.subTest(mode=mode):
                 body = f"MODE={mode}\ninstall_fixture() {{\n{section}\n}}\n" + r'''
+install_sb_core=true
+[ "$MODE" != skip ] || install_sb_core=false
 SB_ENABLE=true; SB_HY2_ENABLE=true; SB_HY2_PSK=existing-secret
-SB_HY2_HOP_ENABLE=true
-[ "$MODE" != disabled ] || SB_HY2_HOP_ENABLE=false
-SB_REALITY_ENABLE=false; SB_ANYTLS_ENABLE=false; SB_TUIC_ENABLE=false; SB_SS_ENABLE=false
-install_singbox() { :; }
-sb_is_installed() { return 0; }
-generate_singbox_hy2_cert() { :; }
-apply_sb_hy2_hop_rules() {
-    printf 'apply\n' >> "$TEST_ROOT/install-order"
-    [ "$MODE" = success ]
-}
-disable_sb_hy2_hop_rules() { printf 'disable\n' >> "$TEST_ROOT/install-order"; }
-build_singbox_config() { printf 'build:%s\n' "$SB_HY2_HOP_ENABLE" >> "$TEST_ROOT/install-order"; }
-sb_start() { printf 'start\n' >> "$TEST_ROOT/install-order"; }
+SB_HY2_HOP_ENABLE=true; SB_HY2_HOP_START=49000; SB_HY2_HOP_END=50000
+[ "$MODE" != new ] || { SB_HY2_ENABLE=false; SB_HY2_HOP_ENABLE=false; }
+mkdir -p "$SB_WORK_DIR"
+[ "$MODE" = new ] || printf '{"inbounds":[{"tag":"legacy"}]}' > "$SB_CONFIG_FILE"
+install_singbox() { printf 'install\n' >> "$TEST_ROOT/install-order"; }
+generate_singbox_hy2_cert() { exit 2; }
+apply_sb_hy2_hop_rules() { exit 3; }
+build_singbox_config() { exit 4; }
+sb_start() { exit 5; }
 install_fixture || exit 1
+if [ "$MODE" = new ]; then [ ! -f "$SB_CONFIG_FILE" ] || exit 6;
+else [ "$(cat "$SB_CONFIG_FILE")" = '{"inbounds":[{"tag":"legacy"}]}' ] || exit 7; fi
+[ "$SB_HY2_PSK" = existing-secret ] || exit 8
 '''
                 (self.root / "install-order").unlink(missing_ok=True)
+                (self.root / "sb" / "config.json").unlink(missing_ok=True)
                 self.run_shell(body)
-                expected = {
-                    "success": ["apply", "build:true", "start"],
-                    "failure": ["apply", "disable", "build:false", "start"],
-                    "disabled": ["build:false", "start"],
-                }
-                self.assertEqual((self.root / "install-order").read_text().splitlines(), expected[mode])
+                order = self.root / "install-order"
+                self.assertEqual(order.read_text().splitlines() if order.exists() else [], [] if mode == "skip" else ["install"])
+
+    def test_first_install_form_only_asks_singbox_core_and_keeps_legacy_settings(self):
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                (self.root / "argov.conf").unlink(missing_ok=True)
+                body = r'''
+select_protocols() { ENABLE_HY2=1; }
+configure_sb_protocol() { exit 2; }
+do_install() { printf '%s' "$1" > "$TEST_ROOT/install-core"; }
+'''
+                if existing:
+                    body += 'SB_ENABLE=true; SB_TUIC_ENABLE=true; SB_TUIC_UUID=legacy-id; SB_TUIC_PSK=legacy-secret\nsave_conf || exit 3\n'
+                body += r'''
+interactive_install || exit 1
+printf '\n__RESULT__\n'
+jq -n --arg core "$SB_ENABLE" --arg hy "$SB_HY2_ENABLE" --arg tuic "$SB_TUIC_ENABLE" --arg password "$SB_TUIC_PSK" '{core:$core,hy:$hy,tuic:$tuic,password:$password}'
+'''
+                result = self.run_shell(body, "\n2\n\n18080\n" + ("n\n" if existing else "y\n") + "y\n")
+                settings = self.result_json(result)
+                self.assertEqual(settings["core"], "true")
+                self.assertEqual(settings["hy"], "false")
+                self.assertEqual(settings["tuic"], "true" if existing else "false")
+                if existing:
+                    self.assertEqual(settings["password"], "legacy-secret")
+                self.assertEqual((self.root / "install-core").read_text(), "false" if existing else "true")
+                self.assertNotIn("协议编号:", result.stdout)
+
+    def test_core_service_is_created_without_start_or_enable_and_existing_definition_is_kept(self):
+        service = self.root / "sing-box.service"
+        init = self.root / "sing-box.init"
+        sandbox = self.root / "service-library.sh"
+        sandbox.write_text(self.library.read_text(encoding="utf-8")
+                           .replace("/etc/systemd/system/sing-box.service", str(service))
+                           .replace("/etc/init.d/sing-box", str(init)), encoding="utf-8")
+        fake_bin = self.root / "bin"
+        fake_bin.mkdir()
+        systemctl = fake_bin / "systemctl"
+        systemctl.write_text('#!/bin/sh\n[ "$1" = show ] && exit 0\nprintf "%s\\n" "$*" >> "$TEST_ROOT/services.log"\n', encoding="utf-8")
+        systemctl.chmod(0o755)
+        for alpine in (0, 1):
+            with self.subTest(alpine=alpine):
+                service.unlink(missing_ok=True); init.unlink(missing_ok=True)
+                (self.root / "services.log").unlink(missing_ok=True)
+                body = f"source {shlex.quote(str(sandbox))}\nIS_ALPINE={alpine}\n" + r'''
+export TEST_ROOT PATH="$TEST_ROOT/bin:$PATH"
+SB_CONFIG_FILE="$TEST_ROOT/config.json"
+singbox_binary_path() { printf '%s' "$TEST_ROOT/sing-box"; }
+rc-update() { exit 2; }
+rc-service() { exit 3; }
+configure_singbox_service || exit 1
+'''
+                self.run_shell(body)
+                definition = init if alpine else service
+                self.assertIn(str(self.root / "config.json"), definition.read_text())
+                log = self.root / "services.log"
+                commands = log.read_text() if log.exists() else ""
+                self.assertNotIn("start", commands)
+                self.assertNotIn("enable", commands)
+                definition.write_text("legacy service definition\n")
+                self.run_shell(body)
+                self.assertEqual(definition.read_text(), "legacy service definition\n")
+
+    @unittest.skipUnless(shutil.which("sing-box"), "core-only archive install needs sing-box")
+    def test_core_only_archive_install_uses_real_binary_without_creating_nodes(self):
+        release = self.root / "release.tar.gz"
+        with tarfile.open(release, "w:gz") as archive:
+            archive.add(shutil.which("sing-box"), arcname="release/sing-box")
+        fake_bin = self.root / "bin"
+        fake_bin.mkdir()
+        systemctl = fake_bin / "systemctl"
+        systemctl.write_text('''#!/bin/sh
+case "$1" in
+    show) exit 0 ;;
+    is-active) exit 1 ;;
+    *) printf '%s\n' "$*" >> "$TEST_ROOT/services.log" ;;
+esac
+''', encoding="utf-8")
+        systemctl.chmod(0o755)
+        sandbox = self.root / "install-library.sh"
+        sandbox.write_text(self.library.read_text(encoding="utf-8")
+                           .replace("/etc/xray", str(self.root))
+                           .replace("/etc/sing-box", str(self.root / "sb"))
+                           .replace("/etc/systemd/system/sing-box.service", str(self.root / "sing-box.service"))
+                           .replace("/etc/init.d/sing-box", str(self.root / "sing-box.init"))
+                           .replace('target="/usr/bin/sing-box"', 'target="' + str(fake_bin / "sing-box") + '"'), encoding="utf-8")
+        self.run_shell(f"source {shlex.quote(str(sandbox))}\n" + r'''
+export TEST_ROOT PATH="$TEST_ROOT/bin:$PATH"
+IS_ALPINE=0; SB_VERSION=1.14.3
+singbox_binary_path() {
+    [ -x "$TEST_ROOT/bin/sing-box" ] || return 1
+    printf '%s' "$TEST_ROOT/bin/sing-box"
+}
+download_file() { cp "$TEST_ROOT/release.tar.gz" "$2"; }
+install_singbox || exit 1
+sing-box version || exit 2
+[ "$SB_ENABLE" = true ] || exit 3
+[ ! -f "$SB_CONFIG_FILE" ] || exit 4
+[ ! -e "$SB_WORK_DIR/certs/hy2.pem" ] || exit 5
+''')
+        self.assertTrue((self.root / "sing-box.service").exists())
+        self.assertTrue((self.root / "bin" / "sing-box").exists())
+        self.assertFalse((self.root / "sb" / "config.json").exists())
+        self.assertEqual(list((self.root / "sb" / "certs").iterdir()), [])
+        commands = (self.root / "services.log").read_text()
+        self.assertNotIn("start", commands)
+        self.assertNotIn("enable", commands)
+
+    def test_adding_first_singbox_protocol_builds_config_and_enables_service_once(self):
+        self.run_shell(r'''
+confirm_changes() { return 0; }
+configure_sb_protocol() {
+    SB_ENABLE=true; SB_HY2_ENABLE=true; SB_HY2_PORT=24567
+    SB_HY2_SNI=hy2.example.com; SB_HY2_PSK=preserved-secret; SB_HY2_CONGESTION=bbr
+    SB_HY2_HOP_ENABLE=true; SB_HY2_HOP_START=49000; SB_HY2_HOP_END=50000
+}
+configure_singbox_service() { printf 'service\n' >> "$TEST_ROOT/events"; }
+restart_protocol_runtime() { printf 'restart\n' >> "$TEST_ROOT/events"; }
+enable_singbox_service() { printf 'enable\n' >> "$TEST_ROOT/events"; }
+disable_sb_hy2_hop_rules() { :; }
+apply_sb_hy2_hop_rules() { printf 'apply\n' >> "$TEST_ROOT/events"; }
+start_sub_server() { :; }
+add_sb_protocol HY2 || exit 1
+[ -f "$SB_CONFIG_FILE" ] || exit 2
+add_sb_protocol HY2 || exit 3
+''')
+        self.assertEqual((self.root / "events").read_text().splitlines(), ["service", "restart", "apply", "enable", "service", "restart", "apply"])
+        config = json.loads((self.root / "sb" / "config.json").read_text())
+        self.assertEqual(config["inbounds"][0]["users"][0]["password"], "preserved-secret")
+
+    def test_preflight_rejection_is_not_reported_as_a_download_failure(self):
+        result = self.run_shell(r'''
+SB_VERSION=1.14.3
+core_service_active() { return 1; }
+singbox_latest_version() { printf '1.14.3'; }
+install_singbox_archive() { red_msg '候选内核预检拒绝'; return 1; }
+configure_singbox_service() { exit 2; }
+if install_singbox update; then exit 1; fi
+''')
+        self.assertIn("候选内核预检拒绝", result.stdout)
+        self.assertNotIn("下载失败", result.stdout)
+
+    def test_singbox_uninstall_cannot_delete_files_when_stop_failed(self):
+        result = self.run_shell(r'''
+mkdir -p "$SB_WORK_DIR"
+printf '{"legacy":true}' > "$SB_CONFIG_FILE"
+get_status() { :; }
+sb_status() { return 0; }
+sb_stop() { return 1; }
+sb_is_installed() { return 0; }
+singbox_version_string() { printf '1.14.3'; }
+stop_sb_stats_service() { exit 9; }
+sb_menu
+[ "$(cat "$SB_CONFIG_FILE")" = '{"legacy":true}' ] || exit 2
+''', "s5\ny\n\ns0\n")
+        self.assertIn("已取消卸载", result.stdout)
+
+    def test_core_only_singbox_start_and_restart_do_not_launch_an_empty_service(self):
+        result = self.run_shell(r'''
+sb_status() { return 1; }
+systemctl() { touch "$TEST_ROOT/service-called"; }
+rc-service() { touch "$TEST_ROOT/service-called"; }
+for IS_ALPINE in 0 1; do
+    if sb_start; then exit 1; fi
+    if sb_restart; then exit 2; fi
+done
+[ ! -e "$TEST_ROOT/service-called" ] || exit 3
+''')
+        self.assertIn("已取消启动/重启", result.stdout)
 
     def test_new_singbox_form_and_independent_domains(self):
         result = self.run_shell(r'''

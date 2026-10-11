@@ -418,6 +418,94 @@ load_conf
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result.stdout
 
+    def start_local_singbox(self, options, cwd=None):
+        binary = self.root / "running-sing-box"
+        shutil.copyfile(shutil.which("sing-box"), binary)
+        binary.chmod(0o755)
+        log = self.root / "running.log"
+        with log.open("wb") as stream:
+            process = subprocess.Popen([str(binary), "run", *options], cwd=cwd or self.root,
+                                       stdout=stream, stderr=subprocess.STDOUT)
+
+        def stop():
+            if process.poll() is None:
+                process.terminate()
+            process.wait(timeout=5)
+
+        self.addCleanup(stop)
+        for _ in range(100):
+            self.assertIsNone(process.poll(), log.read_text(errors="replace"))
+            if "sing-box started" in log.read_text(errors="replace"):
+                return binary, process
+            time.sleep(0.02)
+        self.fail("local sing-box did not finish startup: " + log.read_text(errors="replace"))
+
+    @unittest.skipUnless(shutil.which("sing-box"), "deleted-running-binary test needs sing-box")
+    def test_running_deleted_singbox_binary_cannot_be_replaced_or_restarted(self):
+        config = self.root / "runtime.json"
+        config.write_text('{"log":{"level":"info"},"outbounds":[{"type":"direct"}]}')
+        binary, process = self.start_local_singbox(["-c", str(config)])
+        binary.unlink(); config.unlink()
+        output = self.shell(f"singbox_service_pid() {{ printf '{process.pid}'; }}\n" + r'''
+core_service_active() { return 0; }
+singbox_binary_path() { return 1; }
+install_singbox_archive() { touch "$TEST_ROOT/downloaded"; return 1; }
+restart_protocol_runtime() { touch "$TEST_ROOT/restarted"; }
+clear() { :; }
+if install_singbox update; then exit 1; fi
+[ ! -e "$TEST_ROOT/downloaded" ] && [ ! -e "$TEST_ROOT/restarted" ] || exit 2
+printf 's0\n' | sb_menu
+''')
+        self.assertIsNone(process.poll(), "A deleted binary must leave its existing process running")
+        self.assertIn("安装文件丢失", output)
+        self.assertNotIn("下载失败", output)
+        self.assertNotIn("未安装", output)
+
+    @unittest.skipUnless(shutil.which("sing-box"), "runtime-config test needs sing-box")
+    def test_singbox_preflight_uses_running_directory_config_and_rejects_invalid_changes(self):
+        directory = self.root / "work" / "runtime-parts"
+        directory.mkdir(parents=True)
+        config = directory / "node.json"
+        config.write_text('{"log":{"level":"info"},"outbounds":[{"type":"direct"}]}')
+        binary, process = self.start_local_singbox(["-D", "work", "-C", "runtime-parts"])
+        prefix = f"singbox_service_pid() {{ printf '{process.pid}'; }}\ncore_service_active() {{ return 0; }}\n"
+        self.shell(prefix + "candidate=" + shlex.quote(shutil.which("sing-box")) + r'''
+[ "$(singbox_binary_path)" = "$TEST_ROOT/running-sing-box" ] || exit 1
+singbox_preflight_current_config "$candidate" "$SB_CONFIG_FILE" || exit 2
+''')
+        config.write_text("invalid-json")
+        before = binary.read_bytes()
+        self.shell(prefix + "candidate=" + shlex.quote(shutil.which("sing-box")) + r'''
+restart_protocol_runtime() { touch "$TEST_ROOT/restarted"; }
+if activate_core_binary sing-box "$candidate" "$TEST_ROOT/running-sing-box" "$SB_CONFIG_FILE"; then exit 1; fi
+[ ! -e "$TEST_ROOT/restarted" ] || exit 2
+''')
+        self.assertEqual(binary.read_bytes(), before)
+        self.assertIsNone(process.poll())
+
+    def test_running_singbox_with_unknown_missing_config_cannot_upgrade(self):
+        self.shell(r'''
+printf '#!/bin/sh\n# old\nexit 0\n' > "$TEST_ROOT/old"; chmod +x "$TEST_ROOT/old"
+cp "$TEST_ROOT/old" "$TEST_ROOT/before"
+printf '#!/bin/sh\n# new\nexit 0\n' > "$TEST_ROOT/new"; chmod +x "$TEST_ROOT/new"
+core_service_active() { return 0; }
+singbox_service_pid() { return 1; }
+restart_protocol_runtime() { touch "$TEST_ROOT/restarted"; }
+if activate_core_binary sing-box "$TEST_ROOT/new" "$TEST_ROOT/old" "$SB_CONFIG_FILE"; then exit 1; fi
+cmp "$TEST_ROOT/old" "$TEST_ROOT/before" && [ ! -e "$TEST_ROOT/restarted" ] || exit 2
+''')
+
+    def test_core_only_singbox_can_update_without_creating_config_or_starting_service(self):
+        self.shell(r'''
+printf '#!/bin/sh\n# old\nexit 0\n' > "$TEST_ROOT/old"; chmod +x "$TEST_ROOT/old"
+printf '#!/bin/sh\n# new\nexit 0\n' > "$TEST_ROOT/new"; chmod +x "$TEST_ROOT/new"
+core_service_active() { return 1; }
+restart_protocol_runtime() { touch "$TEST_ROOT/restarted"; }
+activate_core_binary sing-box "$TEST_ROOT/new" "$TEST_ROOT/old" "$SB_CONFIG_FILE" || exit 1
+cmp "$TEST_ROOT/old" "$TEST_ROOT/new" || exit 2
+[ ! -e "$SB_CONFIG_FILE" ] && [ ! -e "$TEST_ROOT/restarted" ] || exit 3
+''')
+
     def test_certificate_refresh_uses_actual_files_and_keeps_identity(self):
         self.shell(r'''
 HY2_SNI=old.example.com; SB_HY2_SNI=hy2.example.com; SB_TUIC_SNI=tuic.example.com
