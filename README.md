@@ -50,6 +50,16 @@ You can also preset a node name:
 NODE_NAME=Tokyo bash <(curl -fsSL https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
 ```
 
+HY2 setup requires an SNI/TLS domain, then asks for the port, congestion control, and optional port hopping. Xray offers BBR, Brutal, Reno, and automatic negotiation; Sing-box offers BBR, Brutal, and client negotiation. Brutal asks for server upload and download bandwidth in Mbps. The domain identifies the generated self-signed certificate and TLS handshake; domain ownership is not required and traffic is not forwarded to that website.
+
+Edit Xray HY2 through `ag → a → e4`. All five Sing-box protocols have edit actions under `ag → s → s2` (`e1` for HY2). Enter keeps the current value, invalid input retries, and `0` or `cancel` returns. HY2/Sing-box edits validate generated configurations and restore configuration, users, and certificates on failure. Refresh subscriptions after changing a domain or certificate. See the [usability review in Chinese](docs/USABILITY_REVIEW_CN.md) for completed fixes and remaining improvements.
+
+For testing the development branch on a real server, see the [VPS canary validation guide in Chinese](docs/VPS_CANARY_VALIDATION_CN.md), covering fresh installation, deployed-user upgrades, checks, and acceptance criteria.
+
+Script updates retain deployed protocols, domains, ports, credentials, and certificates. Core upgrades validate the existing configuration with the candidate binary before replacement, reject incompatible configurations, and restore the previous binary if service startup fails. Stopped services remain stopped; successful upgrades keep the former binary next to the current one as `.argov-previous`.
+
+HY2/TUIC exports read certificate fingerprints from the active configuration and keep legacy URI compatibility options. Mihomo profiles preserve certificate pins, VLESS encryption, and supported transport settings. See the [core compatibility review in Chinese](docs/CORE_COMPATIBILITY_REVIEW_CN.md) for implemented fixes, version limits, and optional follow-up features.
+
 ### Before You Start
 
 | Item | Notes |
@@ -84,7 +94,7 @@ NODE_NAME=Tokyo bash <(curl -fsSL https://raw.githubusercontent.com/m2dumpling/A
 | VLESS + Argo | Xray | Cloudflare Tunnel with no public proxy port | WebSocket; Argo is optional |
 | VMess + Argo | Xray | Compatibility with existing VMess clients | WebSocket; newer Xray builds warn that VMess is deprecated |
 | VLESS Reality | Xray / Sing-box | Direct TLS-shaped endpoint | Vision, SNI, Short ID, and x25519 keys |
-| Hysteria2 | Xray / Sing-box | UDP/QUIC direct endpoint | Certificate pinning and port hopping; Sing-box writes Brutal bandwidth values |
+| Hysteria2 | Xray / Sing-box | UDP/QUIC direct endpoint | Custom SNI and congestion control, certificate pinning, port hopping, and Brutal bandwidth values in both cores |
 | TUIC | Sing-box | QUIC direct endpoint | Available after enabling Sing-box |
 | AnyTLS Reality | Sing-box | Reality-based direct endpoint | Available after enabling Sing-box |
 | Shadowsocks | Xray / Sing-box | Traditional AEAD / SS2022 endpoint | TCP/UDP; newer Xray builds warn that it is deprecated |
@@ -105,7 +115,7 @@ NODE_NAME=Tokyo bash <(curl -fsSL https://raw.githubusercontent.com/m2dumpling/A
 
 ### Current Core Compatibility
 
-Generated configurations follow current Xray and sing-box conventions: Xray Reality server inbounds use `target`, and Sing-box HY2 Brutal writes `up_mbps` / `down_mbps`. Argo WebSocket, VMess, and Shadowsocks remain available to avoid breaking existing clients; newer Xray releases may warn about their deprecation. Moving to XHTTP or VLESS Encryption changes client connection details, so it is not forced during an update.
+Generated configurations follow current Xray and sing-box conventions: Xray Reality server inbounds use `target`, Xray HY2 Brutal uses `brutalUp` / `brutalDown`, and Sing-box uses `up_mbps` / `down_mbps`. Sing-box HY2 BBR ignores client bandwidth declarations; BBR profiles are offered and emitted only on supported 1.14+ versions. Built-in Mihomo subscriptions include HY2 certificate pins and client upload/download bandwidth, with directions reversed from the server values. Other URI clients may require manual bandwidth settings. Argo WebSocket, VMess, and Shadowsocks remain available to avoid breaking existing clients; newer Xray releases may warn about their deprecation. Moving to XHTTP or VLESS Encryption changes client connection details, so it is not forced during an update.
 
 ## Installation Flow
 
@@ -259,4 +269,4 @@ Issues and pull requests are welcome. From the repository root, run the complete
 bash tests/argov_static_tests.sh argov.sh
 ```
 
-This checks Bash syntax, all five Python suites (including relay configuration), and the tunnel service log settings.
+This checks Bash syntax, all seven Python suites (including interactive forms, configuration generation, subscriptions, migrations, relay configuration, and core compatibility), and the tunnel service log settings. Interactive tests require jq and openssl; Xray, Sing-box, and Mihomo binaries on PATH enable checks against the actual cores and local connection tests.

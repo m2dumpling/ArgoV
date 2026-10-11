@@ -20,7 +20,7 @@ FIXTURE = ROOT / "tests" / "fixtures" / "legacy" / "config.multi-protocol.json"
 
 def relay_python() -> str:
     script = SCRIPT.read_text(encoding="utf-8")
-    marker = 'RELAY_LINK_ENV="$RELAY_LINK" RELAY_MODE_ENV="$RELAY_MODE" SB_CONFIG_ENV="$SB_CONFIG_FILE" SB_ENABLED_ENV="${SB_ENABLE:-false}" python3 2>"$py_err" << PYEOF\n'
+    marker = 'RELAY_LINK_ENV="$RELAY_LINK" RELAY_MODE_ENV="$RELAY_MODE" SB_CONFIG_ENV="$SB_CONFIG_FILE" SB_ENABLED_ENV="${SB_ENABLE:-false}" SB_VERSION_ENV="$(singbox_version_string)" python3 2>"$py_err" << PYEOF\n'
     return script.split(marker, 1)[1].split("\nPYEOF", 1)[0]
 
 

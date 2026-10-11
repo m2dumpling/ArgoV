@@ -1,9 +1,15 @@
 package sub
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/pem"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/m2dumpling/ArgoV/core/internal/config"
@@ -96,7 +102,7 @@ func GenerateLinks(user config.User, argov map[string]string, xray *config.XrayC
 			// Hysteria2
 			if inbound.Tag == "hy2" {
 				hport := inbound.Port
-				hsni := "www.bing.com"
+				hsni := argov["HY2_SNI"]
 				if inbound.StreamSettings.TLSSettings != nil && inbound.StreamSettings.TLSSettings.ServerName != "" {
 					hsni = inbound.StreamSettings.TLSSettings.ServerName
 				}
@@ -118,8 +124,12 @@ func GenerateLinks(user config.User, argov map[string]string, xray *config.XrayC
 					hmportQs = "&mport=" + hmport
 				}
 				if hport != nil && serverIP != "" {
-					links += fmt.Sprintf("hysteria2://%s@%s:%v?sni=%s&insecure=1&allowInsecure=1&alpn=h3%s#%s-Hy2\n",
-						uuid, serverIP, hport, hsni, hmportQs, nodeName)
+					host := serverIP
+					if net.ParseIP(host) != nil && strings.Contains(host, ":") {
+						host = "[" + host + "]"
+					}
+					links += fmt.Sprintf("hysteria2://%s@%s:%v?sni=%s&insecure=1&allowInsecure=0&alpn=h3%s%s#%s\n",
+						uuid, host, hport, url.QueryEscape(hsni), hmportQs, hy2ClientOptions(argov, inbound.StreamSettings.TLSSettings), url.PathEscape(nodeName+"-Hy2"))
 				}
 			}
 		}
@@ -140,6 +150,31 @@ func GenerateLinks(user config.User, argov map[string]string, xray *config.XrayC
 	}
 
 	return base64.StdEncoding.EncodeToString([]byte(strings.TrimSpace(links)))
+}
+
+func hy2ClientOptions(argov map[string]string, tls *config.TLSSettings) string {
+	pin := strings.ReplaceAll(argov["HY2_PIN_SHA256"], ":", "")
+	// Read the certificate actually referenced by the inbound without replacing it.
+	if tls != nil && len(tls.Certificates) > 0 {
+		if data, err := os.ReadFile(tls.Certificates[0].CertificateFile); err == nil {
+			if block, _ := pem.Decode(data); block != nil && block.Type == "CERTIFICATE" {
+				digest := sha256.Sum256(block.Bytes)
+				pin = hex.EncodeToString(digest[:])
+			}
+		}
+	}
+	extra := ""
+	if raw, err := hex.DecodeString(pin); err == nil && len(raw) == sha256.Size {
+		extra = "&pinSHA256=" + pin
+	}
+	if argov["HY2_CONGESTION"] == "brutal" {
+		up, upErr := strconv.Atoi(argov["HY2_UP_MBPS"])
+		down, downErr := strconv.Atoi(argov["HY2_DOWN_MBPS"])
+		if upErr == nil && downErr == nil && up > 0 && down > 0 {
+			extra += fmt.Sprintf("&up=%dmbps&down=%dmbps", down, up)
+		}
+	}
+	return extra
 }
 
 func formatBytes(b int64) string {

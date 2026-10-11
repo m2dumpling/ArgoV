@@ -37,6 +37,8 @@ def extract_block(text: str, start: str, end: str) -> str:
 
 def load_build_clash(text: str):
     py = extract_block(text, "def to_yaml(data, level=0):", "def load_users():")
+    # Match backslash handling in the Bash heredoc used to emit sub.py.
+    py = py.replace("\\\\", "\\")
     ns = {"base64": base64, "json": json, "urllib": urllib}
     exec(py, ns)
     require(callable(ns.get("build_clash")), "subscription server must expose build_clash")
@@ -88,11 +90,26 @@ def assert_clash_conversion(text: str) -> None:
 
 def assert_subscription_server_contract(text: str) -> None:
     py = extract_block(text, "def resolve_token(path, qs):", "# ")
-    require("if path == '${SUB_PATH}' or tok == '${SUB_TOKEN}':" in py, "legacy SUB_PATH and SUB_TOKEN access must remain valid")
+    require("if path == SUB_PATH or tok == SUB_TOKEN:" in py, "legacy SUB_PATH and SUB_TOKEN access must remain valid")
     require("u.get('token') == tok and u.get('enabled', True)" in py, "disabled users must not resolve subscription tokens")
-    require("safe_name = up.quote('${NODE_NAME}', safe='')" in text, "profile names must percent-encode NODE_NAME")
+    require("safe_name = up.quote(NODE_NAME, safe='')" in text, "profile names must percent-encode NODE_NAME")
     require("filename*=UTF-8''{safe_name}" in text, "subscription responses must expose UTF-8 filename metadata")
     require("filename=\"{safe_name}.yaml\"" not in text, "subscription filenames must not force a .yaml suffix")
+
+
+def assert_singbox_hy2_conversion(text: str) -> None:
+    build_clash = load_build_clash(text)
+    pin = "ab" * 32
+    yaml = build_clash([
+        f"hy2://p%40ss%3A%22%26%7C%5Cword@[2001:db8::1]:24567?sni=chosen.example.com"
+        f"&insecure=1&alpn=h3&pinSHA256={pin}&up=120mbps&down=80mbps#Sing-box-HY2"
+    ])
+    for fragment in (
+        'type: "hysteria2"', 'server: "2001:db8::1"', 'sni: "chosen.example.com"',
+        f'fingerprint: "{pin}"', 'up: "120mbps"', 'down: "80mbps"',
+        'password: "p@ss:\\"&|\\\\word"',
+    ):
+        require(fragment in yaml, f"Sing-box HY2 conversion lost {fragment}")
 
 
 def assert_sub_generator_contract(text: str) -> None:
@@ -103,7 +120,8 @@ def assert_sub_generator_contract(text: str) -> None:
     require(re.search(r'IS_DEFAULT_USER.*=.*"1".*then\s+INCLUDE_CUSTOM=1\s+fi', sub_gen, re.DOTALL), "only default subscription may include custom links")
     require("[ \"$IS_DEFAULT_USER\" = \"1\" ] && printf '%s' \"$out\" > /etc/xray/sub.txt" in sub_gen, "only default subscription may refresh global sub.txt")
     require("mport=${hmport}" in sub_gen, "built-in Hysteria2 mport must be emitted in subscription links")
-    require("allowInsecure=1" in sub_gen, "self-signed Hysteria2 compatibility must keep allowInsecure")
+    require("allowInsecure=1" not in sub_gen, "subscriptions must not reintroduce the removed Xray TLS option")
+    require("&insecure=1&allowInsecure=0" in sub_gen, "legacy URI clients must retain insecure compatibility while pinned Xray clients disable the removed option")
     # Sing-box 节点必须在订阅中
     require("SB_CFG" in sub_gen, "sub_gen.sh must reference Sing-box config")
     require("sni=\\${SB_SNI}" in sub_gen or "SB_SNI" in sub_gen, "sub_gen.sh must emit Sing-box HY2 links")
@@ -114,6 +132,7 @@ def assert_sub_generator_contract(text: str) -> None:
 def main() -> None:
     text = read_script()
     assert_clash_conversion(text)
+    assert_singbox_hy2_conversion(text)
     assert_subscription_server_contract(text)
     assert_sub_generator_contract(text)
 

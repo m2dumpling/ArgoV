@@ -75,7 +75,7 @@ REALITY_SNIS=("www.tesla.com" "www.nvidia.com" "www.amazon.com" "www.ebay.com"
               "www.paypal.com" "aws.amazon.com" "addons.mozilla.org" "www.microsoft.com")
 REALITY_SNI="${REALITY_SNI:-www.tesla.com}"
 REALITY_FP="${REALITY_FP:-chrome}"
-HY2_SNI="${HY2_SNI:-www.bing.com}"
+HY2_SNI="${HY2_SNI:-}"
 HY2_CERT_FILE="${HY2_CERT_FILE:-/etc/xray/argov-hy2.crt}"
 HY2_KEY_FILE="${HY2_KEY_FILE:-/etc/xray/argov-hy2.key}"
 
@@ -103,16 +103,16 @@ CDN_DOMAINS[14]="cdns.doon.eu.org (综合优选·Doorn)"
 # 零内存端口检测: /proc/net/* 无需外部进程
 port_in_use_tcp() {
     local p; p=$(printf '%04X' "$1" 2>/dev/null) || return 1
-    grep -qE "^[[:space:]]*[0-9]+:[[:space:]]*[0-9A-F]{8}:${p}[[:space:]]+[0-9A-F]{8}:0000[[:space:]]+0A" /proc/net/tcp /proc/net/tcp6 2>/dev/null
+    grep -qE "^[[:space:]]*[0-9]+:[[:space:]]*[0-9A-F]+:${p}[[:space:]]+[0-9A-F]+:0000[[:space:]]+0A" /proc/net/tcp /proc/net/tcp6 2>/dev/null
 }
 port_in_use_udp() {
     local p; p=$(printf '%04X' "$1" 2>/dev/null) || return 1
-    grep -qE "^[[:space:]]*[0-9]+:[[:space:]]*[0-9A-F]{8}:${p}[[:space:]]+[0-9A-F]{8}:0000[[:space:]]+07" /proc/net/udp /proc/net/udp6 2>/dev/null
+    grep -qE "^[[:space:]]*[0-9]+:[[:space:]]*[0-9A-F]+:${p}[[:space:]]+[0-9A-F]+:0000[[:space:]]+07" /proc/net/udp /proc/net/udp6 2>/dev/null
 }
 port_in_use() { port_in_use_tcp "$1"; }
 port_in_use_any() { port_in_use_tcp "$1" || port_in_use_udp "$1"; }
-find_free_port() { local p="$1"; while port_in_use "$p" && [ "$p" -lt 65535 ]; do p=$((p+1)); done; echo "$p"; }
-find_free_any_port() { local p="$1"; while port_in_use_any "$p" && [ "$p" -lt 65535 ]; do p=$((p+1)); done; echo "$p"; }
+find_free_port() { local p="$1"; while is_port "$p"; do port_in_use "$p" || { echo "$p"; return 0; }; p=$((10#$p+1)); done; return 1; }
+find_free_any_port() { local p="$1"; while is_port "$p"; do port_in_use_any "$p" || { echo "$p"; return 0; }; p=$((10#$p+1)); done; return 1; }
 detect_arch() {
     case "$(uname -m)" in
         x86_64) echo "64" ;; i686|i386) echo "32" ;;
@@ -159,7 +159,7 @@ get_argo_domain() {
     [ -n "$LAST_ARGO_DOMAIN" ] && { echo "$LAST_ARGO_DOMAIN"; return; }
     echo "$d"
 }
-get_uuid()   { jq -r '.inbounds[0].settings.clients[0].id // empty' "$CONFIG_FILE" 2>/dev/null; }
+get_uuid()   { jq -r 'first(.inbounds[]? | (.settings.clients // .settings.users // [])[]? | .id // .auth // empty) // empty' "$CONFIG_FILE" 2>/dev/null; }
 get_cdn() {
     local v=""
     [ -f "$CONFIG_FILE" ] && v=$(jq -r '.current_cdn // empty' "$CONFIG_FILE" 2>/dev/null)
@@ -195,20 +195,211 @@ normalize_xray_reality_config() {
         else . end
     )' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv -f "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
 }
-is_port() { [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
+is_port() { [[ "$1" =~ ^[0-9]{1,5}$ ]] && (( 10#$1 >= 1 && 10#$1 <= 65535 )); }
 is_port_range() {
     [[ "$1" =~ ^([0-9]+)-([0-9]+)$ ]] || return 1
     local start="${BASH_REMATCH[1]}" end="${BASH_REMATCH[2]}"
     is_port "$start" && is_port "$end" && [ "$start" -le "$end" ]
+}
+
+# Shared forms keep first installation, adding and editing consistent. EOF/cancel
+# returns to the caller; invalid input is never silently replaced by a random value.
+normalize_domain() {
+    local value="$1" label
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    value="${value,,}"
+    value="${value#https://}"; value="${value#http://}"; value="${value%/}"
+    [[ "$value" == *.* && "$value" != *..* && "$value" != .* && "$value" != *. ]] || return 1
+    [ "${#value}" -le 253 ] || return 1
+    local -a labels
+    IFS=. read -r -a labels <<< "$value"
+    for label in "${labels[@]}"; do
+        [ "${#label}" -le 63 ] && [[ "$label" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || return 1
+    done
+    [[ "${labels[${#labels[@]}-1]}" =~ [a-z] ]] || return 1
+    printf '%s' "$value"
+}
+prompt_domain() {
+    local _pd_target="$1" _pd_default="$2" _pd_label="$3" _pd_input _pd_value
+    while true; do
+        printf '  %s [%s，0 返回]: ' "$_pd_label" "${_pd_default:-必填}"
+        IFS= read -r _pd_input || return 1
+        [[ "${_pd_input,,}" == "cancel" || "$_pd_input" == "0" ]] && return 1
+        _pd_value=$(normalize_domain "${_pd_input:-$_pd_default}") || {
+            red_msg "请输入有效域名，如 example.com；可粘贴 https://example.com/，不要带路径或端口。"
+            continue
+        }
+        printf -v "$_pd_target" '%s' "$_pd_value"
+        return 0
+    done
+}
+configured_port_conflict() {
+    local candidate="$1" owner="$2" last="${3:-$1}" key value range start end
+    for key in ARGO_PORT VLESS_WS_PORT VMESS_WS_PORT SUB_PORT REALITY_PORT HY2_PORT SS_PORT \
+        SB_HY2_PORT SB_TUIC_PORT SB_ANYTLS_PORT SB_REALITY_PORT SB_SS_PORT; do
+        [ "$key" = "$owner" ] && continue
+        case "$key" in
+            # The Xray template reserves these internal listeners even when
+            # the Cloudflare tunnel is skipped.
+            ARGO_PORT|VLESS_WS_PORT|VMESS_WS_PORT) : ;;
+            REALITY_PORT) [ "${ENABLE_REALITY:-0}" != 1 ] && continue ;;
+            HY2_PORT) [ "${ENABLE_HY2:-0}" != 1 ] && continue ;;
+            SS_PORT) [ "${ENABLE_SS:-0}" != 1 ] && continue ;;
+            SB_*_PORT) local enabled="${key%_PORT}_ENABLE"; [ "${!enabled}" != true ] && continue ;;
+        esac
+        value="${!key}"
+        is_port "$value" && (( 10#$candidate <= 10#$value && 10#$last >= 10#$value )) && return 0
+    done
+    for key in HY2_PORT SB_HY2_PORT; do
+        [ "$key" = "$owner" ] && continue
+        range=""
+        if [ "$key" = HY2_PORT ] && [ "${ENABLE_HY2:-0}" = 1 ]; then range="${HY2_MPORT:-}"; fi
+        if [ "$key" = SB_HY2_PORT ] && [ "${SB_HY2_ENABLE:-false}" = true ] && [ "${SB_HY2_HOP_ENABLE:-false}" = true ]; then
+            range="${SB_HY2_HOP_START}-${SB_HY2_HOP_END}"
+        fi
+        is_port_range "$range" || continue
+        start="${range%-*}"; end="${range#*-}"
+        (( 10#$candidate <= 10#$end && 10#$last >= 10#$start )) && return 0
+    done
+    return 1
+}
+prompt_port() {
+    local _pp_target="$1" _pp_default="$2" _pp_label="$3" _pp_owner="${4:-$1}"
+    local _pp_current="${5:-}" _pp_input _pp_value
+    while true; do
+        printf '  %s [%s，0 返回]: ' "$_pp_label" "$_pp_default"
+        IFS= read -r _pp_input || return 1
+        [[ "$_pp_input" == 0 || "${_pp_input,,}" == cancel ]] && return 1
+        _pp_value="${_pp_input:-$_pp_default}"
+        is_port "$_pp_value" || { red_msg "端口必须为 1–65535 的整数，请重新输入。"; continue; }
+        _pp_value=$((10#$_pp_value))
+        configured_port_conflict "$_pp_value" "$_pp_owner" && { red_msg "端口已被其他已选协议或订阅使用，请重新输入。"; continue; }
+        if [ "$_pp_value" != "$_pp_current" ] && port_in_use_any "$_pp_value"; then
+            red_msg "端口已被其他服务占用，请重新输入。"; continue
+        fi
+        printf -v "$_pp_target" '%s' "$_pp_value"
+        return 0
+    done
+}
+prompt_positive_integer() {
+    local _pi_target="$1" _pi_default="$2" _pi_label="$3" _pi_input _pi_value
+    while true; do
+        printf '  %s [%s，cancel 返回]: ' "$_pi_label" "$_pi_default"
+        IFS= read -r _pi_input || return 1
+        [ "${_pi_input,,}" = cancel ] && return 1
+        _pi_value="${_pi_input:-$_pi_default}"
+        [[ "$_pi_value" =~ ^[0-9]{1,7}$ ]] && (( 10#$_pi_value >= 1 && 10#$_pi_value <= 1000000 )) || {
+            red_msg "请输入 1–1000000 的整数（单位 Mbps）。"; continue
+        }
+        printf -v "$_pi_target" '%s' "$((10#$_pi_value))"
+        return 0
+    done
+}
+prompt_hy2_congestion() {
+    local _hc_mode_var="$1" _hc_up_var="$2" _hc_down_var="$3" _hc_core="$4"
+    local _hc_mode="${5:-bbr}" _hc_up="${6:-}" _hc_down="${7:-}" _hc_input
+    echo "  拥塞控制（服务端配置）："
+    echo "    1. BBR：自动估计带宽（默认）"
+    echo "    2. Brutal：按带宽协商，请填写实际可用带宽"
+    if [ "$_hc_core" = xray ]; then
+        echo "    3. Reno：较保守的拥塞控制"
+        echo "    4. 内核默认：由客户端协商带宽"
+        [ "$_hc_mode" = cubic ] && _hc_mode=auto
+    else
+        echo "    3. 客户端协商：允许客户端选择 BBR / Brutal"
+        [ "$_hc_mode" = reno ] && { yellow_msg "旧 Reno 选项没有写入 Sing-box 配置；请重新选择有效模式。"; _hc_mode=bbr; }
+    fi
+    while true; do
+        printf '  算法 [%s，0 返回，可输入编号或名称]: ' "$_hc_mode"
+        IFS= read -r _hc_input || return 1
+        case "${_hc_input:-$_hc_mode}" in
+            0|cancel|CANCEL) return 1 ;;
+            1|bbr|BBR) _hc_mode=bbr; _hc_up=""; _hc_down=""; break ;;
+            2|brutal|Brutal|BRUTAL) _hc_mode=brutal; break ;;
+            3)
+                if [ "$_hc_core" = xray ]; then _hc_mode=reno; else _hc_mode=auto; fi
+                _hc_up=""; _hc_down=""; break ;;
+            reno|Reno|RENO)
+                [ "$_hc_core" = xray ] || { red_msg "当前 Sing-box HY2 不支持 Reno，请重新选择。"; continue; }
+                _hc_mode=reno; _hc_up=""; _hc_down=""; break ;;
+            4)
+                [ "$_hc_core" = xray ] || { red_msg "无效选择。"; continue; }
+                _hc_mode=auto; _hc_up=""; _hc_down=""; break ;;
+            auto|AUTO) _hc_mode=auto; _hc_up=""; _hc_down=""; break ;;
+            *) red_msg "无效选择，请输入已显示的编号或算法名称。" ;;
+        esac
+    done
+    if [ "$_hc_mode" = brutal ]; then
+        prompt_positive_integer _hc_up "${_hc_up:-100}" "服务器上传 Mbps（客户端的下载）" || return 1
+        prompt_positive_integer _hc_down "${_hc_down:-100}" "服务器下载 Mbps（客户端的上传）" || return 1
+        yellow_msg "Brutal 仍需客户端设置带宽；通用分享链接不能替客户端选择算法。"
+    fi
+    printf -v "$_hc_mode_var" '%s' "$_hc_mode"
+    printf -v "$_hc_up_var" '%s' "$_hc_up"
+    printf -v "$_hc_down_var" '%s' "$_hc_down"
+}
+prompt_hy2_hopping() {
+    local _hh_target="$1" _hh_current="$2" _hh_owner="${3:-HY2_PORT}" _hh_input _hh_start _hh_end
+    echo "  端口跳跃需放行整个 UDP 范围；跳跃间隔由客户端控制，Mihomo 订阅使用 30 秒。"
+    while true; do
+        printf '  跳跃范围 [%s，off 关闭，0 返回]: ' "${_hh_current:-关闭；如 47000-48000}"
+        IFS= read -r _hh_input || return 1
+        [ "$_hh_input" = 0 ] && return 1
+        _hh_input="${_hh_input:-$_hh_current}"
+        case "${_hh_input,,}" in off|"") printf -v "$_hh_target" '%s' ""; return 0 ;; cancel) return 1 ;; esac
+        is_port_range "$_hh_input" || { red_msg "范围无效，应为 起始端口-结束端口，且起始不大于结束。"; continue; }
+        _hh_start="${_hh_input%-*}"; _hh_end="${_hh_input#*-}"
+        configured_port_conflict "$_hh_start" "$_hh_owner" "$_hh_end" && {
+            red_msg "跳跃范围与其他协议、订阅端口或另一组 HY2 跳跃范围冲突，请重新输入。"; continue
+        }
+        _hh_input="$((10#$_hh_start))-$((10#$_hh_end))"
+        printf -v "$_hh_target" '%s' "$_hh_input"
+        return 0
+    done
+}
+prompt_choice() {
+    local _pc_target="$1" _pc_default="$2" _pc_label="$3" _pc_input _pc_option _pc_index
+    shift 3
+    while true; do
+        _pc_index=1
+        for _pc_option in "$@"; do printf '    %s. %s\n' "$_pc_index" "$_pc_option"; _pc_index=$((_pc_index+1)); done
+        printf '  %s [%s，0 返回]: ' "$_pc_label" "$_pc_default"
+        IFS= read -r _pc_input || return 1
+        [[ "$_pc_input" = 0 || "${_pc_input,,}" = cancel ]] && return 1
+        _pc_input="${_pc_input:-$_pc_default}"; _pc_index=1
+        for _pc_option in "$@"; do
+            if [ "$_pc_input" = "$_pc_index" ] || [ "$_pc_input" = "$_pc_option" ]; then
+                printf -v "$_pc_target" '%s' "$_pc_option"; return 0
+            fi
+            _pc_index=$((_pc_index+1))
+        done
+        red_msg "无效选择，请重新输入。"
+    done
+}
+confirm_changes() {
+    local answer
+    while true; do
+        printf '  %s [Y/n]: ' "$1"
+        IFS= read -r answer || return 1
+        case "${answer,,}" in ""|y|yes) return 0 ;; n|no|0|cancel) yellow_msg "已取消。"; return 1 ;; *) red_msg "请输入 y 或 n。" ;; esac
+    done
+}
+replace_json_placeholder() {
+    local file="$1" placeholder="$2" encoded
+    encoded=$(jq -rn --arg value "$3" '$value | tojson') || return 1
+    encoded="${encoded//\\/\\\\}"; encoded="${encoded//&/\\&}"; encoded="${encoded//|/\\|}"
+    sed -i "s|\"$placeholder\"|$encoded|g" "$file"
 }
 build_hy2_inbound() {
     local listen_port="$1" sni="$2" auth="$3" email="${4:-argov-default}" mport="$5"
     local congestion="${6:-}" up_bw="${7:-}" down_bw="${8:-}"
     # 拼装 quicParams
     local qp=""
+    [[ "$congestion" = auto || "$congestion" = cubic ]] && congestion=""
     [ -n "$congestion" ] && qp="${qp}\"congestion\":\"${congestion}\","
-    [ -n "$up_bw" ] && [ "$up_bw" != "0" ] && qp="${qp}\"up\":\"${up_bw} mbps\","
-    [ -n "$down_bw" ] && [ "$down_bw" != "0" ] && qp="${qp}\"down\":\"${down_bw} mbps\","
+    [ "$congestion" = brutal ] && [ -n "$up_bw" ] && [ "$up_bw" != "0" ] && qp="${qp}\"brutalUp\":\"${up_bw} mbps\","
+    [ "$congestion" = brutal ] && [ -n "$down_bw" ] && [ "$down_bw" != "0" ] && qp="${qp}\"brutalDown\":\"${down_bw} mbps\","
     [ -n "$mport" ] && qp="${qp}\"udpHop\":{\"ports\":\"${mport}\",\"interval\":30},"
     qp="${qp%,}"
     local fm=""
@@ -282,14 +473,19 @@ EOF
     fi
 }
 build_singbox_config() {
-    mkdir -p "$SB_WORK_DIR" 2>/dev/null
+    (
+    mkdir -p "$SB_WORK_DIR" || return 1
     local relay_snapshot=""
+    local sb_output="" TEMP_INBOUNDS=""
+    trap '[ -z "$relay_snapshot" ] || rm -f "$relay_snapshot"; [ -z "$sb_output" ] || rm -f "$sb_output" "${sb_output}.cc" "${sb_output}.tmp"; [ -z "$TEMP_INBOUNDS" ] || rm -f "$TEMP_INBOUNDS"' EXIT
     if [ "${RELAY_ENABLED:-0}" = "1" ] && [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CONFIG_FILE" ]; then
-        relay_snapshot=$(mktemp -t argov-sb-relay.XXXXXX) || relay_snapshot=""
-        [ -n "$relay_snapshot" ] && cp "$SB_CONFIG_FILE" "$relay_snapshot" || relay_snapshot=""
+        relay_snapshot=$(mktemp -t argov-sb-relay.XXXXXX) || return 1
+        cp "$SB_CONFIG_FILE" "$relay_snapshot" || { red_msg "无法备份中继配置，已取消修改。"; return 1; }
     fi
-    sb_sync_users 2>/dev/null || true
-    local TEMP_INBOUNDS; TEMP_INBOUNDS=$(mktemp -t sbin.XXXXXX)
+    sb_sync_users || { red_msg "无法同步 Sing-box 用户配置，已取消修改。"; return 1; }
+
+    sb_output=$(mktemp "${SB_CONFIG_FILE}.tmp.XXXXXX") || return 1
+    TEMP_INBOUNDS=$(mktemp -t sbin.XXXXXX) || return 1
     > "$TEMP_INBOUNDS"
     local need_comma=false
 
@@ -312,9 +508,9 @@ build_singbox_config() {
     }
 INBOUND_HY2
         sed -i "s|__SB_HY2_PORT__|${SB_HY2_PORT}|g" "$TEMP_INBOUNDS"
-        sed -i "s|\"__SB_HY2_PSK__\"|\"${SB_HY2_PSK:-}\"|g" "$TEMP_INBOUNDS"
-        sed -i "s|__SB_CERT_FILE__|${SB_CERT_FILE}|g" "$TEMP_INBOUNDS"
-        sed -i "s|__SB_KEY_FILE__|${SB_KEY_FILE}|g" "$TEMP_INBOUNDS"
+        replace_json_placeholder "$TEMP_INBOUNDS" "__SB_HY2_PSK__" "${SB_HY2_PSK:-}" || return 1
+        sed -i "s|__SB_CERT_FILE__|${SB_HY2_CERT_FILE:-$SB_CERT_FILE}|g" "$TEMP_INBOUNDS"
+        sed -i "s|__SB_KEY_FILE__|${SB_HY2_KEY_FILE:-$SB_KEY_FILE}|g" "$TEMP_INBOUNDS"
         need_comma=true
     fi
 
@@ -338,8 +534,8 @@ INBOUND_HY2
     }
 INBOUND_TUIC
         sed -i "s|__SB_TUIC_PORT__|${SB_TUIC_PORT}|g" "$TEMP_INBOUNDS"
-        sed -i "s|\"__SB_TUIC_UUID__\"|\"${SB_TUIC_UUID:-}\"|g" "$TEMP_INBOUNDS"
-        sed -i "s|\"__SB_TUIC_PSK__\"|\"${SB_TUIC_PSK:-}\"|g" "$TEMP_INBOUNDS"
+        replace_json_placeholder "$TEMP_INBOUNDS" "__SB_TUIC_UUID__" "${SB_TUIC_UUID:-}" || return 1
+        replace_json_placeholder "$TEMP_INBOUNDS" "__SB_TUIC_PSK__" "${SB_TUIC_PSK:-}" || return 1
         sed -i "s|__SB_CERT_FILE__|${SB_CERT_FILE}|g" "$TEMP_INBOUNDS"
         sed -i "s|__SB_KEY_FILE__|${SB_KEY_FILE}|g" "$TEMP_INBOUNDS"
         need_comma=true
@@ -369,11 +565,11 @@ INBOUND_TUIC
     }
 INBOUND_ANYTLS
         sed -i "s|__SB_ANYTLS_PORT__|${SB_ANYTLS_PORT}|g" "$TEMP_INBOUNDS"
-        sed -i "s|\"__SB_ANYTLS_USER__\"|\"${SB_ANYTLS_USER:-argov}\"|g" "$TEMP_INBOUNDS"
-        sed -i "s|\"__SB_ANYTLS_PSK__\"|\"${SB_ANYTLS_PSK:-}\"|g" "$TEMP_INBOUNDS"
-        sed -i "s|__SB_SNI__|${SB_SNI:-addons.mozilla.org}|g" "$TEMP_INBOUNDS"
-        sed -i "s|\"__SB_REALITY_PRIV__\"|\"${SB_REALITY_PRIV:-}\"|g" "$TEMP_INBOUNDS"
-        sed -i "s|\"__SB_REALITY_SID__\"|\"${SB_REALITY_SID:-}\"|g" "$TEMP_INBOUNDS"
+        replace_json_placeholder "$TEMP_INBOUNDS" "__SB_ANYTLS_USER__" "${SB_ANYTLS_USER:-argov}" || return 1
+        replace_json_placeholder "$TEMP_INBOUNDS" "__SB_ANYTLS_PSK__" "${SB_ANYTLS_PSK:-}" || return 1
+        sed -i "s|__SB_SNI__|${SB_ANYTLS_SNI:-${SB_SNI:-addons.mozilla.org}}|g" "$TEMP_INBOUNDS"
+        replace_json_placeholder "$TEMP_INBOUNDS" "__SB_REALITY_PRIV__" "${SB_REALITY_PRIV:-}" || return 1
+        replace_json_placeholder "$TEMP_INBOUNDS" "__SB_REALITY_SID__" "${SB_REALITY_SID:-}" || return 1
         need_comma=true
     fi
 
@@ -400,10 +596,10 @@ INBOUND_ANYTLS
     }
 INBOUND_VLESS
         sed -i "s|__SB_REALITY_PORT__|${SB_REALITY_PORT}|g" "$TEMP_INBOUNDS"
-        sed -i "s|\"__SB_REALITY_UUID__\"|\"${UUID_CUSTOM:-$(get_uuid)}\"|g" "$TEMP_INBOUNDS"
-        sed -i "s|__SB_SNI__|${SB_SNI:-addons.mozilla.org}|g" "$TEMP_INBOUNDS"
-        sed -i "s|\"__SB_REALITY_PRIV__\"|\"${SB_REALITY_PRIV:-}\"|g" "$TEMP_INBOUNDS"
-        sed -i "s|\"__SB_REALITY_SID__\"|\"${SB_REALITY_SID:-}\"|g" "$TEMP_INBOUNDS"
+        replace_json_placeholder "$TEMP_INBOUNDS" "__SB_REALITY_UUID__" "${UUID_CUSTOM:-$(get_uuid)}" || return 1
+        sed -i "s|__SB_SNI__|${SB_REALITY_SNI:-${SB_SNI:-addons.mozilla.org}}|g" "$TEMP_INBOUNDS"
+        replace_json_placeholder "$TEMP_INBOUNDS" "__SB_REALITY_PRIV__" "${SB_REALITY_PRIV:-}" || return 1
+        replace_json_placeholder "$TEMP_INBOUNDS" "__SB_REALITY_SID__" "${SB_REALITY_SID:-}" || return 1
         need_comma=true
     fi
 
@@ -421,8 +617,8 @@ INBOUND_VLESS
     }
 INBOUND_SS
         sed -i "s|__SB_SS_PORT__|${SB_SS_PORT}|g" "$TEMP_INBOUNDS"
-        sed -i "s|\"__SB_SS_METHOD__\"|\"${SS_METHOD:-aes-256-gcm}\"|g" "$TEMP_INBOUNDS"
-        sed -i "s|\"__SB_SS_PSK__\"|\"${SB_SS_PSK:-}\"|g" "$TEMP_INBOUNDS"
+        replace_json_placeholder "$TEMP_INBOUNDS" "__SB_SS_METHOD__" "${SB_SS_METHOD:-${SS_METHOD:-aes-256-gcm}}" || return 1
+        replace_json_placeholder "$TEMP_INBOUNDS" "__SB_SS_PSK__" "${SB_SS_PSK:-}" || return 1
         need_comma=true
     fi
 
@@ -431,14 +627,14 @@ INBOUND_SS
     [ "$per_user_need_comma" = "true" ] && need_comma=true
 
     # 拼接最终 config.json
-    cat > "$SB_CONFIG_FILE" <<'SBCONFIGHEAD'
+    cat > "$sb_output" <<'SBCONFIGHEAD'
 {
   "log": { "level": "info", "timestamp": true },
   "ntp": { "enabled": true, "server": "time.apple.com", "server_port": 123, "interval": "30m" },
   "inbounds": [
 SBCONFIGHEAD
-    cat "$TEMP_INBOUNDS" >> "$SB_CONFIG_FILE"
-    cat >> "$SB_CONFIG_FILE" <<'SBCONFIGTAIL'
+    cat "$TEMP_INBOUNDS" >> "$sb_output"
+    cat >> "$sb_output" <<'SBCONFIGTAIL'
   ],
   "outbounds": [
     { "type": "direct", "tag": "direct-out" }
@@ -446,40 +642,32 @@ SBCONFIGHEAD
 }
 SBCONFIGTAIL
 
-    # sing-box 1.14+ 使用顶层 up_mbps/down_mbps 表示 Hysteria2 Brutal。
-    # 旧版交互变量不能只保存而不落到内核配置，否则用户选择不会生效。
-    if [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ "${SB_HY2_CONGESTION:-bbr}" = "brutal" ]; then
-        local sb_py; sb_py=$(py_bin)
-        if [ -n "$sb_py" ]; then
-            "$sb_py" - "$SB_CONFIG_FILE" "${SB_HY2_UP_MBPS:-}" "${SB_HY2_DOWN_MBPS:-}" << 'PYSBHY2'
-import json, os, sys
 
-path, up_raw, down_raw = sys.argv[1:4]
-try:
-    up = int(up_raw)
-    down = int(down_raw)
-except (TypeError, ValueError):
-    up = down = 0
-
-if up <= 0 or down <= 0:
-    raise SystemExit("invalid Hysteria2 Brutal bandwidth")
-
-with open(path, "r", encoding="utf-8") as f:
-    data = json.load(f)
-for inbound in data.get("inbounds", []):
-    if inbound.get("type") == "hysteria2":
-        inbound["up_mbps"] = up
-        inbound["down_mbps"] = down
-
-tmp = path + ".tmp"
-with open(tmp, "w", encoding="utf-8") as f:
-    json.dump(data, f, ensure_ascii=False, indent=2)
-    f.write("\n")
-os.replace(tmp, path)
-PYSBHY2
-            [ "$?" -ne 0 ] && yellow_msg "Hysteria2 Brutal 带宽参数无效，已回退为客户端默认拥塞控制"
-        else
-            yellow_msg "未找到 Python，无法写入 Hysteria2 Brutal 带宽参数"
+    # Both BBR and Brutal must reach the actual inbound, not only argov.conf.
+    local sb_mode="${SB_HY2_CONGESTION:-bbr}" sb_up="${SB_HY2_UP_MBPS:-0}" sb_down="${SB_HY2_DOWN_MBPS:-0}"
+    if [ "${SB_HY2_ENABLE:-false}" = true ]; then
+        case "$sb_mode" in
+            bbr|auto) sb_up=0; sb_down=0 ;;
+            reno)
+                sb_mode=auto; sb_up=0; sb_down=0
+                yellow_msg "旧 Sing-box Reno 选项未实际生效，保留客户端协商模式；可在 HY2 编辑中重新选择。"
+                ;;
+            brutal) [[ "$sb_up" =~ ^[0-9]{1,7}$ && "$sb_down" =~ ^[0-9]{1,7}$ ]] && ((10#$sb_up > 0 && 10#$sb_down > 0)) || {
+                red_msg "Hysteria2 Brutal 带宽无效，原配置未替换。"; rm -f "$sb_output" "$TEMP_INBOUNDS"; return 1;
+            } ;;
+            *) red_msg "Sing-box HY2 不支持该拥塞选项，请选择 BBR、Brutal 或客户端协商。"; rm -f "$sb_output" "$TEMP_INBOUNDS"; return 1 ;;
+        esac
+        jq --arg mode "$sb_mode" --argjson up "$((10#$sb_up))" --argjson down "$((10#$sb_down))" '
+            .inbounds |= map(if .type=="hysteria2" then
+                del(.up_mbps,.down_mbps,.ignore_client_bandwidth) |
+                if $mode=="brutal" then .up_mbps=$up | .down_mbps=$down | .ignore_client_bandwidth=false
+                elif $mode=="bbr" then .ignore_client_bandwidth=true else . end
+            else . end)' "$sb_output" > "${sb_output}.cc" && mv "${sb_output}.cc" "$sb_output" || {
+                rm -f "$sb_output" "${sb_output}.cc" "$TEMP_INBOUNDS"; return 1;
+            }
+        if [ "$sb_mode" = bbr ] && singbox_supports_bbr_profile; then
+            jq --arg profile "${SB_HY2_BBR_PROFILE:-standard}" '(.inbounds[]|select(.type=="hysteria2")|.bbr_profile)=$profile' \
+                "$sb_output" > "${sb_output}.cc" && mv "${sb_output}.cc" "$sb_output" || return 1
         fi
     fi
 
@@ -488,7 +676,7 @@ PYSBHY2
     if [ -n "$relay_snapshot" ] && [ -s "$relay_snapshot" ]; then
         local sb_py; sb_py=$(py_bin)
         if [ -n "$sb_py" ]; then
-            "$sb_py" - "$SB_CONFIG_FILE" "$relay_snapshot" << 'PYSBRELAYMERGE'
+            "$sb_py" - "$sb_output" "$relay_snapshot" << 'PYSBRELAYMERGE'
 import json, os, sys
 
 current_path, previous_path = sys.argv[1:3]
@@ -533,16 +721,28 @@ with open(tmp, "w", encoding="utf-8") as f:
     f.write("\n")
 os.replace(tmp, current_path)
 PYSBRELAYMERGE
-            [ "$?" -ne 0 ] && yellow_msg "无法保留 Sing-box 落地中继，请重新应用中继设置"
+            [ "$?" -ne 0 ] && { red_msg "无法保留 Sing-box 落地中继，原配置未替换。"; return 1; }
+        else
+            red_msg "保留中继配置需要 Python，原配置未替换。"; return 1
         fi
         rm -f "$relay_snapshot" 2>/dev/null || true
     fi
     rm -f "$TEMP_INBOUNDS" 2>/dev/null
 
-    # 验证
-    if command -v sing-box >/dev/null 2>&1; then
-        sing-box check -c "$SB_CONFIG_FILE" >/dev/null 2>&1 || yellow_msg "Sing-box 配置验证警告"
+
+    if ! jq empty "$sb_output" >/dev/null 2>&1; then
+        red_msg "Sing-box 配置不是有效 JSON，原配置未替换。"; rm -f "$sb_output"; return 1
     fi
+    if command -v sing-box >/dev/null 2>&1; then
+        local check_result
+        check_result=$(sing-box check -c "$sb_output" 2>&1) || {
+            red_msg "Sing-box 配置验证失败，原配置未替换："
+            printf '%s\n' "$check_result"; rm -f "$sb_output"; return 1
+        }
+    fi
+    chmod 600 "$sb_output"
+    mv -f "$sb_output" "$SB_CONFIG_FILE"
+    )
 }
 
 #==============================================================================
@@ -557,8 +757,8 @@ sb_sync_users() {
     local anytls_base="${SB_ANYTLS_PORT:-0}" reality_base="${SB_REALITY_PORT:-0}" ss_base="${SB_SS_PORT:-0}"
 
     begin_argov_lock
-    "$py" - "$ARGOV_USERS_FILE" "$hy2_base" "$tuic_base" "$anytls_base" "$reality_base" "$ss_base" << 'PYEOF'
-import json, os, sys
+    "$py" - "$ARGOV_USERS_FILE" "$hy2_base" "$tuic_base" "$anytls_base" "$reality_base" "$ss_base" "${SB_SS_METHOD:-${SS_METHOD:-aes-256-gcm}}" << 'PYEOF'
+import base64, binascii, json, os, sys
 
 users_file = sys.argv[1]
 hy2_base  = int(sys.argv[2] or 0)
@@ -566,6 +766,7 @@ tuic_base = int(sys.argv[3] or 0)
 anytls_base = int(sys.argv[4] or 0)
 reality_base = int(sys.argv[5] or 0)
 ss_base   = int(sys.argv[6] or 0)
+ss_method = sys.argv[7]
 
 with open(users_file, 'r') as f:
     data = json.load(f)
@@ -593,7 +794,18 @@ for u in data.get('users', []):
 
     if ss_base > 0 and 'ss' not in u['sb_ports']:
         u['sb_ports']['ss'] = ss_base + 10 + idx
-        u['sb_creds'].setdefault('ss_pass', os.urandom(16).hex())
+    if ss_base > 0:
+        password = u['sb_creds'].get('ss_pass', '')
+        if ss_method.startswith('2022-'):
+            key_size = 16 if '128' in ss_method else 32
+            try:
+                valid_key = len(base64.b64decode(password, validate=True)) == key_size
+            except (ValueError, binascii.Error):
+                valid_key = False
+            if not valid_key:
+                u['sb_creds']['ss_pass'] = base64.b64encode(os.urandom(key_size)).decode()
+        elif not password:
+            u['sb_creds']['ss_pass'] = os.urandom(16).hex()
 
 with open(users_file + '.tmp', 'w') as f:
     json.dump(data, f, indent=2, ensure_ascii=False)
@@ -615,7 +827,7 @@ sb_build_per_user_inbounds() {
         "${SB_HY2_HOP_MODE:-fixed}" "${SB_HY2_HOP_INTERVAL:-30}" "${SB_HY2_HOP_MIN:-10}" "${SB_HY2_HOP_MAX:-30}" \
         "${SB_TUIC_ENABLE:-false}" "${SB_ANYTLS_ENABLE:-false}" "${SB_REALITY_ENABLE:-false}" "${SB_SS_ENABLE:-false}" \
         "${SB_CERT_FILE}" "${SB_KEY_FILE}" "${SB_SNI:-addons.mozilla.org}" "${SB_REALITY_PRIV:-}" "${SB_REALITY_SID:-}" \
-        "${SS_METHOD:-aes-256-gcm}" << 'PYPERUSER'
+        "${SB_SS_METHOD:-${SS_METHOD:-aes-256-gcm}}" "${SB_ANYTLS_SNI:-$SB_SNI}" "${SB_REALITY_SNI:-$SB_SNI}" << 'PYPERUSER'
 import json, sys
 users_file = sys.argv[1]
 prev_comma  = sys.argv[2] == 'true'
@@ -637,6 +849,8 @@ sb_sni        = sys.argv[17]
 reality_priv  = sys.argv[18]
 reality_sid   = sys.argv[19]
 ss_method     = sys.argv[20]
+anytls_sni    = sys.argv[21]
+reality_sni   = sys.argv[22]
 
 with open(users_file) as f:
     data = json.load(f)
@@ -666,8 +880,8 @@ for u in data.get('users', []):
             inbounds.append({"type":"anytls","tag":f"sb-anytls-{name}","listen":"::","listen_port":p,
                 "users":[{"name":name,"password":creds.get('anytls_pass','')}],
                 "padding_scheme":[],
-                "tls":{"enabled":True,"server_name":sb_sni,
-                    "reality":{"enabled":True,"handshake":{"server":sb_sni,"server_port":443},
+                "tls":{"enabled":True,"server_name":anytls_sni,
+                    "reality":{"enabled":True,"handshake":{"server":anytls_sni,"server_port":443},
                     "private_key":reality_priv,"short_id":[reality_sid]}}})
 
     # Reality per-user
@@ -676,8 +890,8 @@ for u in data.get('users', []):
         if p > 0:
             inbounds.append({"type":"vless","tag":f"sb-reality-{name}","listen":"::","listen_port":p,
                 "users":[{"uuid":u.get('uuid',''),"flow":"xtls-rprx-vision"}],
-                "tls":{"enabled":True,"server_name":sb_sni,
-                    "reality":{"enabled":True,"handshake":{"server":sb_sni,"server_port":443},
+                "tls":{"enabled":True,"server_name":reality_sni,
+                    "reality":{"enabled":True,"handshake":{"server":reality_sni,"server_port":443},
                     "private_key":reality_priv,"short_id":[reality_sid]}}})
 
     # SS per-user
@@ -982,6 +1196,72 @@ singbox_archive_url() {
         "$version" "$version" "$arch" "$suffix"
 }
 
+core_service_active() {
+    if [ "${IS_ALPINE:-0}" = 1 ]; then
+        rc-service "$1" status 2>/dev/null | grep -q 'started'
+    else
+        command systemctl is-active --quiet "$1" 2>/dev/null
+    fi
+}
+
+# 升级只替换二进制；用现有配置预检，不迁移协议、用户或证书。
+activate_core_binary() {
+    local core="$1" candidate="$2" target="$3" config="$4" check_result stage backup="" was_running=0 i healthy=1
+    [ -x "$candidate" ] || { red_msg "候选内核不可执行，原内核未修改。"; return 1; }
+    "$candidate" version >/dev/null 2>&1 || { red_msg "候选内核无法运行，原内核未修改。"; return 1; }
+    if [ ! -f "$config" ] && core_service_active "$core"; then
+        red_msg "运行中的服务缺少现有配置文件，无法安全预检，已取消升级。"
+        return 1
+    fi
+    if [ -f "$config" ]; then
+        if [ "$core" = xray ]; then
+            check_result=$(XRAY_LOCATION_ASSET="$(dirname "$target")" "$candidate" run -test -config "$config" 2>&1)
+        else
+            check_result=$("$candidate" check -c "$config" 2>&1)
+        fi
+        if [ "$?" -ne 0 ]; then
+            red_msg "新内核不兼容现有配置，已取消升级，原服务继续使用原内核。"
+            printf '%s\n' "$check_result"
+            return 1
+        fi
+    fi
+    if [ -f "$target" ]; then
+        backup=$(mktemp "${target}.argov-backup.XXXXXX") || return 1
+        cp -p "$target" "$backup" || { rm -f "$backup"; return 1; }
+    fi
+    stage=$(mktemp "${target}.argov-new.XXXXXX") || { [ -n "$backup" ] && rm -f "$backup"; return 1; }
+    if ! cp "$candidate" "$stage" || ! chmod 0755 "$stage"; then
+        rm -f "$stage"; [ -n "$backup" ] && rm -f "$backup"; return 1
+    fi
+    core_service_active "$core" && was_running=1
+    if ! mv -f "$stage" "$target"; then
+        rm -f "$stage"; [ -n "$backup" ] && rm -f "$backup"; return 1
+    fi
+    if [ "$was_running" = 1 ]; then
+        healthy=0
+        if restart_protocol_runtime "$core"; then
+            healthy=1
+            for i in 1 2 3; do
+                sleep 1
+                core_service_active "$core" || { healthy=0; break; }
+            done
+        fi
+    fi
+    if [ "$healthy" != 1 ]; then
+        if [ -n "$backup" ] && mv -f "$backup" "$target"; then
+            red_msg "新内核启动失败，已恢复旧内核和原配置。"
+            restart_protocol_runtime "$core" >/dev/null 2>&1 && core_service_active "$core" || yellow_msg "旧内核服务未恢复，请查看服务日志。"
+        else
+            red_msg "回滚未完成，旧内核备份位于 ${backup:-未生成}，请检查磁盘与权限。"
+        fi
+        return 1
+    fi
+    if [ -n "$backup" ]; then
+        mv -f "$backup" "${target}.argov-previous" || yellow_msg "旧内核备份保留在 $backup"
+    fi
+    return 0
+}
+
 install_singbox_archive() {
     local version="$1" arch="$2" url tmp extract binary target
     [ -n "$version" ] || return 1
@@ -1008,14 +1288,9 @@ install_singbox_archive() {
     if sb_is_installed; then
         target=$(command -v sing-box)
     fi
-    install -m 0755 "$binary" "$target" 2>/dev/null || {
-        cp "$binary" "$target" 2>/dev/null || {
-            rm -f "$tmp" 2>/dev/null || true
-            rm -rf "$extract" 2>/dev/null || true
-            return 1
-        }
-        chmod 0755 "$target" 2>/dev/null || true
-    }
+    if ! activate_core_binary sing-box "$binary" "$target" "$SB_CONFIG_FILE"; then
+        rm -f "$tmp"; rm -rf "$extract"; return 1
+    fi
     rm -f "$tmp" 2>/dev/null || true
     rm -rf "$extract" 2>/dev/null || true
     return 0
@@ -1029,11 +1304,41 @@ cert_pin_sha256() {
     openssl x509 -in "$cert" -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//' | tr '[:lower:]' '[:upper:]'
 }
 cert_pin_sha256_b64() {
-    # Xray pinnedPeerCertificateChainSha256 格式: BASE64(SHA256 raw bytes)
+    # 完整证书 DER 的 SHA256，Base64 格式；不是公钥指纹。
     local cert="$1"
     [ -f "$cert" ] || return 1
     openssl x509 -in "$cert" -outform DER -sha256 2>/dev/null | openssl dgst -sha256 -binary 2>/dev/null | base64 -w0 2>/dev/null || \
     openssl x509 -in "$cert" -outform DER 2>/dev/null | openssl dgst -sha256 -binary 2>/dev/null | base64 | tr -d '\n'
+}
+
+# 只读取正在使用的证书，不重新签发或更换存量节点的身份。
+refresh_certificate_pins() {
+    local xray_cert="$HY2_CERT_FILE" sb_hy2_cert="${SB_HY2_CERT_FILE:-$SB_CERT_FILE}" tuic_cert="$SB_CERT_FILE"
+    local path pin changed=1
+    if command -v jq >/dev/null 2>&1; then
+        path=$(jq -r '.inbounds[]?|select(.tag=="hy2")|.streamSettings.tlsSettings.certificates[0].certificateFile//empty' "$CONFIG_FILE" 2>/dev/null | head -n 1)
+        [ -n "$path" ] && xray_cert="$path"
+        path=$(jq -r '.inbounds[]?|select(.tag=="sb-hy2")|.tls.certificate_path//empty' "$SB_CONFIG_FILE" 2>/dev/null | head -n 1)
+        [ -n "$path" ] && sb_hy2_cert="$path"
+        path=$(jq -r '.inbounds[]?|select(.tag=="sb-tuic")|.tls.certificate_path//empty' "$SB_CONFIG_FILE" 2>/dev/null | head -n 1)
+        [ -n "$path" ] && tuic_cert="$path"
+    fi
+    pin=$(cert_pin_sha256 "$xray_cert")
+    if [ -n "$pin" ] && [ "$pin" != "${HY2_PIN_SHA256:-}" ]; then HY2_PIN_SHA256="$pin"; changed=0; fi
+    pin=$(cert_pin_sha256 "$sb_hy2_cert")
+    if [ -n "$pin" ] && [ "$pin" != "${SB_HY2_PIN_SHA256:-}" ]; then SB_HY2_PIN_SHA256="$pin"; changed=0; fi
+    pin=$(cert_pin_sha256 "$tuic_cert")
+    if [ -n "$pin" ] && [ "$pin" != "${SB_TUIC_PIN_SHA256:-}" ]; then SB_TUIC_PIN_SHA256="$pin"; changed=0; fi
+    return "$changed"
+}
+
+certificate_uri_options() {
+    # insecure 保留旧 URI 客户端兼容；支持指纹的客户端必须固定证书。
+    # 不再导出新版 Xray 已删除的 allowInsecure=1。
+    local pin="${1//:/}"
+    printf '&insecure=1&allowInsecure=0'
+    [[ "$pin" =~ ^[[:xdigit:]]{64}$ ]] && printf '&pinSHA256=%s' "$pin"
+    return 0
 }
 
 # Sing-box HY2 端口跳跃
@@ -1046,7 +1351,9 @@ apply_sb_hy2_hop_rules() {
 
     # 共享端口跳变
     local shared_start="${SB_HY2_HOP_START:-47000}" shared_end="${SB_HY2_HOP_END:-48000}"
-    iptables -t nat -A PREROUTING -p udp --dport "${shared_start}:${shared_end}" -j REDIRECT --to-ports "$port" -m comment --comment "argov-sb-hy2-hop" 2>/dev/null || true
+    is_port "$port" && is_port_range "${shared_start}-${shared_end}" || return 1
+    command -v iptables >/dev/null 2>&1 || { yellow_msg "未找到 iptables，无法启用 HY2 跳跃。"; return 1; }
+    iptables -t nat -A PREROUTING -p udp --dport "${shared_start}:${shared_end}" -j REDIRECT --to-ports "$port" -m comment --comment "argov-sb-hy2-hop" || return 1
 
     # 每用户 HY2 跳变已移除 — 仅共享端口跳变
 }
@@ -1071,6 +1378,15 @@ install_singbox() {
     sb_arch=$(detect_sb_arch)
     requested="${SB_VERSION:-}"
     mkdir -p "$SB_WORK_DIR" "$SB_WORK_DIR/certs" 2>/dev/null || true
+
+    # 存量升级使用候选 release，避免官方安装器在预检前改包或重启服务。
+    if [ "$force_update" = 1 ] && sb_is_installed; then
+        latest=$(singbox_latest_version)
+        [ -n "$latest" ] || { red_msg "无法获取 Sing-box 目标版本，原内核未修改。"; return 1; }
+        install_singbox_archive "$latest" "$sb_arch" || return 1
+        green_msg "Sing-box 内核更新完成: $(singbox_version_string)；原配置已保留。"
+        return 0
+    fi
 
     # 首次安装时优先使用发行版包；更新时必须走官方安装器或版本化 release，避免旧包阻塞更新。
     if [ "$force_update" != 1 ] && [ "$IS_ALPINE" = 1 ]; then
@@ -1147,18 +1463,40 @@ SBSYSTEMD
 }
 
 generate_singbox_cert() {
-    local sni="${SB_SNI:-www.bing.com}"
-    mkdir -p "${SB_CERT_FILE%/*}" 2>/dev/null
-    if [ -f "$SB_CERT_FILE" ] && [ -f "$SB_KEY_FILE" ]; then
-        # 检查证书是否过期
-        openssl x509 -in "$SB_CERT_FILE" -checkend 86400 >/dev/null 2>&1 && return 0
+    ensure_self_signed_cert "${1:-${SB_TUIC_SNI:-$SB_SNI}}" "$SB_CERT_FILE" "$SB_KEY_FILE" || return 1
+    SB_TUIC_PIN_SHA256=$(cert_pin_sha256 "$SB_CERT_FILE")
+}
+generate_singbox_hy2_cert() {
+    ensure_self_signed_cert "$SB_HY2_SNI" "$SB_HY2_CERT_FILE" "$SB_HY2_KEY_FILE" || return 1
+    SB_HY2_PIN_SHA256=$(cert_pin_sha256 "$SB_HY2_CERT_FILE")
+}
+ensure_self_signed_cert() {
+    local sni="$1" cert="$2" key="$3" cert_tmp key_tmp cert_pub key_pub
+    normalize_domain "$sni" >/dev/null || { red_msg "证书域名无效，请先配置 SNI。"; return 1; }
+    if [ -s "$cert" ] && [ -s "$key" ] && openssl x509 -in "$cert" -checkend 86400 -noout >/dev/null 2>&1 && \
+        openssl x509 -in "$cert" -noout -checkhost "$sni" 2>/dev/null | grep -q 'does match certificate'; then
+        cert_pub=$(openssl x509 -in "$cert" -pubkey -noout 2>/dev/null)
+        key_pub=$(openssl pkey -in "$key" -pubout 2>/dev/null)
+        [ -n "$cert_pub" ] && [ "$cert_pub" = "$key_pub" ] && return 0
     fi
-    openssl req -x509 -newkey rsa:2048 -days 3650 -nodes \
-        -keyout "$SB_KEY_FILE" -out "$SB_CERT_FILE" \
-        -subj "/CN=${sni}" -addext "subjectAltName=DNS:${sni}" 2>/dev/null || {
-        red_msg "Sing-box 证书生成失败"; return 1
-    }
-    SB_CERT_FILE="$SB_CERT_FILE"; SB_KEY_FILE="$SB_KEY_FILE"
+    mkdir -p "${cert%/*}" "${key%/*}" || return 1
+    cert_tmp=$(mktemp "${cert}.tmp.XXXXXX") || return 1
+    key_tmp=$(mktemp "${key}.tmp.XXXXXX") || { rm -f "$cert_tmp"; return 1; }
+    if ! openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3650 \
+        -subj "/CN=${sni}" -addext "subjectAltName=DNS:${sni}" -keyout "$key_tmp" -out "$cert_tmp" >/dev/null 2>&1; then
+        rm -f "$cert_tmp" "$key_tmp"; red_msg "自签证书生成失败。"; return 1
+    fi
+    chmod 600 "$key_tmp"
+    mv -f "$key_tmp" "$key" && mv -f "$cert_tmp" "$cert"
+}
+singbox_supports_bbr_profile() {
+    local version major minor
+    version=$(singbox_version_string)
+    [ -z "$version" ] && version="${SB_VERSION:-}"
+    version="${version#v}"
+    [[ "$version" =~ ^([0-9]+)\.([0-9]+) ]] || return 1
+    major="${BASH_REMATCH[1]}"; minor="${BASH_REMATCH[2]}"
+    (( major > 1 || (major == 1 && minor >= 14) ))
 }
 
 #==============================================================================
@@ -1389,7 +1727,7 @@ is_safe_conf_file() {
         [[ "$line" =~ ^[A-Z][A-Z0-9_]*= ]] || return 1
         key="${line%%=*}"
         case "$key" in
-            NODE_NAME|ARGO_PORT|VLESS_WS_PORT|VMESS_WS_PORT|CDN_PORT|CDN_DOMAIN|ARGO_MODE|ARGO_AUTH|ARGO_FIXED_DOMAIN|UUID_CUSTOM|REALITY_PORT|HY2_PORT|HY2_MPORT|HY2_CONGESTION|HY2_UP_MBPS|HY2_DOWN_MBPS|SS_PORT|SUB_PORT|SUB_PATH|SUB_DOMAIN|SUB_TOKEN|REALITY_SNI|REALITY_FP|HY2_SNI|SS_METHOD|ENABLE_REALITY|ENABLE_HY2|ENABLE_SS|HY2_CERT_FILE|HY2_KEY_FILE|REALITY_PRIV|REALITY_PUB|REALITY_SHORTID|LAST_ARGO_DOMAIN|RELAY_ENABLED|RELAY_LINK|RELAY_MODE|XRAY_VERSION|XRAY_SHA256|CLOUDFLARED_VERSION|CLOUDFLARED_SHA256|AGG_TOKEN|SB_ENABLE|SB_VERSION|SB_HY2_ENABLE|SB_HY2_CONGESTION|SB_HY2_UP_MBPS|SB_HY2_DOWN_MBPS|SB_HY2_BBR_PROFILE|SB_TUIC_ENABLE|SB_ANYTLS_ENABLE|SB_REALITY_ENABLE|SB_SS_ENABLE|SB_HY2_PORT|SB_TUIC_PORT|SB_ANYTLS_PORT|SB_REALITY_PORT|SB_SS_PORT|SB_REALITY_PRIV|SB_REALITY_PUB|SB_REALITY_SID|SB_ANYTLS_PSK|SB_TUIC_UUID|SB_TUIC_PSK|SB_HY2_PSK|SB_SS_PSK|SB_ANYTLS_USER|SB_SNI|SB_CERT_FILE|SB_KEY_FILE|TRAFFIC_IN|TRAFFIC_OUT|SB_HY2_HOP_ENABLE|SB_HY2_HOP_START|SB_HY2_HOP_END|SB_HY2_HOP_MODE|SB_HY2_HOP_INTERVAL|SB_HY2_HOP_MIN|SB_HY2_HOP_MAX|HY2_PIN_SHA256|SB_HY2_PIN_SHA256) ;;
+            NODE_NAME|ARGO_PORT|VLESS_WS_PORT|VMESS_WS_PORT|CDN_PORT|CDN_DOMAIN|ARGO_MODE|ARGO_AUTH|ARGO_FIXED_DOMAIN|UUID_CUSTOM|REALITY_PORT|HY2_PORT|HY2_MPORT|HY2_CONGESTION|HY2_UP_MBPS|HY2_DOWN_MBPS|SS_PORT|SUB_PORT|SUB_PATH|SUB_DOMAIN|SUB_TOKEN|REALITY_SNI|REALITY_FP|HY2_SNI|SS_METHOD|ENABLE_REALITY|ENABLE_HY2|ENABLE_SS|HY2_CERT_FILE|HY2_KEY_FILE|REALITY_PRIV|REALITY_PUB|REALITY_SHORTID|LAST_ARGO_DOMAIN|RELAY_ENABLED|RELAY_LINK|RELAY_MODE|XRAY_VERSION|XRAY_SHA256|CLOUDFLARED_VERSION|CLOUDFLARED_SHA256|AGG_TOKEN|SB_ENABLE|SB_VERSION|SB_HY2_ENABLE|SB_HY2_CONGESTION|SB_HY2_UP_MBPS|SB_HY2_DOWN_MBPS|SB_HY2_BBR_PROFILE|SB_TUIC_ENABLE|SB_ANYTLS_ENABLE|SB_REALITY_ENABLE|SB_SS_ENABLE|SB_HY2_PORT|SB_TUIC_PORT|SB_ANYTLS_PORT|SB_REALITY_PORT|SB_SS_PORT|SB_REALITY_PRIV|SB_REALITY_PUB|SB_REALITY_SID|SB_ANYTLS_PSK|SB_TUIC_UUID|SB_TUIC_PSK|SB_HY2_PSK|SB_SS_PSK|SB_ANYTLS_USER|SB_SNI|SB_CERT_FILE|SB_KEY_FILE|TRAFFIC_IN|TRAFFIC_OUT|SB_HY2_HOP_ENABLE|SB_HY2_HOP_START|SB_HY2_HOP_END|SB_HY2_HOP_MODE|SB_HY2_HOP_INTERVAL|SB_HY2_HOP_MIN|SB_HY2_HOP_MAX|HY2_PIN_SHA256|SB_HY2_PIN_SHA256|SB_TUIC_PIN_SHA256|SB_HY2_SNI|SB_TUIC_SNI|SB_ANYTLS_SNI|SB_REALITY_SNI|SB_SS_METHOD|SB_HY2_CERT_FILE|SB_HY2_KEY_FILE) ;;
             *) return 1 ;;
         esac
         case "$line" in
@@ -1588,9 +1926,9 @@ for inbound in cfg.get("inbounds", []):
     elif tag == "hy2":
         settings = inbound.setdefault("settings", {})
         settings["version"] = 2
-        users = hy2_users()
-        settings["users"] = users
-        settings["clients"] = users
+        inbound_users = hy2_users()
+        settings["users"] = inbound_users
+        settings["clients"] = inbound_users
 
 if not any(i.get("tag") == "api-in" for i in cfg.get("inbounds", [])):
     cfg.setdefault("inbounds", []).append({"listen":"127.0.0.1","port":10085,"protocol":"dokodemo-door","tag":"api-in","settings":{"address":"127.0.0.1"}})
@@ -1775,14 +2113,7 @@ gen_reality_shortid() {
     REALITY_SHORTID=$(openssl rand -hex 4 2>/dev/null || printf '%08x' $((RANDOM*RANDOM)))
 }
 gen_hy2_cert() {
-    mkdir -p "$WORK_DIR" 2>/dev/null
-    if [ ! -s "$HY2_CERT_FILE" ] || [ ! -s "$HY2_KEY_FILE" ]; then
-        openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3650 \
-            -subj "/CN=${HY2_SNI:-ArgoV-Hy2}" \
-            -keyout "$HY2_KEY_FILE" -out "$HY2_CERT_FILE" >/dev/null 2>&1
-        chmod 600 "$HY2_KEY_FILE" 2>/dev/null || true
-    fi
-    # 自动计算 SHA256 证书指纹
+    ensure_self_signed_cert "$HY2_SNI" "$HY2_CERT_FILE" "$HY2_KEY_FILE" || return 1
     HY2_PIN_SHA256=$(cert_pin_sha256 "$HY2_CERT_FILE")
 }
 gen_ss2022_pass() {
@@ -1810,12 +2141,16 @@ load_conf() {
     HY2_CONGESTION="${HY2_CONGESTION:-bbr}"; HY2_UP_MBPS="${HY2_UP_MBPS:-}"; HY2_DOWN_MBPS="${HY2_DOWN_MBPS:-}"; SS_PORT="${SS_PORT:-0}"
     SUB_PORT="${SUB_PORT:-0}"; SUB_PATH="${SUB_PATH:-}"
     SUB_DOMAIN="${SUB_DOMAIN:-}"; SUB_TOKEN="${SUB_TOKEN:-}"; AGG_TOKEN="${AGG_TOKEN:-}"
-    REALITY_SNI="${REALITY_SNI:-www.tesla.com}"; REALITY_FP="${REALITY_FP:-chrome}"; HY2_SNI="${HY2_SNI:-www.bing.com}"; SS_METHOD="${SS_METHOD:-aes-256-gcm}"
+    REALITY_SNI="${REALITY_SNI:-www.tesla.com}"; REALITY_FP="${REALITY_FP:-chrome}"; HY2_SNI="${HY2_SNI:-}"; SS_METHOD="${SS_METHOD:-aes-256-gcm}"
     ENABLE_REALITY="${ENABLE_REALITY:-0}"; ENABLE_HY2="${ENABLE_HY2:-0}"; ENABLE_SS="${ENABLE_SS:-0}"
     HY2_CERT_FILE="${HY2_CERT_FILE:-/etc/xray/argov-hy2.crt}"; HY2_KEY_FILE="${HY2_KEY_FILE:-/etc/xray/argov-hy2.key}"
     REALITY_PRIV="${REALITY_PRIV:-}"; REALITY_PUB="${REALITY_PUB:-}"
     if [ -z "$REALITY_PUB" ] && [ -f "$CONFIG_FILE" ] && command -v jq >/dev/null 2>&1; then
         REALITY_PUB=$(jq -r '.inbounds[]?|select(.tag=="reality")|.streamSettings.realitySettings.publicKey//empty' "$CONFIG_FILE" 2>/dev/null | head -n 1)
+    fi
+
+    if [ -z "$HY2_SNI" ] && [ -f "$CONFIG_FILE" ] && command -v jq >/dev/null 2>&1; then
+        HY2_SNI=$(jq -r '.inbounds[]?|select(.tag=="hy2")|.streamSettings.tlsSettings.serverName//empty' "$CONFIG_FILE" 2>/dev/null | head -n 1)
     fi
     REALITY_SHORTID="${REALITY_SHORTID:-}"
     RELAY_ENABLED="${RELAY_ENABLED:-0}"; RELAY_LINK="${RELAY_LINK:-}"
@@ -1834,9 +2169,20 @@ load_conf() {
     SB_HY2_PSK="${SB_HY2_PSK:-}"; SB_SS_PSK="${SB_SS_PSK:-}"; SB_ANYTLS_USER="${SB_ANYTLS_USER:-argov}"
     SB_HY2_HOP_ENABLE="${SB_HY2_HOP_ENABLE:-false}"; SB_HY2_HOP_START="${SB_HY2_HOP_START:-}"; SB_HY2_HOP_END="${SB_HY2_HOP_END:-}"
     SB_HY2_HOP_MODE="${SB_HY2_HOP_MODE:-}"; SB_HY2_HOP_INTERVAL="${SB_HY2_HOP_INTERVAL:-}"; SB_HY2_HOP_MIN="${SB_HY2_HOP_MIN:-}"; SB_HY2_HOP_MAX="${SB_HY2_HOP_MAX:-}"
-    HY2_PIN_SHA256="${HY2_PIN_SHA256:-}"; SB_HY2_PIN_SHA256="${SB_HY2_PIN_SHA256:-}"
+    HY2_PIN_SHA256="${HY2_PIN_SHA256:-}"; SB_HY2_PIN_SHA256="${SB_HY2_PIN_SHA256:-}"; SB_TUIC_PIN_SHA256="${SB_TUIC_PIN_SHA256:-}"
+
     SB_SNI="${SB_SNI:-addons.mozilla.org}"
+    # Legacy installs inherit the original values until the user edits a protocol.
+    if [ "${SB_HY2_ENABLE:-false}" = true ]; then SB_HY2_SNI="${SB_HY2_SNI:-$SB_SNI}"; else SB_HY2_SNI="${SB_HY2_SNI:-}"; fi
+    SB_TUIC_SNI="${SB_TUIC_SNI:-$SB_SNI}"; SB_ANYTLS_SNI="${SB_ANYTLS_SNI:-$SB_SNI}"; SB_REALITY_SNI="${SB_REALITY_SNI:-$SB_SNI}"
+    SB_SS_METHOD="${SB_SS_METHOD:-$SS_METHOD}"
     SB_CERT_FILE="${SB_CERT_FILE:-/etc/sing-box/certs/fullchain.pem}"; SB_KEY_FILE="${SB_KEY_FILE:-/etc/sing-box/certs/privkey.pem}"
+
+    if [ "${SB_HY2_ENABLE:-false}" = true ]; then
+        SB_HY2_CERT_FILE="${SB_HY2_CERT_FILE:-$SB_CERT_FILE}"; SB_HY2_KEY_FILE="${SB_HY2_KEY_FILE:-$SB_KEY_FILE}"
+    else
+        SB_HY2_CERT_FILE="${SB_HY2_CERT_FILE:-${SB_WORK_DIR}/certs/hy2.pem}"; SB_HY2_KEY_FILE="${SB_HY2_KEY_FILE:-${SB_WORK_DIR}/certs/hy2.key}"
+    fi
     TRAFFIC_IN="${TRAFFIC_IN:-0}"; TRAFFIC_OUT="${TRAFFIC_OUT:-0}"
     [ -n "$HY2_MPORT" ] && ! is_port_range "$HY2_MPORT" && HY2_MPORT=""
 }
@@ -1875,8 +2221,13 @@ save_conf() {
         save_var SB_HY2_PSK "$SB_HY2_PSK"; save_var SB_SS_PSK "$SB_SS_PSK"; save_var SB_ANYTLS_USER "$SB_ANYTLS_USER"
         save_var SB_HY2_HOP_ENABLE "$SB_HY2_HOP_ENABLE"; save_var SB_HY2_HOP_START "$SB_HY2_HOP_START"; save_var SB_HY2_HOP_END "$SB_HY2_HOP_END"
         save_var SB_HY2_HOP_MODE "$SB_HY2_HOP_MODE"; save_var SB_HY2_HOP_INTERVAL "$SB_HY2_HOP_INTERVAL"; save_var SB_HY2_HOP_MIN "$SB_HY2_HOP_MIN"; save_var SB_HY2_HOP_MAX "$SB_HY2_HOP_MAX"
-        save_var HY2_PIN_SHA256 "$HY2_PIN_SHA256"; save_var SB_HY2_PIN_SHA256 "$SB_HY2_PIN_SHA256"
+        save_var HY2_PIN_SHA256 "$HY2_PIN_SHA256"; save_var SB_HY2_PIN_SHA256 "$SB_HY2_PIN_SHA256"; save_var SB_TUIC_PIN_SHA256 "$SB_TUIC_PIN_SHA256"
+
         save_var SB_SNI "$SB_SNI"; save_var SB_CERT_FILE "$SB_CERT_FILE"; save_var SB_KEY_FILE "$SB_KEY_FILE"
+        save_var SB_HY2_SNI "$SB_HY2_SNI"; save_var SB_TUIC_SNI "$SB_TUIC_SNI"
+        save_var SB_ANYTLS_SNI "$SB_ANYTLS_SNI"; save_var SB_REALITY_SNI "$SB_REALITY_SNI"
+        save_var SB_SS_METHOD "$SB_SS_METHOD"
+        save_var SB_HY2_CERT_FILE "$SB_HY2_CERT_FILE"; save_var SB_HY2_KEY_FILE "$SB_HY2_KEY_FILE"
         save_var TRAFFIC_IN "$TRAFFIC_IN"; save_var TRAFFIC_OUT "$TRAFFIC_OUT"
     } > "$tmp" && mv -f "$tmp" "$USER_CONF"
     local rc=$?
@@ -1890,12 +2241,24 @@ save_conf() {
 # 链接生成
 #==============================================================================
 # MODULE: subscription generation and serving
+ws_client_path() {
+    local tag="$1" path
+    path=$(jq -r --arg tag "$tag" '.inbounds[]?|select(.tag==$tag)|.streamSettings.wsSettings.path//empty' "$CONFIG_FILE" 2>/dev/null | head -n 1)
+    path="${path:-$2}"
+    case "$path" in
+        *\?ed=*|*\&ed=*) ;;
+        *\?*) path="${path}&ed=2560" ;;
+        *) path="${path}?ed=2560" ;;
+    esac
+    printf '%s' "$path"
+}
 gen_vmess_link() {
-    local json; json="{\"v\":\"2\",\"ps\":\"${5:-${NODE_NAME}-VMess}\",\"add\":\"${3:-$(get_cdn)}\",\"port\":\"${4:-$(get_cdn_port)}\",\"id\":\"$1\",\"aid\":\"0\",\"scy\":\"none\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"$2\",\"path\":\"/vmess-argo?ed=2560\",\"tls\":\"tls\",\"sni\":\"$2\",\"alpn\":\"\",\"fp\":\"\"}"
+    local json; json=$(jq -nc --arg name "${5:-${NODE_NAME}-VMess}" --arg cdn "${3:-$(get_cdn)}" --arg port "${4:-$(get_cdn_port)}" --arg uuid "$1" --arg host "$2" --arg path "$(ws_client_path vmess-ws /vmess-argo)" \
+        '{v:"2",ps:$name,add:$cdn,port:$port,id:$uuid,aid:"0",scy:"none",net:"ws",type:"none",host:$host,path:$path,tls:"tls",sni:$host,alpn:"",fp:""}')
     printf '%s' "vmess://$(printf '%s' "$json" | base64 -w0 2>/dev/null || printf '%s' "$json" | base64 | tr -d '\n')"
 }
 gen_vless_link() {
-    printf '%s' "vless://$1@${3:-$(get_cdn)}:${4:-$(get_cdn_port)}?encryption=none&security=tls&sni=$2&type=ws&host=$2&path=%2Fvless-argo%3Fed%3D2560#${5:-${NODE_NAME}-VLESS}"
+    printf '%s' "vless://$1@${3:-$(get_cdn)}:${4:-$(get_cdn_port)}?encryption=none&security=tls&sni=$2&type=ws&host=$2&path=$(uri_encode "$(ws_client_path vless-ws /vless-argo)")#$(uri_encode "${5:-${NODE_NAME}-VLESS}")"
 }
 gen_ss_link() {
     local b64; b64=$(printf '%s' "$1:$2" | base64 -w0 2>/dev/null || printf '%s' "$1:$2" | base64 | tr -d '\n')
@@ -1907,18 +2270,27 @@ gen_reality_link() {
     local fp="$8"; [ -z "$fp" ] && fp="${REALITY_FP:-chrome}"
     printf '%s' "vless://$1@$2:$3?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=$4&pbk=$5&fp=${fp}${sid}#${7:-${NODE_NAME}-Reality}"
 }
+uri_encode() { jq -rn --arg value "$1" '$value | @uri'; }
+uri_host() {
+    case "$1" in \[*\]) printf '%s' "$1" ;; *:*) printf '[%s]' "$1" ;; *) printf '%s' "$1" ;; esac
+}
+client_hy2_bandwidth() {
+    local mode_key="${1}_CONGESTION" up_key="${1}_UP_MBPS" down_key="${1}_DOWN_MBPS"
+    local up="${!up_key}" down="${!down_key}"
+    # ArgoV subscription hints for Mihomo; portable URI clients may ignore them.
+    # Server upload is client download, and server download is client upload.
+    if [ "${!mode_key}" = brutal ] && [[ "$up" =~ ^[0-9]{1,7}$ && "$down" =~ ^[0-9]{1,7}$ ]] && ((10#$up > 0 && 10#$down > 0)); then
+        printf '&up=%smbps&down=%smbps' "$down" "$up"
+    fi
+    return 0
+}
 gen_hy2_link() {
     local mport="$6"
-    # sing-box 需要 insecure=1 跳过 CA 验证 + pinSHA256 做指纹锁定
-    # Xray 同样需要 allowInsecure=0 + pinSHA256 (有指纹时不需要 allowInsecure)
-    local qs="sni=$4&insecure=1&alpn=h3"
-    if [ -n "${HY2_PIN_SHA256:-}" ]; then
-        qs="${qs}&pinSHA256=${HY2_PIN_SHA256}&allowInsecure=0"
-    else
-        qs="${qs}&allowInsecure=1"
-    fi
+    local qs="sni=$4&alpn=h3"
+    qs+="$(certificate_uri_options "${HY2_PIN_SHA256:-}")"
     [ -n "$mport" ] && qs="${qs}&mport=${mport}"
-    printf '%s' "hysteria2://$1@$2:$3?${qs}#${5:-${NODE_NAME}-Hy2}"
+    qs+="$(client_hy2_bandwidth HY2)"
+    printf '%s' "hysteria2://$1@$(uri_host "$2"):$3?${qs}#$(uri_encode "${5:-${NODE_NAME}-Hy2}")"
 }
 
 # Sing-box 链接生成
@@ -1927,33 +2299,30 @@ gen_sb_hy2_link() {
     local name="${5:-${NODE_NAME}-HY2}"
     local extra=""
     [ -n "$6" ] && extra="&mport=$6"
-    if [ -n "${SB_HY2_PIN_SHA256:-}" ]; then
-        extra="${extra}&pinSHA256=${SB_HY2_PIN_SHA256}&allowInsecure=0"
-    else
-        extra="${extra}&allowInsecure=1"
-    fi
-    printf '%s' "hy2://$1@$2:$3?sni=${4}&alpn=h3&insecure=1${extra}#${name}"
+    extra+="$(certificate_uri_options "${SB_HY2_PIN_SHA256:-}")"
+    extra+="$(client_hy2_bandwidth SB_HY2)"
+    printf '%s' "hy2://$(uri_encode "$1")@$(uri_host "$2"):$3?sni=${4}&alpn=h3${extra}#$(uri_encode "$name")"
 }
 gen_sb_tuic_link() {
     # $1=uuid $2=pass $3=host $4=port $5=sni $6=name
     local name="${6:-${NODE_NAME}-TUIC}"
-    printf '%s' "tuic://$1:$2@$3:$4?congestion_control=bbr&alpn=h3&sni=${5}&insecure=1#${name}"
+    printf '%s' "tuic://$1:$(uri_encode "$2")@$(uri_host "$3"):$4?congestion_control=bbr&alpn=h3&sni=${5}$(certificate_uri_options "${SB_TUIC_PIN_SHA256:-}")#$(uri_encode "$name")"
 }
 gen_sb_anytls_link() {
     # $1=pass $2=host $3=port $4=sni $5=pbk $6=sid $7=name
     local name="${7:-${NODE_NAME}-AnyTLS}"
-    printf '%s' "anytls://$1@$2:$3?security=reality&sni=${4}&fp=chrome&pbk=${5}&sid=${6}#${name}"
+    printf '%s' "anytls://$(uri_encode "$1")@$(uri_host "$2"):$3?security=reality&sni=${4}&fp=chrome&pbk=${5}&sid=${6}#$(uri_encode "$name")"
 }
 gen_sb_reality_link() {
     # $1=uuid $2=host $3=port $4=sni $5=pbk $6=sid $7=name
     local name="${7:-${NODE_NAME}-Reality}"
-    printf '%s' "vless://$1@$2:$3?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${4}&pbk=${5}&fp=chrome&sid=${6}#${name}"
+    printf '%s' "vless://$1@$(uri_host "$2"):$3?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${4}&pbk=${5}&fp=chrome&sid=${6}#$(uri_encode "$name")"
 }
 gen_sb_ss_link() {
     # $1=method $2=pass $3=host $4=port $5=name
     local b64; b64=$(printf '%s' "$1:$2" | base64 -w0 2>/dev/null || printf '%s' "$1:$2" | base64 | tr -d '\n')
     local name="${5:-${NODE_NAME}-SS}"
-    printf '%s' "ss://${b64}@$3:$4#${name}"
+    printf '%s' "ss://${b64}@$(uri_host "$3"):$4#$(uri_encode "$name")"
 }
 
 show_qr() {
@@ -2088,14 +2457,21 @@ start_sub_server() {
     local py; py=$(command -v python3 || command -v python || true)
     [ -z "$py" ] && { yellow_msg "Python3 未安装，订阅跳过"; return 1; }
 
-    cat > "${WORK_DIR}/sub.py" << PYEOF
+    local sub_settings sub_settings_literal sub_candidate
+    sub_settings=$(jq -nc --arg work "$WORK_DIR" --arg name "$NODE_NAME" --arg token "$SUB_TOKEN" --arg path "$SUB_PATH" --arg agg "$AGG_TOKEN" --arg port "$SUB_PORT" \
+        '{work:$work,name:$name,token:$token,path:$path,agg:$agg,port:$port}') || return 1
+    sub_settings_literal=$(jq -rn --arg value "$sub_settings" '$value | @json') || return 1
+    sub_candidate=$(mktemp "${WORK_DIR}/sub.py.new.XXXXXX") || return 1
+    cat > "$sub_candidate" << PYEOF
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 import subprocess, os, socketserver, threading, time
 import base64, json, urllib.parse
 
-SUB_FILE='/etc/xray/sub.txt'; PORT=${SUB_PORT}
-USERS_FILE='/etc/xray/argov_users.json'; GEN_SCRIPT='${WORK_DIR}/sub_gen.sh'
+SETTINGS=json.loads(${sub_settings_literal})
+WORK_DIR=SETTINGS['work']; NODE_NAME=SETTINGS['name']; SUB_TOKEN=SETTINGS['token']; SUB_PATH=SETTINGS['path']; AGG_TOKEN=SETTINGS['agg']
+SUB_FILE='/etc/xray/sub.txt'; PORT=int(SETTINGS['port'])
+USERS_FILE='/etc/xray/argov_users.json'; GEN_SCRIPT=os.path.join(WORK_DIR, 'sub_gen.sh')
 CACHE={}; CACHE_LOCK=threading.Lock()
 
 def to_yaml(data, level=0):
@@ -2120,8 +2496,77 @@ def to_yaml(data, level=0):
                 out.append(f"{ind}- {v_str}")
     return "\\n".join(out)
 
+def share_cert_pin(qs):
+    pin = next((qs[k][0] for k in ("pinSHA256", "pcs", "pinnedPeerCertSha256") if qs.get(k)), "")
+    if not pin:
+        return ""
+    pin = pin.replace(":", "")
+    if len(pin) != 64 or any(c not in "0123456789abcdefABCDEF" for c in pin):
+        raise ValueError("证书 SHA256 指纹格式无效，请检查原始链接")
+    return pin
+
+def clash_tls_options(p, qs):
+    if qs.get("fp", [""])[0]:
+        p["client-fingerprint"] = qs["fp"][0]
+    if qs.get("alpn", [""])[0]:
+        p["alpn"] = [v for v in qs["alpn"][0].split(",") if v]
+    pin = share_cert_pin(qs)
+    if pin:
+        p["fingerprint"] = pin
+        p["skip-cert-verify"] = False
+    else:
+        value = next((qs[k][0] for k in ("allowInsecure", "insecure", "skip-cert-verify") if qs.get(k)), "")
+        if value:
+            p["skip-cert-verify"] = value.lower() in ("1", "true", "yes")
+
+def clash_xhttp_options(qs):
+    opts = {"path": qs.get("path", ["/"])[0] or "/", "host": qs.get("host", [""])[0], "mode": qs.get("mode", ["auto"])[0]}
+    extra = json.loads(qs.get("extra", ["{}"]) [0])
+    if not isinstance(extra, dict):
+        raise ValueError("XHTTP extra 必须是 JSON 对象，请使用原始链接")
+    # 显式映射，避免把未知字段丢掉后输出无法连接的节点。
+    mapping = {
+        "headers": "headers", "noGRPCHeader": "no-grpc-header", "xPaddingBytes": "x-padding-bytes",
+        "xPaddingObfsMode": "x-padding-obfs-mode", "xPaddingKey": "x-padding-key", "xPaddingHeader": "x-padding-header",
+        "xPaddingPlacement": "x-padding-placement", "xPaddingMethod": "x-padding-method", "uplinkHTTPMethod": "uplink-http-method",
+        "sessionPlacement": "session-placement", "sessionKey": "session-key", "sessionTable": "session-table", "sessionLength": "session-length",
+        "seqPlacement": "seq-placement", "seqKey": "seq-key", "uplinkDataPlacement": "uplink-data-placement", "uplinkDataKey": "uplink-data-key",
+        "uplinkChunkSize": "uplink-chunk-size", "scMaxEachPostBytes": "sc-max-each-post-bytes", "scMinPostsIntervalMs": "sc-min-posts-interval-ms",
+    }
+    ranges = {"xPaddingBytes", "sessionLength", "uplinkChunkSize", "scMaxEachPostBytes", "scMinPostsIntervalMs"}
+    for key, value in extra.items():
+        if key in mapping:
+            opts[mapping[key]] = str(value) if key in ranges else value
+        elif key == "xmux":
+            xmux_map = {"maxConcurrency": "max-concurrency", "maxConnections": "max-connections", "cMaxReuseTimes": "c-max-reuse-times",
+                        "hMaxRequestTimes": "h-max-request-times", "hMaxReusableSecs": "h-max-reusable-secs", "hKeepAlivePeriod": "h-keep-alive-period"}
+            if not isinstance(value, dict) or any(k not in xmux_map for k in value):
+                raise ValueError("XHTTP xmux 包含尚未支持的参数，请使用原始链接")
+            opts["reuse-settings"] = {xmux_map[k]: int(v) if k == "hKeepAlivePeriod" else str(v) for k, v in value.items()}
+        else:
+            raise ValueError("XHTTP 参数 " + key + " 尚未支持转换，请使用原始链接")
+    return opts
+
+def clash_transport_options(p, qs):
+    network = qs.get("type", qs.get("network", ["tcp"]))[0] or "tcp"
+    path, host = qs.get("path", ["/"])[0] or "/", qs.get("host", [""])[0]
+    if network in ("tcp", "raw"):
+        return
+    if network == "ws":
+        p.update({"network": "ws", "ws-opts": {"path": path, "headers": {"Host": host}}})
+    elif network == "httpupgrade":
+        p.update({"network": "ws", "ws-opts": {"path": path, "headers": {"Host": host}, "v2ray-http-upgrade": True}})
+    elif network == "grpc":
+        p.update({"network": "grpc", "grpc-opts": {"grpc-service-name": qs.get("serviceName", [""])[0]}})
+    elif network in ("xhttp", "splithttp") and p["type"] == "vless":
+        p.update({"network": "xhttp", "xhttp-opts": clash_xhttp_options(qs)})
+    elif network == "h2":
+        p.update({"network": "h2", "h2-opts": {"path": path, "host": [host] if host else []}})
+    else:
+        raise ValueError("传输 " + network + " 尚未支持转换，请使用原始链接")
+
 def build_clash(lines):
-    proxies, names = [], []
+    proxies, names, errors = [], [], []
     def split_host_port(server):
         host, port = server.rsplit(":", 1)
         return host.strip("[]"), int(port)
@@ -2140,15 +2585,15 @@ def build_clash(lines):
                 qs = urllib.parse.parse_qs(q)
                 uuid, server = base.split("@", 1)
                 host, port = split_host_port(server)
-                p = {"name": urllib.parse.unquote(name), "type": "vless", "server": host, "port": port, "uuid": uuid, "udp": True, "encryption": "none"}
+                p = {"name": urllib.parse.unquote(name), "type": "vless", "server": host, "port": port, "uuid": uuid, "udp": True, "encryption": qs.get("encryption", ["none"])[0]}
                 if qs.get("flow", [""])[0]:
                     p["flow"] = qs.get("flow", [""])[0]
                 if qs.get("security", [""])[0] == "tls":
                     p.update({"tls": True, "servername": qs.get("sni", [""])[0]})
                 elif qs.get("security", [""])[0] == "reality":
                     p.update({"tls": True, "servername": qs.get("sni", [""])[0], "client-fingerprint": qs.get("fp", ["chrome"])[0], "reality-opts": {"public-key": qs.get("pbk", [""])[0], "short-id": qs.get("sid", [""])[0]}})
-                if qs.get("type", [""])[0] == "ws":
-                    p.update({"network": "ws", "ws-opts": {"path": urllib.parse.unquote(qs.get("path", ["/"])[0]), "headers": {"Host": qs.get("host", [""])[0]}}})
+                clash_tls_options(p, qs)
+                clash_transport_options(p, qs)
             elif l.startswith("vmess://"):
                 j = json.loads(base64.b64decode(l[8:] + "==").decode())
                 p = {"name": j.get("ps", "VMess"), "type": "vmess", "server": j.get("add"), "port": int(j.get("port")), "uuid": j.get("id"), "alterId": int(j.get("aid", 0)), "cipher": j.get("scy", "auto"), "udp": True}
@@ -2156,6 +2601,8 @@ def build_clash(lines):
                     p.update({"network": "ws", "ws-opts": {"path": j.get("path", "/"), "headers": {"Host": j.get("host", "")}}})
                 if str(j.get("tls")) == "tls":
                     p.update({"tls": True, "servername": j.get("sni", "")})
+                    clash_tls_options(p, {k: [str(v)] for k, v in j.items() if v is not None})
+                clash_transport_options(p, {"type": [j.get("net", "tcp")], "path": [j.get("path", "/")], "host": [j.get("host", "")], "serviceName": [j.get("path", "")]})
             elif l.startswith("ss://"):
                 link = l[5:]
                 name = "SS"
@@ -2182,8 +2629,10 @@ def build_clash(lines):
                     p["sni"] = qs.get("sni", [""])[0]
                 if qs.get("allowInsecure", [""])[0] or qs.get("skip-cert-verify", [""])[0]:
                     p["skip-cert-verify"] = bool_qs(qs.get("allowInsecure", qs.get("skip-cert-verify", ["false"]))[0])
-            elif l.startswith("hysteria2://"):
-                link = l[12:]
+                clash_tls_options(p, qs)
+                clash_transport_options(p, qs)
+            elif l.startswith(("hysteria2://", "hy2://")):
+                link = l.split("://", 1)[1]
                 name = "Hysteria2"
                 if "#" in link: link, name = link.split("#", 1)
                 base, q = link.split("?", 1) if "?" in link else (link, "")
@@ -2201,6 +2650,16 @@ def build_clash(lines):
                     p["obfs-password"] = qs.get("obfs-password", [""])[0]
                 if qs.get("alpn", [""])[0]:
                     p["alpn"] = [i for i in qs.get("alpn", [""])[0].split(",") if i]
+                clash_tls_options(p, qs)
+                for field in ("up", "down"):
+                    bandwidth = qs.get(field, [""])[0]
+                    numeric = bandwidth.lower().replace(" ", "")
+                    for suffix in ("mbps", "kbps", "gbps"):
+                        if numeric.endswith(suffix):
+                            numeric = numeric[:-len(suffix)]
+                            break
+                    if numeric.replace(".", "", 1).isdigit() and float(numeric) > 0:
+                        p[field] = bandwidth
                 mport = qs.get("mport", qs.get("ports", [""]))[0]
                 if mport:
                     p["ports"] = mport
@@ -2219,7 +2678,9 @@ def build_clash(lines):
                 if qs.get("alpn", [""])[0]: p["alpn"] = [i for i in qs.get("alpn", [""])[0].split(",") if i]
                 if qs.get("insecure", [""])[0] or qs.get("skip-cert-verify", [""])[0]:
                     p["skip-cert-verify"] = bool_qs(qs.get("insecure", qs.get("skip-cert-verify", ["false"]))[0])
-                if qs.get("congestion_control", [""])[0]: p["congestion-control"] = qs.get("congestion_control", [""])[0]
+                if qs.get("congestion_control", [""])[0]: p["congestion-controller"] = qs["congestion_control"][0]
+                if qs.get("udp_relay_mode", [""])[0]: p["udp-relay-mode"] = qs["udp_relay_mode"][0]
+                clash_tls_options(p, qs)
             elif l.startswith("anytls://"):
                 link = l[9:]
                 name = "AnyTLS"
@@ -2232,13 +2693,19 @@ def build_clash(lines):
                 if qs.get("sni", [""])[0]: p["sni"] = qs.get("sni", [""])[0]
                 if qs.get("fp", [""])[0]: p["client-fingerprint"] = qs.get("fp", [""])[0]
                 if qs.get("pbk", [""])[0]: p["reality-opts"] = {"public-key": qs.get("pbk", [""])[0], "short-id": qs.get("sid", [""])[0]}
+                clash_tls_options(p, qs)
 
             if p:
                 proxies.append(p)
                 names.append(p["name"])
-        except: pass
+        except Exception as exc:
+            # 不输出链接、密码或 UUID；转换错误保留在订阅注释中。
+            errors.append("ArgoV: " + l.split(":", 1)[0] + " 转换失败: " + str(exc))
     
-    if not proxies: return ""
+    if not proxies:
+        if errors:
+            raise ValueError("; ".join(errors))
+        return ""
     proxy_names = ["Automatic", "Fallback"] + names
     direct_proxy_names = ["DIRECT", "Proxy", "Automatic"] + names
     cfg = {
@@ -2313,7 +2780,10 @@ def build_clash(lines):
             "MATCH,Final"
         ]
     }
-    return to_yaml(cfg)
+    result = to_yaml(cfg)
+    if errors:
+        result = "\\n".join("# " + e.replace("\\n", " ").replace("\\r", " ") for e in errors) + "\\n" + result
+    return result
 
 def load_users():
     try:
@@ -2324,8 +2794,8 @@ def load_users():
 
 def resolve_token(path, qs):
     tok = qs.get('token', [None])[0]
-    if path == '${SUB_PATH}' or tok == '${SUB_TOKEN}':
-        return '${SUB_TOKEN}', True
+    if path == SUB_PATH or tok == SUB_TOKEN:
+        return SUB_TOKEN, True
     if not tok:
         return None, False
     for u in load_users():
@@ -2381,7 +2851,7 @@ class H(BaseHTTPRequestHandler):
                 cache_raw, cache_clash = item
                 ua = s.headers.get('User-Agent', '').lower()
                 is_clash = 'clash' in ua or 'mihomo' in ua or 'verge' in ua or qs.get('clash',[''])[0]=='1'
-                safe_name = up.quote('${NODE_NAME}', safe='')
+                safe_name = up.quote(NODE_NAME, safe='')
                 if is_clash and cache_clash:
                     s.send_header('Content-Type','text/yaml; charset=utf-8')
                     s.send_header('Content-Length', str(len(cache_clash)))
@@ -2404,15 +2874,15 @@ class H(BaseHTTPRequestHandler):
                 s.end_headers()
         elif req_path == '/agg':
             tok = qs.get('token', [None])[0]
-            if tok == '${AGG_TOKEN}':
+            if tok == AGG_TOKEN:
                 try:
-                    if not os.path.exists('${WORK_DIR}/agg_raw.txt'):
+                    if not os.path.exists(os.path.join(WORK_DIR, 'agg_raw.txt')):
                         s.send_response(503)
                         s.send_header('Content-Type','text/plain; charset=utf-8')
                         s.send_header('Connection', 'close')
                         s.end_headers(); s.wfile.write(b'waiting for first sync...')
                     else:
-                        with open('${WORK_DIR}/agg_raw.txt', 'rb') as f:
+                        with open(os.path.join(WORK_DIR, 'agg_raw.txt'), 'rb') as f:
                             agg = f.read()
                         s.send_response(200)
                         s.send_header('Content-Type','text/plain; charset=utf-8')
@@ -2434,14 +2904,14 @@ class H(BaseHTTPRequestHandler):
     def log_message(s,*a): pass
 
 # 后台定时刷新（首次+每60秒）
-refresh_cache('${SUB_TOKEN}')
+refresh_cache(SUB_TOKEN)
 def bg_refresh():
     while True:
         time.sleep(10)
         # 聚合订阅刷新（先跑，不阻塞 token 刷新）
-        if os.path.exists('${WORK_DIR}/agg_gen.sh'):
+        if os.path.exists(os.path.join(WORK_DIR, 'agg_gen.sh')):
             try:
-                subprocess.run(['${WORK_DIR}/agg_gen.sh'], timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run([os.path.join(WORK_DIR, 'agg_gen.sh')], timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except: pass
         with CACHE_LOCK:
             toks=list(CACHE.keys())
@@ -2450,7 +2920,7 @@ def bg_refresh():
 threading.Thread(target=bg_refresh,daemon=True).start()
 
 import ssl, os
-CERT='${WORK_DIR}/sub_cert.pem'; KEY='${WORK_DIR}/sub_key.pem'
+CERT=os.path.join(WORK_DIR, 'sub_cert.pem'); KEY=os.path.join(WORK_DIR, 'sub_key.pem')
 socketserver.TCPServer.allow_reuse_address=True
 if os.path.exists(CERT) and os.path.exists(KEY):
     ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -2461,6 +2931,14 @@ else:
     httpd=ThreadedServer(('0.0.0.0',PORT),H)
 httpd.serve_forever()
 PYEOF
+
+    if ! "$py" -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$sub_candidate"; then
+        rm -f "$sub_candidate"
+        red_msg "订阅程序语法检查失败，已保留旧程序。"
+        restart_protocol_runtime argov-sub >/dev/null 2>&1 || true
+        return 1
+    fi
+    mv -f "$sub_candidate" "${WORK_DIR}/sub.py" || return 1
 
     # 刷新脚本：供 Python 调用，每次请求前更新订阅文件
     cat > "${WORK_DIR}/sub_gen.sh" << 'SUBEOF'
@@ -2480,6 +2958,16 @@ get_domain() {
     echo "$LAST_ARGO_DOMAIN"
 }
 b64() { printf '%s' "$1" | base64 -w0 2>/dev/null || printf '%s' "$1" | base64 | tr -d '\n'; }
+cert_pin_sha256() {
+    [ -f "$1" ] || return 1
+    openssl x509 -in "$1" -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//' | tr '[:lower:]' '[:upper:]'
+}
+certificate_uri_options() {
+    local pin="${1//:/}"
+    printf '&insecure=1&allowInsecure=0'
+    [[ "$pin" =~ ^[[:xdigit:]]{64}$ ]] && printf '&pinSHA256=%s' "$pin"
+    return 0
+}
 [ -f "$USERS" ] || exit 1
 # 默认用户永远有效（即使被误禁用）；其他用户需 enabled=true
 UQ='if ($tok == "" or $tok == $dtok) then (.users[]|select(.name=="default")) else (.users[]|select(.token==$tok and (.enabled//true))) end'
@@ -2502,12 +2990,38 @@ ip=""; for s in ifconfig.me icanhazip.com checkip.amazonaws.com api.ipify.org; d
     echo "$ip" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' && break || ip=""
 done
 [ "$MODE" = "fixed-token" ] && hd="$FIXED"
+[ "$MODE" = "skip" ] && hd=""
+uri_encode() { "$JQ" -rn --arg value "$1" '$value | @uri'; }
+uri_host() { if [[ "$1" == *:* && "$1" != \[*\] ]]; then printf '[%s]' "$1"; else printf '%s' "$1"; fi; }
+ip_host=$(uri_host "$ip")
 links=""
 if [ -n "$hd" ]; then
-    links+="vless://${uuid}@${cdn}:${cp}?encryption=none&security=tls&sni=${hd}&type=ws&host=${hd}&path=%2Fvless-argo%3Fed%3D2560#${NODE_NAME}-VLESS"$'\n'
-    j='{"v":"2","ps":"'"${NODE_NAME}"'-VMess","add":"'"${cdn}"'","port":"'"${cp}"'","id":"'"${uuid}"'","aid":"0","scy":"none","net":"ws","type":"none","host":"'"${hd}"'","path":"/vmess-argo?ed=2560","tls":"tls","sni":"'"${hd}"'","alpn":"","fp":""}'
+    ws_client_path() {
+        local tag="$1" path
+        path=$("$JQ" -r --arg tag "$tag" '.inbounds[]?|select(.tag==$tag)|.streamSettings.wsSettings.path//empty' "$CFG" | head -n 1)
+        path="${path:-$2}"
+        case "$path" in
+            *\?ed=*|*\&ed=*) ;;
+            *\?*) path="${path}&ed=2560" ;;
+            *) path="${path}?ed=2560" ;;
+        esac
+        printf '%s' "$path"
+    }
+    links+="vless://${uuid}@${cdn}:${cp}?encryption=none&security=tls&sni=${hd}&type=ws&host=${hd}&path=$(uri_encode "$(ws_client_path vless-ws /vless-argo)")#$(uri_encode "${NODE_NAME}-VLESS")"$'\n'
+    j=$("$JQ" -nc --arg name "${NODE_NAME}-VMess" --arg cdn "$cdn" --arg port "$cp" --arg uuid "$uuid" --arg host "$hd" --arg path "$(ws_client_path vmess-ws /vmess-argo)" \
+        '{v:"2",ps:$name,add:$cdn,port:$port,id:$uuid,aid:"0",scy:"none",net:"ws",type:"none",host:$host,path:$path,tls:"tls",sni:$host,alpn:"",fp:""}')
     links+="vmess://$(b64 "$j")"$'\n'
 fi
+client_hy2_bandwidth() {
+    local mode_key="${1}_CONGESTION" up_key="${1}_UP_MBPS" down_key="${1}_DOWN_MBPS"
+    local up="${!up_key}" down="${!down_key}"
+    # ArgoV subscription hints for Mihomo; portable URI clients may ignore them.
+    # Server upload is client download, and server download is client upload.
+    if [ "${!mode_key}" = brutal ] && [[ "$up" =~ ^[0-9]{1,7}$ && "$down" =~ ^[0-9]{1,7}$ ]] && ((10#$up > 0 && 10#$down > 0)); then
+        printf '&up=%smbps&down=%smbps' "$down" "$up"
+    fi
+    return 0
+}
 if $JQ -e '.inbounds[]|select(.tag=="reality")' "$CFG" >/dev/null 2>&1 && [ -n "$ip" ]; then
     rport=$($JQ -r '.inbounds[]|select(.tag=="reality")|.port' "$CFG")
     rs=$($JQ -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames[0]' "$CFG")
@@ -2515,7 +3029,7 @@ if $JQ -e '.inbounds[]|select(.tag=="reality")' "$CFG" >/dev/null 2>&1 && [ -n "
     [ -n "$rpub" ] || rpub=$($JQ -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.publicKey//empty' "$CFG")
     rsid=$($JQ -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.shortIds[0]//empty' "$CFG")
     [ -n "$rsid" ] && rsid="&sid=${rsid}" || rsid=""
-    [ -n "$rport" ] && links+="vless://${uuid}@${ip}:${rport}?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=${rs}&pbk=${rpub}&fp=${REALITY_FP:-chrome}${rsid}#${NODE_NAME}-Reality"$'\n'
+    [ -n "$rport" ] && links+="vless://${uuid}@${ip_host}:${rport}?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=${rs}&pbk=${rpub}&fp=${REALITY_FP:-chrome}${rsid}#$(uri_encode "${NODE_NAME}-Reality")"$'\n'
 fi
 # 自定义链接（用户自添加）
 if [ "$INCLUDE_CUSTOM" = "1" ] && [ -f /etc/xray/custom_links.txt ]; then
@@ -2525,21 +3039,25 @@ if [ "$INCLUDE_CUSTOM" = "1" ] && [ -f /etc/xray/custom_links.txt ]; then
 fi
 if $JQ -e '.inbounds[]|select(.tag=="hy2")' "$CFG" >/dev/null 2>&1 && [ -n "$ip" ]; then
     hport=$($JQ -r '.inbounds[]|select(.tag=="hy2")|.port' "$CFG")
-    hsni=$($JQ -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.serverName//"www.bing.com"' "$CFG")
+    hsni=$($JQ -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.serverName//empty' "$CFG")
     hmport=$($JQ -r '.inbounds[]|select(.tag=="hy2")|(.streamSettings.finalmask.quicParams.udpHop.ports//.streamSettings.hysteriaSettings.quicParams.udpHop.ports[0]//empty)' "$CFG")
     hmport_qs=""; [ -n "$hmport" ] && hmport_qs="&mport=${hmport}"
-    local hy2_extra=""
-    if [ -n "${HY2_PIN_SHA256:-}" ]; then
-        hy2_extra="&pinSHA256=${HY2_PIN_SHA256}&allowInsecure=0"
-    else
-        hy2_extra="&allowInsecure=1"
-    fi
-    [ -n "$hport" ] && links+="hysteria2://${uuid}@${ip}:${hport}?sni=${hsni}&insecure=1&alpn=h3${hmport_qs}${hy2_extra}#${NODE_NAME}-HY2"$'\n'
+    hcert=$($JQ -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.certificates[0].certificateFile//empty' "$CFG")
+    hpin=$(cert_pin_sha256 "${hcert:-${HY2_CERT_FILE:-}}")
+    hy2_extra=$(certificate_uri_options "${hpin:-${HY2_PIN_SHA256:-}}")
+    hy2_extra+="$(client_hy2_bandwidth HY2)"
+    [ -n "$hport" ] && links+="hysteria2://${uuid}@${ip_host}:${hport}?sni=${hsni:-${HY2_SNI:-}}&alpn=h3${hmport_qs}${hy2_extra}#$(uri_encode "${NODE_NAME}-HY2")"$'\n'
 fi
 # ===== Sing-box 节点 (仅 default 用户获取共享端口; 限额用户用专属端口) =====
 SB_CFG="/etc/sing-box/config.json"
 if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CFG" ] && [ -n "$ip" ]; then
     SB_SNI="${SB_SNI:-addons.mozilla.org}"
+    sb_hcert=$($JQ -r '.inbounds[]?|select(.tag=="sb-hy2")|.tls.certificate_path//empty' "$SB_CFG" | head -n 1)
+    sb_hpin=$(cert_pin_sha256 "${sb_hcert:-${SB_HY2_CERT_FILE:-${SB_CERT_FILE:-}}}")
+    sb_hy2_tls=$(certificate_uri_options "${sb_hpin:-${SB_HY2_PIN_SHA256:-}}")
+    sb_tcert=$($JQ -r '.inbounds[]?|select(.tag=="sb-tuic")|.tls.certificate_path//empty' "$SB_CFG" | head -n 1)
+    sb_tpin=$(cert_pin_sha256 "${sb_tcert:-${SB_CERT_FILE:-}}")
+    sb_tuic_tls=$(certificate_uri_options "${sb_tpin:-${SB_TUIC_PIN_SHA256:-}}")
     sb_hy2_name="${NODE_NAME}-HY2"
     sb_reality_name="${NODE_NAME}-Reality"
     sb_ss_name="${NODE_NAME}-SS"
@@ -2548,55 +3066,55 @@ if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CFG" ] && [ -n "$ip" ]; then
     $JQ -e '.inbounds[]|select(.tag=="ss")' "$CFG" >/dev/null 2>&1 && sb_ss_name="${NODE_NAME}-SingBox-SS"
     if [ "$IS_DEFAULT_USER" = "1" ]; then
         # 共享节点 — 仅 default 用户. 直接读 conf 变量, 不 jq 查 config.json
-        local sb_hy2_hop=""
+        sb_hy2_hop=""
         [ "${SB_HY2_HOP_ENABLE:-false}" = "true" ] && sb_hy2_hop="&mport=${SB_HY2_HOP_START}-${SB_HY2_HOP_END}"
         if [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ -n "${SB_HY2_PORT:-}" ] && [ -n "${SB_HY2_PSK:-}" ]; then
-            local sb_hy2_pin=""
-            [ -n "${SB_HY2_PIN_SHA256:-}" ] && sb_hy2_pin="&pinSHA256=${SB_HY2_PIN_SHA256}"
-            links+="hy2://${SB_HY2_PSK}@${ip}:${SB_HY2_PORT}?sni=${SB_SNI}&alpn=h3&insecure=1${sb_hy2_hop}${sb_hy2_pin}#${sb_hy2_name}"$'\n'
+            sb_hy2_pin="$sb_hy2_tls"
+            sb_hy2_pin+="$(client_hy2_bandwidth SB_HY2)"
+            links+="hy2://$(uri_encode "$SB_HY2_PSK")@${ip_host}:${SB_HY2_PORT}?sni=${SB_HY2_SNI:-$SB_SNI}&alpn=h3${sb_hy2_hop}${sb_hy2_pin}#$(uri_encode "$sb_hy2_name")"$'\n'
         fi
         if [ "${SB_TUIC_ENABLE:-false}" = "true" ] && [ -n "${SB_TUIC_PORT:-}" ] && [ -n "${SB_TUIC_UUID:-}" ]; then
-            links+="tuic://${SB_TUIC_UUID}:${SB_TUIC_PSK}@${ip}:${SB_TUIC_PORT}?congestion_control=bbr&alpn=h3&sni=${SB_SNI}&insecure=1#${NODE_NAME}-TUIC"$'\n'
+            links+="tuic://${SB_TUIC_UUID}:$(uri_encode "$SB_TUIC_PSK")@${ip_host}:${SB_TUIC_PORT}?congestion_control=bbr&alpn=h3&sni=${SB_TUIC_SNI:-$SB_SNI}${sb_tuic_tls}#$(uri_encode "${NODE_NAME}-TUIC")"$'\n'
         fi
         if [ "${SB_ANYTLS_ENABLE:-false}" = "true" ] && [ -n "${SB_ANYTLS_PORT:-}" ] && [ -n "${SB_ANYTLS_PSK:-}" ]; then
-            links+="anytls://${SB_ANYTLS_PSK}@${ip}:${SB_ANYTLS_PORT}?security=reality&sni=${SB_SNI}&fp=chrome&pbk=${SB_REALITY_PUB:-}&sid=${SB_REALITY_SID:-}#${NODE_NAME}-AnyTLS"$'\n'
+            links+="anytls://$(uri_encode "$SB_ANYTLS_PSK")@${ip_host}:${SB_ANYTLS_PORT}?security=reality&sni=${SB_ANYTLS_SNI:-$SB_SNI}&fp=chrome&pbk=${SB_REALITY_PUB:-}&sid=${SB_REALITY_SID:-}#$(uri_encode "${NODE_NAME}-AnyTLS")"$'\n'
         fi
         if [ "${SB_REALITY_ENABLE:-false}" = "true" ] && [ -n "${SB_REALITY_PORT:-}" ]; then
-            links+="vless://${uuid}@${ip}:${SB_REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SB_SNI}&pbk=${SB_REALITY_PUB:-}&fp=chrome&sid=${SB_REALITY_SID:-}#${sb_reality_name}"$'\n'
+            links+="vless://${uuid}@${ip_host}:${SB_REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SB_REALITY_SNI:-$SB_SNI}&pbk=${SB_REALITY_PUB:-}&fp=chrome&sid=${SB_REALITY_SID:-}#$(uri_encode "$sb_reality_name")"$'\n'
         fi
         if [ "${SB_SS_ENABLE:-false}" = "true" ] && [ -n "${SB_SS_PORT:-}" ] && [ -n "${SB_SS_PSK:-}" ]; then
-            sb_ss_b64=$(printf '%s' "${SS_METHOD:-aes-256-gcm}:${SB_SS_PSK}" | base64 -w0 2>/dev/null || printf '%s' "${SS_METHOD:-aes-256-gcm}:${SB_SS_PSK}" | base64 | tr -d '\n')
-            links+="ss://${sb_ss_b64}@${ip}:${SB_SS_PORT}#${sb_ss_name}"$'\n'
+            sb_ss_b64=$(printf '%s' "${SB_SS_METHOD:-${SS_METHOD:-aes-256-gcm}}:${SB_SS_PSK}" | base64 -w0 2>/dev/null || printf '%s' "${SB_SS_METHOD:-${SS_METHOD:-aes-256-gcm}}:${SB_SS_PSK}" | base64 | tr -d '\n')
+            links+="ss://${sb_ss_b64}@${ip_host}:${SB_SS_PORT}#$(uri_encode "$sb_ss_name")"$'\n'
         fi
     else
     # v2: 限额用户获取自己专属的 Sing-box 节点 (独立端口+密码, 可追踪流量)
-        local sb_ports; sb_ports=$(printf '%s' "$USER_JSON" | $JQ -c '.sb_ports // {}' 2>/dev/null)
-        local sb_creds; sb_creds=$(printf '%s' "$USER_JSON" | $JQ -c '.sb_creds // {}' 2>/dev/null)
+        sb_ports=$(printf '%s' "$USER_JSON" | $JQ -c '.sb_ports // {}' 2>/dev/null)
+        sb_creds=$(printf '%s' "$USER_JSON" | $JQ -c '.sb_creds // {}' 2>/dev/null)
         # HY2 不走限额用户 — 跳变兼容性问题
         # TUIC per-user
-        local tuic_up; tuic_up=$(echo "$sb_ports" | $JQ -r '.tuic // 0')
-        if [ "$tuic_up" -gt 0 ]; then
-            local t_uuid; t_uuid=$(echo "$sb_creds" | $JQ -r '.tuic_uuid // ""')
-            local t_pass; t_pass=$(echo "$sb_creds" | $JQ -r '.tuic_pass // ""')
-            [ -n "$t_uuid" ] && links+="tuic://${t_uuid}:${t_pass}@${ip}:${tuic_up}?congestion_control=bbr&alpn=h3&sni=${SB_SNI}&insecure=1#${NODE_NAME}-TUIC"$'\n'
+        tuic_up=$(echo "$sb_ports" | $JQ -r '.tuic // 0')
+        if [ "${SB_TUIC_ENABLE:-false}" = true ] && [ "$tuic_up" -gt 0 ]; then
+            t_uuid=$(echo "$sb_creds" | $JQ -r '.tuic_uuid // ""')
+            t_pass=$(echo "$sb_creds" | $JQ -r '.tuic_pass // ""')
+            [ -n "$t_uuid" ] && links+="tuic://${t_uuid}:$(uri_encode "$t_pass")@${ip_host}:${tuic_up}?congestion_control=bbr&alpn=h3&sni=${SB_TUIC_SNI:-$SB_SNI}${sb_tuic_tls}#$(uri_encode "${NODE_NAME}-TUIC")"$'\n'
         fi
         # AnyTLS per-user
-        local anytls_up; anytls_up=$(echo "$sb_ports" | $JQ -r '.anytls // 0')
-        if [ "$anytls_up" -gt 0 ]; then
-            local a_pass; a_pass=$(echo "$sb_creds" | $JQ -r '.anytls_pass // ""')
-            [ -n "$a_pass" ] && links+="anytls://${a_pass}@${ip}:${anytls_up}?security=reality&sni=${SB_SNI}&fp=chrome&pbk=${SB_REALITY_PUB:-}&sid=${SB_REALITY_SID:-}#${NODE_NAME}-AnyTLS"$'\n'
+        anytls_up=$(echo "$sb_ports" | $JQ -r '.anytls // 0')
+        if [ "${SB_ANYTLS_ENABLE:-false}" = true ] && [ "$anytls_up" -gt 0 ]; then
+            a_pass=$(echo "$sb_creds" | $JQ -r '.anytls_pass // ""')
+            [ -n "$a_pass" ] && links+="anytls://$(uri_encode "$a_pass")@${ip_host}:${anytls_up}?security=reality&sni=${SB_ANYTLS_SNI:-$SB_SNI}&fp=chrome&pbk=${SB_REALITY_PUB:-}&sid=${SB_REALITY_SID:-}#$(uri_encode "${NODE_NAME}-AnyTLS")"$'\n'
         fi
         # Reality per-user
-        local reality_up; reality_up=$(echo "$sb_ports" | $JQ -r '.reality // 0')
-        if [ "$reality_up" -gt 0 ]; then
-            links+="vless://${uuid}@${ip}:${reality_up}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SB_SNI}&pbk=${SB_REALITY_PUB:-}&fp=chrome&sid=${SB_REALITY_SID:-}#${sb_reality_name}"$'\n'
+        reality_up=$(echo "$sb_ports" | $JQ -r '.reality // 0')
+        if [ "${SB_REALITY_ENABLE:-false}" = true ] && [ "$reality_up" -gt 0 ]; then
+            links+="vless://${uuid}@${ip_host}:${reality_up}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SB_REALITY_SNI:-$SB_SNI}&pbk=${SB_REALITY_PUB:-}&fp=chrome&sid=${SB_REALITY_SID:-}#$(uri_encode "$sb_reality_name")"$'\n'
         fi
         # SS per-user
-        local ss_up; ss_up=$(echo "$sb_ports" | $JQ -r '.ss // 0')
-        if [ "$ss_up" -gt 0 ]; then
-            local ss_pass; ss_pass=$(echo "$sb_creds" | $JQ -r '.ss_pass // ""')
-            local ss_m; ss_m="${SS_METHOD:-aes-256-gcm}"
-            [ -n "$ss_pass" ] && { local ss_b64; ss_b64=$(printf '%s' "${ss_m}:${ss_pass}" | base64 -w0 2>/dev/null || printf '%s' "${ss_m}:${ss_pass}" | base64 | tr -d '\n'); links+="ss://${ss_b64}@${ip}:${ss_up}#${sb_ss_name}"$'\n'; }
+        ss_up=$(echo "$sb_ports" | $JQ -r '.ss // 0')
+        if [ "${SB_SS_ENABLE:-false}" = true ] && [ "$ss_up" -gt 0 ]; then
+            ss_pass=$(echo "$sb_creds" | $JQ -r '.ss_pass // ""')
+            ss_m="${SB_SS_METHOD:-${SS_METHOD:-aes-256-gcm}}"
+            [ -n "$ss_pass" ] && { ss_b64=$(printf '%s' "${ss_m}:${ss_pass}" | base64 -w0 2>/dev/null || printf '%s' "${ss_m}:${ss_pass}" | base64 | tr -d '\n'); links+="ss://${ss_b64}@${ip_host}:${ss_up}#$(uri_encode "$sb_ss_name")"$'\n'; }
         fi
     fi   # close else (IS_DEFAULT_USER != 1)
 fi   # close SB_ENABLE check
@@ -3045,26 +3563,26 @@ show_node() {
             sbhy2_pass=$(jq -r '.inbounds[]|select(.type=="hysteria2").users[0].password//empty' "$SB_CONFIG_FILE" 2>/dev/null)
             local sb_hy2_hop_range=""
             [ "${SB_HY2_HOP_ENABLE:-false}" = "true" ] && sb_hy2_hop_range="${SB_HY2_HOP_START}-${SB_HY2_HOP_END}"
-            [ -n "$sbhy2_pass" ] && echo -e "  ${yellow}HY2${re}  ${green}$(gen_sb_hy2_link "$sbhy2_pass" "$ip" "$sbhy2_port" "${SB_SNI:-www.bing.com}" "$sb_hy2_name" "$sb_hy2_hop_range")${re}\n"
+            [ -n "$sbhy2_pass" ] && echo -e "  ${yellow}HY2${re}  ${green}$(gen_sb_hy2_link "$sbhy2_pass" "$ip" "$sbhy2_port" "${SB_HY2_SNI:-$SB_SNI}" "$sb_hy2_name" "$sb_hy2_hop_range")${re}\n"
             [ -n "$sb_hy2_hop_range" ] && echo -e "  ${cyan}跳变${re}: ${sb_hy2_hop_range}  mode: ${SB_HY2_HOP_MODE:-fixed}"
         fi
         if [ "${SB_TUIC_ENABLE:-false}" = "true" ] && [ -n "${SB_TUIC_PORT:-}" ]; then
             local sbtuic_uuid sbtuic_pass
             sbtuic_uuid="${SB_TUIC_UUID}"; sbtuic_pass="${SB_TUIC_PSK}"
-            [ -n "$sbtuic_uuid" ] && echo -e "  ${yellow}TUIC${re}  ${green}$(gen_sb_tuic_link "$sbtuic_uuid" "$sbtuic_pass" "$ip" "$SB_TUIC_PORT" "${SB_SNI:-www.bing.com}" "${NODE_NAME}-TUIC")${re}\n"
+            [ -n "$sbtuic_uuid" ] && echo -e "  ${yellow}TUIC${re}  ${green}$(gen_sb_tuic_link "$sbtuic_uuid" "$sbtuic_pass" "$ip" "$SB_TUIC_PORT" "${SB_TUIC_SNI:-$SB_SNI}" "${NODE_NAME}-TUIC")${re}\n"
         fi
         if [ "${SB_ANYTLS_ENABLE:-false}" = "true" ] && [ -n "${SB_ANYTLS_PORT:-}" ]; then
             local sbany_pass
             sbany_pass="${SB_ANYTLS_PSK}"
-            [ -n "$sbany_pass" ] && echo -e "  ${yellow}AnyTLS${re}  ${green}$(gen_sb_anytls_link "$sbany_pass" "$ip" "$SB_ANYTLS_PORT" "${SB_SNI}" "${SB_REALITY_PUB}" "${SB_REALITY_SID}" "${NODE_NAME}-AnyTLS")${re}\n"
+            [ -n "$sbany_pass" ] && echo -e "  ${yellow}AnyTLS${re}  ${green}$(gen_sb_anytls_link "$sbany_pass" "$ip" "$SB_ANYTLS_PORT" "${SB_ANYTLS_SNI:-$SB_SNI}" "${SB_REALITY_PUB}" "${SB_REALITY_SID}" "${NODE_NAME}-AnyTLS")${re}\n"
         fi
         if [ "${SB_REALITY_ENABLE:-false}" = "true" ] && [ -n "${SB_REALITY_PORT:-}" ]; then
             local sbreal_uuid; sbreal_uuid=$(get_uuid)
-            echo -e "  ${yellow}Reality${re}  ${green}$(gen_sb_reality_link "$sbreal_uuid" "$ip" "$SB_REALITY_PORT" "${SB_SNI}" "${SB_REALITY_PUB}" "${SB_REALITY_SID}" "$sb_reality_name")${re}\n"
+            echo -e "  ${yellow}Reality${re}  ${green}$(gen_sb_reality_link "$sbreal_uuid" "$ip" "$SB_REALITY_PORT" "${SB_REALITY_SNI:-$SB_SNI}" "${SB_REALITY_PUB}" "${SB_REALITY_SID}" "$sb_reality_name")${re}\n"
         fi
         if [ "${SB_SS_ENABLE:-false}" = "true" ] && [ -n "${SB_SS_PORT:-}" ]; then
             local sbss_pass; sbss_pass=$(jq -r '.inbounds[]|select(.type=="shadowsocks").password//empty' "$SB_CONFIG_FILE" 2>/dev/null)
-            [ -n "$sbss_pass" ] && echo -e "  ${yellow}SS${re}  ${green}$(gen_sb_ss_link "${SS_METHOD:-aes-256-gcm}" "$sbss_pass" "$ip" "$SB_SS_PORT" "$sb_ss_name")${re}\n"
+            [ -n "$sbss_pass" ] && echo -e "  ${yellow}SS${re}  ${green}$(gen_sb_ss_link "${SB_SS_METHOD:-$SS_METHOD}" "$sbss_pass" "$ip" "$SB_SS_PORT" "$sb_ss_name")${re}\n"
         fi
     fi
 
@@ -3203,12 +3721,8 @@ change_config() {
                jq --arg u "$nu" '(.inbounds[].settings.clients[]?|select(.id)|.id)|=$u' "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
                UUID_CUSTOM="$nu"; save_conf; ensure_users_file; sync_xray_users; systemctl restart xray 2>/dev/null; rc-service xray restart 2>/dev/null || true; green_msg "UUID 已更新！${nu}" ;;
             3) switch_argo_tunnel ;;
-            4) echo ""; for i in "${!SS_METHODS[@]}"; do echo -e "  ${green}$((i+1))${re}. ${SS_METHODS[$i]}"; done; echo ""
-               echo -ne "  选择 [默认 aes-256-gcm]: "; read sm ; [ -n "$sm" ] && SS_METHOD="${SS_METHODS[$((sm-1))]:-$SS_METHOD}"
-               save_conf; green_msg "SS: ${SS_METHOD}" ;;
-            5) echo ""; for i in "${!REALITY_SNIS[@]}"; do echo -e "  ${green}$((i+1))${re}. ${REALITY_SNIS[$i]}"; done; echo ""
-               echo -ne "  选择 [默认 www.tesla.com]: "; read rs ; [ -n "$rs" ] && REALITY_SNI="${REALITY_SNIS[$((rs-1))]:-$REALITY_SNI}"
-               save_conf; green_msg "Reality SNI: ${REALITY_SNI}" ;;
+            4) edit_protocol ss "Shadowsocks" ;;
+            5) edit_protocol reality "VLESS Reality" ;;
             6) manage_protocols ;;
             7) show_node ;; 8) restart_services ;; 9) edit_subscription ;; 0) return ;; *) red_msg "无效" ;;
         esac; echo -ne "  按回车继续..."; read -r
@@ -3436,10 +3950,181 @@ EOF
 #==============================================================================
 # 协议选择 (安装步骤⑦)
 #==============================================================================
+restart_protocol_runtime() {
+    local service="$1"
+    [ "$service" = singbox ] && service=sing-box
+    if [ "${IS_ALPINE:-0}" = 1 ]; then rc-service "$service" restart; else systemctl restart "$service"; fi
+}
+begin_protocol_edit() {
+    EDIT_CORE="$1"; EDIT_COMMITTED=0
+    EDIT_SNAPSHOT_DIR=$(mktemp -d -t argov-edit.XXXXXX) || return 1
+    EDIT_FILES=("$USER_CONF" "$CONFIG_FILE" "$SB_CONFIG_FILE" "$ARGOV_USERS_FILE" \
+        "$HY2_CERT_FILE" "$HY2_KEY_FILE" "$SB_CERT_FILE" "$SB_KEY_FILE" "$SB_HY2_CERT_FILE" "$SB_HY2_KEY_FILE")
+    local i
+    for i in "${!EDIT_FILES[@]}"; do
+        if [ -f "${EDIT_FILES[$i]}" ]; then
+            cp -p "${EDIT_FILES[$i]}" "$EDIT_SNAPSHOT_DIR/$i" || {
+                rm -f "$EDIT_SNAPSHOT_DIR"/*; rmdir "$EDIT_SNAPSHOT_DIR"; red_msg "无法备份原配置，已取消修改。"; return 1
+            }
+        fi
+    done
+    trap finish_protocol_edit EXIT
+}
+finish_protocol_edit() {
+    local i restore_failed=0
+    if [ "$EDIT_COMMITTED" != 1 ]; then
+        for i in "${!EDIT_FILES[@]}"; do
+            if [ -f "$EDIT_SNAPSHOT_DIR/$i" ]; then
+                cp -p "$EDIT_SNAPSHOT_DIR/$i" "${EDIT_FILES[$i]}" || restore_failed=1
+            else
+                rm -f "${EDIT_FILES[$i]}" || restore_failed=1
+            fi
+        done
+        if [ "$restore_failed" = 1 ]; then
+            red_msg "自动恢复未完成，备份保留在 ${EDIT_SNAPSHOT_DIR}，请检查磁盘和文件权限。"
+            return 1
+        fi
+        red_msg "修改未完成，已恢复原配置、用户数据和证书。"
+        restart_protocol_runtime "$EDIT_CORE" >/dev/null 2>&1 || yellow_msg "原服务未能重新启动，请检查服务日志。"
+    fi
+    rm -f "$EDIT_SNAPSHOT_DIR"/*
+    rmdir "$EDIT_SNAPSHOT_DIR" 2>/dev/null || true
+}
+commit_xray_candidate() {
+    local candidate="$1" check_result
+    jq empty "$candidate" >/dev/null 2>&1 || { rm -f "$candidate"; red_msg "配置 JSON 无效，未替换原文件。"; return 1; }
+    if [ -x "${WORK_DIR}/xray" ]; then
+        check_result=$("${WORK_DIR}/xray" run -test -config "$candidate" 2>&1) || {
+            printf '%s\n' "$check_result"; rm -f "$candidate"; red_msg "Xray 配置验证失败。"; return 1
+        }
+    fi
+    chmod 600 "$candidate"
+    mv -f "$candidate" "$CONFIG_FILE"
+}
+add_sb_protocol() {
+    (
+        load_conf
+        sb_is_installed || { red_msg "请先安装 Sing-box 内核。"; return 1; }
+        local proto="$1" sb_keys
+        configure_sb_protocol "$proto" || return 1
+        confirm_changes "应用以上设置？连接参数变化后客户端需刷新订阅" || return 1
+        begin_protocol_edit singbox || return 1
+        case "$proto" in
+            HY2) generate_singbox_hy2_cert || return 1 ;;
+            TUIC) generate_singbox_cert || return 1 ;;
+            ANYTLS|REALITY)
+                if [ -z "$SB_REALITY_PRIV" ]; then
+                    sb_keys=$(sing-box generate reality-keypair 2>/dev/null) || return 1
+                    SB_REALITY_PRIV=$(printf '%s\n' "$sb_keys" | awk '/PrivateKey/{print $2}')
+                    SB_REALITY_PUB=$(printf '%s\n' "$sb_keys" | awk '/PublicKey/{print $2}')
+                fi
+                [ -n "$SB_REALITY_SID" ] || SB_REALITY_SID=$(sing-box generate rand 8 --hex 2>/dev/null)
+                [ -n "$SB_REALITY_PRIV" ] && [ -n "$SB_REALITY_PUB" ] && [ -n "$SB_REALITY_SID" ] || {
+                    red_msg "Reality 密钥生成失败。"; return 1;
+                }
+                ;;
+        esac
+        build_singbox_config || return 1
+        save_conf || return 1
+        restart_protocol_runtime singbox || { red_msg "Sing-box 重启失败。"; return 1; }
+        if [ "$proto" = HY2 ]; then
+            disable_sb_hy2_hop_rules
+            if [ "$SB_HY2_HOP_ENABLE" = true ] && ! apply_sb_hy2_hop_rules; then
+                SB_HY2_HOP_ENABLE=false; save_conf
+                yellow_msg "跳跃规则安装失败，已关闭跳跃；监听端口保持可用。"
+            fi
+        fi
+        EDIT_COMMITTED=1
+        start_sub_server >/dev/null 2>&1 &
+        green_msg "Sing-box ${proto} 设置已应用，请刷新客户端订阅。"
+    )
+}
+prompt_xray_hy2() {
+    local def_port="$HY2_PORT" current=""
+    is_port "$def_port" || def_port=$(find_free_any_port "$(shuf -i 10000-60000 -n 1)")
+    [ -f "$CONFIG_FILE" ] && [ "${ENABLE_HY2:-0}" = 1 ] && current="$HY2_PORT"
+    echo "  HY2 使用自签证书；SNI 是握手域名，不会将流量转发到该网站。"
+    prompt_domain HY2_SNI "$HY2_SNI" "HY2 SNI/TLS 域名" || return 1
+    prompt_port HY2_PORT "$def_port" "HY2 UDP 端口" HY2_PORT "$current" || return 1
+    prompt_hy2_congestion HY2_CONGESTION HY2_UP_MBPS HY2_DOWN_MBPS xray \
+        "${HY2_CONGESTION:-bbr}" "$HY2_UP_MBPS" "$HY2_DOWN_MBPS" || return 1
+    prompt_hy2_hopping HY2_MPORT "$HY2_MPORT" || return 1
+    echo "  HY2: ${HY2_SNI}:${HY2_PORT}，算法 ${HY2_CONGESTION}，跳跃 ${HY2_MPORT:-关闭}"
+    [ "$HY2_CONGESTION" = brutal ] && echo "  服务端带宽: 上传 ${HY2_UP_MBPS} Mbps / 下载 ${HY2_DOWN_MBPS} Mbps"
+    return 0
+}
+prompt_password() {
+    local _pw_target="$1" _pw_default="$2" _pw_label="$3" _pw_method="${4:-}" _pw_input
+    [ -n "$_pw_default" ] || {
+        if [[ "$_pw_method" == 2022-* ]]; then _pw_default=$(gen_ss2022_pass "$_pw_method"); else _pw_default=$(rand_token); fi
+    }
+    while true; do
+        printf '  %s [回车保留/自动生成，new 换新，cancel 返回]: ' "$_pw_label"
+        IFS= read -rs _pw_input || { echo; return 1; }; echo
+        [ "${_pw_input,,}" = cancel ] && return 1
+        if [ "${_pw_input,,}" = new ]; then
+            if [[ "$_pw_method" == 2022-* ]]; then _pw_input=$(gen_ss2022_pass "$_pw_method"); else _pw_input=$(rand_token); fi
+        fi
+        _pw_input="${_pw_input:-$_pw_default}"
+        if [[ "$_pw_method" == 2022-* ]] && ! valid_ss2022_password "$_pw_method" "$_pw_input"; then
+            red_msg "SS2022 密码必须是正确长度的 Base64 密钥，可输入 new 自动生成。"; continue
+        fi
+        printf -v "$_pw_target" '%s' "$_pw_input"; return 0
+    done
+}
+valid_ss2022_password() {
+    local method="$1" password="$2" size expected=32
+    [[ "$method" == *128* ]] && expected=16
+    [[ "$password" =~ ^[A-Za-z0-9+/]+={0,2}$ ]] || return 1
+    size=$(printf '%s' "$password" | openssl base64 -d -A 2>/dev/null | wc -c)
+    [ "$size" -eq "$expected" ]
+}
+configure_sb_protocol() {
+    local proto="$1" port_key="SB_${1}_PORT" enabled_key="SB_${1}_ENABLE" sni_key="SB_${1}_SNI"
+    local current="${!port_key}" def_port="${!port_key}" pass_key="SB_${1}_PSK" hop_range=""
+    [ "${!enabled_key}" = true ] || current=""
+    is_port "$def_port" || def_port=$(find_free_any_port "$(shuf -i 10000-60000 -n 1)")
+    echo; cyan_msg "配置 Sing-box ${proto}（回车保留当前值，0/cancel 返回）"
+    prompt_port "$port_key" "$def_port" "${proto} 端口" "$port_key" "$current" || return 1
+    if [ "$proto" != SS ]; then
+        prompt_domain "$sni_key" "${!sni_key}" "${proto} SNI/TLS 域名" || return 1
+    fi
+    case "$proto" in
+        HY2)
+            if [ "${!enabled_key}" != true ] || { [ "$SB_HY2_CERT_FILE" = "$SB_CERT_FILE" ] && [ "$SB_HY2_SNI" != "$SB_SNI" ]; }; then
+                SB_HY2_CERT_FILE="${SB_WORK_DIR}/certs/hy2.pem"; SB_HY2_KEY_FILE="${SB_WORK_DIR}/certs/hy2.key"
+            fi
+            prompt_hy2_congestion SB_HY2_CONGESTION SB_HY2_UP_MBPS SB_HY2_DOWN_MBPS singbox \
+                "$SB_HY2_CONGESTION" "$SB_HY2_UP_MBPS" "$SB_HY2_DOWN_MBPS" || return 1
+            if [ "$SB_HY2_CONGESTION" = bbr ] && singbox_supports_bbr_profile; then
+                prompt_choice SB_HY2_BBR_PROFILE "$SB_HY2_BBR_PROFILE" "BBR 预设" standard conservative aggressive || return 1
+            fi
+            [ "$SB_HY2_HOP_ENABLE" = true ] && hop_range="${SB_HY2_HOP_START}-${SB_HY2_HOP_END}"
+            prompt_hy2_hopping hop_range "$hop_range" SB_HY2_PORT || return 1
+            if [ -n "$hop_range" ]; then
+                SB_HY2_HOP_ENABLE=true; SB_HY2_HOP_START="${hop_range%-*}"; SB_HY2_HOP_END="${hop_range#*-}"
+            else SB_HY2_HOP_ENABLE=false; SB_HY2_HOP_START=""; SB_HY2_HOP_END=""; fi
+            SB_HY2_HOP_MODE=fixed; SB_HY2_HOP_INTERVAL=30
+            ;;
+        TUIC) SB_TUIC_UUID="${SB_TUIC_UUID:-$(rand_uuid)}" ;;
+        SS)
+            prompt_choice SB_SS_METHOD "$SB_SS_METHOD" "SS 加密方法" "${SS_METHODS[@]}" || return 1
+            if [[ "$SB_SS_METHOD" == 2022-* ]] && ! valid_ss2022_password "$SB_SS_METHOD" "$SB_SS_PSK"; then SB_SS_PSK=""; fi
+            ;;
+    esac
+    if [ "$proto" != REALITY ]; then
+        prompt_password "$pass_key" "${!pass_key}" "${proto} 认证密码" "$([ "$proto" = SS ] && echo "$SB_SS_METHOD")" || return 1
+    fi
+    printf -v "$enabled_key" '%s' true
+    SB_ENABLE=true
+    echo "  ${proto}: 端口 ${!port_key}$([ "$proto" != SS ] && echo "，域名 ${!sni_key}")"
+    [ "$proto" = HY2 ] && echo "  算法: ${SB_HY2_CONGESTION}，跳跃: ${hop_range:-关闭}"
+    return 0
+}
 select_protocols() {
     while true; do
         clear
-        local sum="VLESS-Argo + VMess-Argo"
+        local sum=""; [ "$ARGO_MODE" != skip ] && sum="VLESS-Argo + VMess-Argo"
         [ "$ENABLE_REALITY" = 1 ] && sum="$sum + Reality"
         [ "$ENABLE_HY2" = 1 ] && sum="$sum + Hysteria2"
         [ "$ENABLE_SS" = 1 ] && sum="$sum + Shadowsocks"
@@ -3447,7 +4132,7 @@ select_protocols() {
         echo -e " ${purple}║${re}     ${white}选择额外协议（可选）${re}                    ${purple}║${re}"
         echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
         echo ""
-        echo -e "  ${white}始终安装：VLESS-Argo + VMess-Argo${re}"
+        [ "$ARGO_MODE" != skip ] && echo -e "  ${white}已启用：VLESS-Argo + VMess-Argo${re}" || echo "  Argo 已跳过；选择直连协议，也可下一步只安装 Sing-box。"
         echo ""
         echo -e "  ${green}1${re}. VLESS Reality ${cyan}[$( [ "$ENABLE_REALITY" = 1 ] && echo "●● 已选" || echo "○○" )]${re}"
         echo -e "     XTLS Vision + Reality，需开放端口，抗封锁"
@@ -3461,41 +4146,46 @@ select_protocols() {
         echo -e "  ${yellow}📋 当前: ${green}${sum}${re}"
         echo -e "  ${yellow}💡 输 1/2/3 切换勾选，输 0 进入端口配置${re}"
         echo -e " ${purple}────────────────────────────────────────${re}"
-        echo -ne "  (1/2/3=切换 / 0=下一步): "; read c 
+        echo -ne "  (1/2/3=切换 / 0=下一步 / cancel=取消): "; IFS= read -r c || return 1
         case "$c" in
+            cancel|CANCEL) return 1 ;;
             1) ENABLE_REALITY=$((1-ENABLE_REALITY)); continue ;;
             2) ENABLE_HY2=$((1-ENABLE_HY2)); continue ;;
             3) ENABLE_SS=$((1-ENABLE_SS)); continue ;;
             0)
                 echo ""
-                [ "$ENABLE_REALITY" = 1 ] && { local rp; rp=$(find_free_port "$(shuf -i 10000-60000 -n 1)"); echo -ne "  ${cyan}Reality 端口 [随机 ${rp}]: ${re}"; read ri; REALITY_PORT="${ri:-$rp}"; echo -e "  → ${green}${REALITY_PORT}${re}"; }
-                if [ "$ENABLE_HY2" = 1 ]; then
-                    local hp hm
-                    hp=$(find_free_any_port "$(shuf -i 10000-60000 -n 1)")
-                    echo -ne "  ${cyan}Hysteria2 端口 [随机 ${hp}]: ${re}"; read hi; HY2_PORT="${hi:-$hp}"; echo -e "  → ${green}${HY2_PORT}${re}"
-                    echo -ne "  ${cyan}Hysteria2 端口跳跃范围 [回车关闭，如 5000-6000]: ${re}"; read hm
-                    if [ -n "$hm" ]; then
-                        if is_port_range "$hm"; then HY2_MPORT="$hm"; else HY2_MPORT=""; red_msg "端口跳跃范围无效，已关闭。"; fi
-                    else
-                        HY2_MPORT=""
-                    fi
-                    [ -n "$HY2_MPORT" ] && echo -e "  → ${green}${HY2_MPORT}${re}"
+
+                if [ "$ENABLE_REALITY" = 1 ]; then
+                    local rp; rp=$(find_free_any_port "$(shuf -i 10000-60000 -n 1)")
+                    prompt_port REALITY_PORT "$rp" "Reality 端口" || return 1
+                    prompt_domain REALITY_SNI "$REALITY_SNI" "Reality 伪装域名" || return 1
                 fi
-                [ "$ENABLE_SS" = 1 ] && { local sp; sp=$(find_free_port "$(shuf -i 10000-60000 -n 1)"); echo -ne "  ${cyan}Shadowsocks 端口 [随机 ${sp}]: ${re}"; read si; SS_PORT="${si:-$sp}"; echo -e "  → ${green}${SS_PORT}${re}"; }
+                [ "$ENABLE_HY2" = 1 ] && { prompt_xray_hy2 || return 1; }
+                if [ "$ENABLE_SS" = 1 ]; then
+                    local sp; sp=$(find_free_any_port "$(shuf -i 10000-60000 -n 1)")
+                    prompt_port SS_PORT "$sp" "Shadowsocks 端口" || return 1
+                    prompt_choice SS_METHOD "$SS_METHOD" "Shadowsocks 加密" "${SS_METHODS[@]}" || return 1
+                fi
                 echo ""
                 echo -e "  ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
                 echo -e "  ${white}即将安装:${re}$([ "$ARGO_MODE" != "skip" ] && echo "  Argo: VLESS+VMess")"
-                [ "$ENABLE_REALITY" = 1 ] && echo -e "  Reality: 端口 ${green}${REALITY_PORT}${re}  (UUID/SNI/密钥 自动生成)"
-                [ "$ENABLE_HY2" = 1 ] && echo -e "  Hysteria2: 端口 ${green}${HY2_PORT}${re}  (UUID/证书 自动生成)"
+                [ "$ENABLE_REALITY" = 1 ] && echo -e "  Reality: 端口 ${green}${REALITY_PORT}${re}  (SNI ${REALITY_SNI}；UUID/密钥 自动生成)"
+                [ "$ENABLE_HY2" = 1 ] && echo -e "  Hysteria2: 端口 ${green}${HY2_PORT}${re}  (SNI ${HY2_SNI}；算法 ${HY2_CONGESTION}；证书 自动生成)"
                 [ "$ENABLE_HY2" = 1 ] && [ -n "$HY2_MPORT" ] && echo -e "  Hysteria2 跳跃: ${green}${HY2_MPORT}${re}  (UDP 转发到 ${HY2_PORT})"
-                [ "$ENABLE_SS" = 1 ] && echo -e "  Shadowsocks: 端口 ${green}${SS_PORT}${re}  (加密/密码 自动生成)"
+                [ "$ENABLE_SS" = 1 ] && echo -e "  Shadowsocks: 端口 ${green}${SS_PORT}${re}  (加密 ${SS_METHOD}；密码 自动生成)"
                 echo -e "  ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
                 echo ""
-                echo -ne "  ${yellow}开始安装? (y/n/0=返回) [y]: ${re}"
-                read cf
-                [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "已取消。"; return 1; }
+                while true; do
+                    echo -ne "  ${yellow}继续安装向导? (y/n/0=返回) [y]: ${re}"
+                    IFS= read -r cf || return 1
+                    case "${cf,,}" in
+                        ""|y|yes|0) break ;;
+                        n|no|cancel) yellow_msg "已取消。"; return 1 ;;
+                        *) red_msg "请输入 y、n 或 0。" ;;
+                    esac
+                done
                 [ "$cf" = "0" ] && continue
-                mkdir -p /etc/xray 2>/dev/null; save_conf; return
+                return 0
                 ;;
             *) red_msg "无效"; sleep 1; continue ;;
         esac
@@ -3523,6 +4213,7 @@ interactive_install() {
     echo -e "  ${red}2${re}. 跳过 — 仅部署 Reality / HY2 / SS 等直连协议"
     echo -ne "  [1]: "; read tt
     case "${tt:-1}" in
+        1) [ "$ARGO_MODE" = skip ] && ARGO_MODE=temp ;;
         2) ARGO_MODE="skip"; echo -e "  → ${red}跳过 Argo, 仅部署直连协议${re}\n" ;;
     esac
 
@@ -3589,11 +4280,11 @@ interactive_install() {
     echo ""
 
     echo -e " ${white}━━━ ⑨ 额外协议（可选）━━━${re}"
-    select_protocols || { yellow_msg "安装已取消。"; return; }
+    select_protocols || { yellow_msg "安装已取消。"; return 1; }
 
     echo -e " ${white}━━━ ⑩ Sing-box 内核（可选）━━━${re}"
     echo -e "  ${yellow}Sing-box 支持 TUIC、AnyTLS Reality 等 Xray 不支持的协议。${re}"
-    echo -e "  ${yellow}HY2 走 Sing-box 不依赖 allowInsecure，未来更稳定。${re}"
+    echo -e "  ${yellow}Sing-box HY2 同样使用 TLS；自签证书通过指纹固定校验。${re}"
     echo -ne "  是否安装 Sing-box？[y/N]: "; read sb_yn
     if [ "$sb_yn" = "y" ] || [ "$sb_yn" = "Y" ]; then
         SB_ENABLE=true
@@ -3603,23 +4294,29 @@ interactive_install() {
         echo -e "  ${green}1${re}. Hysteria2    ${green}2${re}. TUIC    ${green}3${re}. AnyTLS Reality"
         echo -e "  ${green}4${re}. VLESS Reality  ${green}5${re}. Shadowsocks"
         echo -ne "  协议编号: "; read sb_protos
+
+        local selected_proto
         for num in $sb_protos; do
             case "$num" in
-                1) SB_HY2_ENABLE=true; SB_HY2_PORT=${SB_HY2_PORT:-$(shuf -i 10000-60000 -n 1)} ;;
-                2) SB_TUIC_ENABLE=true; SB_TUIC_PORT=${SB_TUIC_PORT:-$(shuf -i 10000-60000 -n 1)}
-                   SB_TUIC_UUID="${SB_TUIC_UUID:-$(rand_uuid)}"; SB_TUIC_PSK="${SB_TUIC_PSK:-$(rand_token)}" ;;
-                3) SB_ANYTLS_ENABLE=true; SB_ANYTLS_PORT=${SB_ANYTLS_PORT:-$(shuf -i 10000-60000 -n 1)}
-                   SB_ANYTLS_PSK="${SB_ANYTLS_PSK:-$(rand_token)}" ;;
-                4) SB_REALITY_ENABLE=true; SB_REALITY_PORT=${SB_REALITY_PORT:-$(shuf -i 10000-60000 -n 1)} ;;
-                5) SB_SS_ENABLE=true; SB_SS_PORT=${SB_SS_PORT:-$(shuf -i 10000-60000 -n 1)} ;;
+                1) selected_proto=HY2 ;; 2) selected_proto=TUIC ;; 3) selected_proto=ANYTLS ;;
+                4) selected_proto=REALITY ;; 5) selected_proto=SS ;;
+                *) red_msg "未知 Sing-box 协议编号：${num}"; return 1 ;;
             esac
+            configure_sb_protocol "$selected_proto" || { yellow_msg "安装已取消，未写入配置。"; return 1; }
         done
         echo -e "  → ${green}已选择 Sing-box 协议${re}"
     else
         SB_ENABLE=false
     fi
 
-    save_conf; do_install
+
+    if [ "$ARGO_MODE" = skip ] && [ "$ENABLE_REALITY" = 0 ] && [ "$ENABLE_HY2" = 0 ] && [ "$ENABLE_SS" = 0 ] &&
+        { [ "$SB_ENABLE" != true ] || [ "${SB_HY2_ENABLE:-false}${SB_TUIC_ENABLE:-false}${SB_ANYTLS_ENABLE:-false}${SB_REALITY_ENABLE:-false}${SB_SS_ENABLE:-false}" = falsefalsefalsefalsefalse ]; }; then
+        red_msg "尚未选择节点协议，请重新运行安装向导。"; return 1
+    fi
+    confirm_changes "保存全部设置并开始安装？" || return 1
+    save_conf || return 1
+    do_install
 }
 
 #==============================================================================
@@ -3632,7 +4329,12 @@ do_install() {
     echo -e " ${purple}╚══════════════════════════════════════════╝${re}"; echo ""
 
     yellow_msg "[1/6] 清理..."
-    systemctl stop xray argov-tunnel 2>/dev/null; pkill -9 nginx 2>/dev/null; systemctl stop nginx 2>/dev/null; systemctl disable nginx 2>/dev/null; green_msg "  完成"
+    if [ "$IS_ALPINE" = 1 ]; then
+        rc-service xray stop 2>/dev/null; rc-service argov-tunnel stop 2>/dev/null
+    else
+        systemctl stop xray argov-tunnel 2>/dev/null
+    fi
+    green_msg "  完成"
 
     yellow_msg "[2/6] 依赖..."
     if command -v apt &>/dev/null; then DEBIAN_FRONTEND=noninteractive apt-get update -y -qq && apt-get install -y -qq jq unzip curl lsof openssl
@@ -3780,14 +4482,16 @@ EOF
                 [ -z "${SB_REALITY_SID:-}" ] && SB_REALITY_SID=$(sing-box generate rand 8 --hex 2>/dev/null | tr -d '\n')
             fi
             # 生成 TLS 证书 (HY2/TUIC)
-            if [ "${SB_HY2_ENABLE:-false}" = "true" ] || [ "${SB_TUIC_ENABLE:-false}" = "true" ]; then
-                generate_singbox_cert
-            fi
+
+            if [ "${SB_HY2_ENABLE:-false}" = true ]; then generate_singbox_hy2_cert || return 1; fi
+            if [ "${SB_TUIC_ENABLE:-false}" = true ]; then generate_singbox_cert || return 1; fi
             # 生成 HY2 密码
             [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ -z "${SB_HY2_PSK:-}" ] && SB_HY2_PSK=$(rand_token)
             # 生成 SS 密码
-            [ "${SB_SS_ENABLE:-false}" = "true" ] && [ -z "${SB_SS_PSK:-}" ] && SB_SS_PSK=$(gen_ss2022_pass "2022-blake3-aes-128-gcm" 2>/dev/null || rand_token)
-            build_singbox_config
+            if [ "${SB_SS_ENABLE:-false}" = true ] && [ -z "${SB_SS_PSK:-}" ]; then
+                if [[ "$SB_SS_METHOD" == 2022-* ]]; then SB_SS_PSK=$(gen_ss2022_pass "$SB_SS_METHOD"); else SB_SS_PSK=$(rand_token); fi
+            fi
+            build_singbox_config || return 1
             sb_start
         fi
     fi
@@ -3879,126 +4583,39 @@ XRAYCONF
 # 管理节点 (添加/编辑/删除)
 #==============================================================================
 edit_hy2_protocol() {
-    local uuid ip cur_port cur_sni cur_mport new_port new_sni new_mport new_inbound
-    uuid=$(get_uuid)
-    ip=$(get_ip)
-    cur_port=$(jq -r '.inbounds[]|select(.tag=="hy2")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
-    cur_sni=$(jq -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.serverName//"www.bing.com"' "$CONFIG_FILE" 2>/dev/null)
-    cur_mport=$(jq -r '.inbounds[]|select(.tag=="hy2")|(.streamSettings.finalmask.quicParams.udpHop.ports//.streamSettings.hysteriaSettings.quicParams.udpHop.ports[0]//empty)' "$CONFIG_FILE" 2>/dev/null)
-    new_port="$cur_port"
-    new_sni="$cur_sni"
-    new_mport="$cur_mport"
-
-    clear
-    echo ""; echo -e " ${purple}┌────────────────────────────────────────┐${re}"
-    echo -e " ${purple}│${re}     ${white}编辑 Hysteria2${re}"
-    echo -e " ${purple}└────────────────────────────────────────┘${re}"
-    echo ""
-    echo -e " ${white}── SNI ──${re}"
-    echo -e "  ${yellow}当前: ${cyan}${cur_sni}${re}"
-    echo -ne "  新 SNI [回车保持]: "; read hs 
-    [ -n "$hs" ] && new_sni="$hs"
-    echo -e "  → ${green}${new_sni}${re}\n"
-
-    echo -e " ${white}── 端口 ──${re}"
-    echo -e "  ${yellow}当前: ${cyan}${cur_port}${re} 公网端口"
-    echo -ne "  新端口 [回车保持]: "; read hp 
-    if [ -n "$hp" ]; then
-        if ! is_port "$hp"; then
-            red_msg "端口无效，保持原端口"
-        elif [ "$hp" = "$cur_port" ]; then
-            new_port="$hp"
-        elif port_in_use_any "$hp"; then
-            red_msg "端口已占用，保持原端口"
-        else
-            new_port="$hp"
-        fi
-    fi
-    echo -e "  → ${green}${new_port}${re}\n"
-
-    echo -e " ${white}── 端口跳跃 ──${re}"
-    echo -e "  ${yellow}当前: ${cyan}${cur_mport:-关闭}${re}"
-    echo -ne "  新范围 [回车保持，off 关闭，如 5000-6000]: "; read hm 
-    if [ "$hm" = "off" ] || [ "$hm" = "OFF" ]; then
-        new_mport=""
-    elif [ -n "$hm" ]; then
-        if is_port_range "$hm"; then
-            new_mport="$hm"
-        else
-            red_msg "端口跳跃范围无效，保持原设置"
-        fi
-    fi
-    echo -e "  → ${green}${new_mport:-关闭}${re}\n"
-
-    echo -e " ${white}── 拥塞控制 ──${re}"
-    local cur_cong="${HY2_CONGESTION:-}" cur_up="${HY2_UP_MBPS:-}" cur_down="${HY2_DOWN_MBPS:-}"
-    local new_cong="$cur_cong" new_up="$cur_up" new_down="$cur_down"
-    local cur_label
-    if [ "$cur_cong" = "brutal" ]; then cur_label="brutal ↑${cur_up}mbps ↓${cur_down}mbps"
-    elif [ -n "$cur_cong" ]; then cur_label="$cur_cong"
-    else cur_label="cubic (默认)"; fi
-    echo -e "  ${yellow}当前: ${cyan}${cur_label}${re}"
-    echo ""
-    echo -e "  ${green}1${re}. cubic (默认，自适应)"
-    echo -e "  ${green}2${re}. brutal (高丢包暴力冲带宽)"
-    echo -e "  ${green}3${re}. bbr (低延迟优化)"
-    echo ""
-    local def_opt=1
-    [ "$cur_cong" = "brutal" ] && def_opt=2
-    [ "$cur_cong" = "bbr" ] && def_opt=3
-    echo -ne "  ${yellow}请选择 [${def_opt}]:${re} "; read hc
-    case "${hc:-$def_opt}" in
-        1) new_cong=""; new_up=""; new_down="" ;;
-        2) new_cong="brutal"
-           echo -ne "  ${cyan}上行带宽 Mbps [${cur_up:-100}]: ${re}"; read hu
-           [ -n "$hu" ] && new_up="$hu" || new_up="${cur_up:-100}"
-           echo -ne "  ${cyan}下行带宽 Mbps [${cur_down:-100}]: ${re}"; read hd
-           [ -n "$hd" ] && new_down="$hd" || new_down="${cur_down:-100}" ;;
-        3) new_cong="bbr"; new_up=""; new_down="" ;;
-        *) red_msg "无效，保持原设置"; sleep 1 ;;
-    esac
-    if [ "$new_cong" = "brutal" ]; then
-        echo -e "  → ${green}brutal ↑${new_up}mbps ↓${new_down}mbps${re}\n"
-    elif [ -n "$new_cong" ]; then
-        echo -e "  → ${green}${new_cong}${re}\n"
-    else
-        echo -e "  → ${green}cubic (默认)${re}\n"
-    fi
-
-    echo -e " ${white}确认修改:${re}"
-    echo -e "  SNI: ${cyan}${cur_sni}${re} → ${green}${new_sni}${re}"
-    echo -e "  端口: ${cyan}${cur_port}${re} → ${green}${new_port}${re}"
-    echo -e "  跳跃: ${cyan}${cur_mport:-关闭}${re} → ${green}${new_mport:-关闭}${re}"
-    [ -n "$new_cong" ] && echo -e "  拥塞: ${green}${new_cong}$([ "$new_cong" = "brutal" ] && echo " ↑${new_up}mbps ↓${new_down}mbps")${re}"
-    echo ""
-    echo -ne "  ${yellow}确认? (y/n) [y]: ${re}"
-    read cf
-    [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "已取消。"; return; }
-
-    new_inbound=$(build_hy2_inbound "$new_port" "$new_sni" "$uuid" "argov-default" "$new_mport" "$new_cong" "$new_up" "$new_down")
-    jq --argjson i "$new_inbound" '(.inbounds[]|select(.tag=="hy2"))=$i' "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-    HY2_PORT="$new_port"
-    HY2_SNI="$new_sni"
-    HY2_MPORT="$new_mport"
-    HY2_CONGESTION="$new_cong"; HY2_UP_MBPS="$new_up"; HY2_DOWN_MBPS="$new_down"
-    sync_xray_users || return
-    save_conf
-    yellow_msg "重启 Xray..."
-    disable_hy2_hop_rules "$cur_port" "$cur_mport"
-    systemctl restart xray 2>/dev/null
-    rc-service xray restart 2>/dev/null || true
-    if [ -n "$HY2_MPORT" ]; then
+    (
+        load_conf
+        jq -e '.inbounds[]|select(.tag=="hy2")' "$CONFIG_FILE" >/dev/null 2>&1 || { red_msg "尚未添加 Xray HY2。"; return 1; }
+        local old_port old_mport uuid ip new_inbound candidate
+        old_port=$(jq -r '.inbounds[]|select(.tag=="hy2")|.port' "$CONFIG_FILE")
+        old_mport=$(jq -r '.inbounds[]|select(.tag=="hy2")|(.streamSettings.finalmask.quicParams.udpHop.ports//.streamSettings.hysteriaSettings.quicParams.udpHop.ports[0]//empty)' "$CONFIG_FILE")
+        HY2_PORT="$old_port"; HY2_MPORT="$old_mport"
+        HY2_SNI=$(jq -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.serverName//empty' "$CONFIG_FILE")
+        HY2_CONGESTION=$(jq -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.finalmask.quicParams.congestion//"auto"' "$CONFIG_FILE")
+        cyan_msg "编辑 Xray Hysteria2"
+        prompt_xray_hy2 || return 1
+        confirm_changes "应用以上 HY2 设置？域名变化时会更新证书指纹，客户端需刷新订阅" || return 1
+        begin_protocol_edit xray || return 1
+        gen_hy2_cert || return 1
+        uuid=$(get_uuid)
+        new_inbound=$(build_hy2_inbound "$HY2_PORT" "$HY2_SNI" "$uuid" argov-default "$HY2_MPORT" "$HY2_CONGESTION" "$HY2_UP_MBPS" "$HY2_DOWN_MBPS")
+        candidate=$(mktemp "${CONFIG_FILE}.edit.XXXXXX") || return 1
+        jq --argjson i "$new_inbound" '(.inbounds[]|select(.tag=="hy2"))=$i' "$CONFIG_FILE" > "$candidate" || { rm -f "$candidate"; return 1; }
+        commit_xray_candidate "$candidate" || return 1
+        sync_xray_users || return 1
+        save_conf || return 1
+        restart_protocol_runtime xray || { red_msg "Xray 重启失败。"; return 1; }
+        disable_hy2_hop_rules "$old_port" "$old_mport"
         if ! apply_hy2_hop_rules "$HY2_PORT" "$HY2_MPORT"; then
-            clear_hy2_mport_config
-            save_conf
-            yellow_msg "Hysteria2 port hopping rule failed; mport disabled."
+            clear_hy2_mport_config; save_conf
+            yellow_msg "跳跃规则安装失败，已关闭跳跃；监听端口保持可用。"
         fi
-    fi
-    sleep 2
-    get_status
-    green_msg "完成"
-    [ -n "$ip" ] && echo -e "  ${green}$(gen_hy2_link "$uuid" "$ip" "$new_port" "$new_sni" "${NODE_NAME}-Hy2" "$new_mport")${re}"
-    echo ""; echo -ne "  按回车继续..."; read -r
+        EDIT_COMMITTED=1
+        start_sub_server >/dev/null 2>&1 &
+        green_msg "HY2 设置已应用，请刷新客户端订阅。"
+        ip=$(get_ip); [ -n "$ip" ] && gen_hy2_link "$uuid" "$ip" "$HY2_PORT" "$HY2_SNI" "${NODE_NAME}-Hy2" "$HY2_MPORT"
+        echo
+    )
 }
 
 legacy_manage_protocols_unused() {
@@ -4737,13 +5354,14 @@ relay_apply() {
     [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CONFIG_FILE" ] && cp "$SB_CONFIG_FILE" "${SB_CONFIG_FILE}.bak"
 
     local py_err; py_err=$(mktemp /tmp/relay_err.XXXXXX)
-    RELAY_LINK_ENV="$RELAY_LINK" RELAY_MODE_ENV="$RELAY_MODE" SB_CONFIG_ENV="$SB_CONFIG_FILE" SB_ENABLED_ENV="${SB_ENABLE:-false}" python3 2>"$py_err" << PYEOF
+    RELAY_LINK_ENV="$RELAY_LINK" RELAY_MODE_ENV="$RELAY_MODE" SB_CONFIG_ENV="$SB_CONFIG_FILE" SB_ENABLED_ENV="${SB_ENABLE:-false}" SB_VERSION_ENV="$(singbox_version_string)" python3 2>"$py_err" << PYEOF
 import json, base64, os, re, sys
 from urllib.parse import parse_qs, unquote, urlsplit
 
 CONFIG = '${CONFIG_FILE}'
 SB_CONFIG = os.environ.get('SB_CONFIG_ENV', '/etc/sing-box/config.json')
 SB_ENABLED = os.environ.get('SB_ENABLED_ENV', 'false') == 'true'
+SB_VERSION = os.environ.get('SB_VERSION_ENV', '')
 RELAY_LINK = os.environ.get('RELAY_LINK_ENV', '')
 RELAY_MODE = os.environ.get('RELAY_MODE_ENV', 'all')
 DOMAINS = ${domains_json}
@@ -4773,6 +5391,76 @@ def parse_url(link):
     port = u.port or 443
     return u, host, port, parse_qs(u.query)
 
+def cert_pins(qs):
+    raw = next((qs[k][0] for k in ('pcs', 'pinSHA256', 'pinnedPeerCertSha256') if qs.get(k)), '')
+    if not raw:
+        return []
+    pins = [p.strip().replace(':', '') for p in raw.split(',')]
+    if any(not re.fullmatch('[0-9a-fA-F]{64}', p) for p in pins):
+        raise ValueError('证书指纹应为 64 位 SHA256 十六进制，支持冒号分隔')
+    return pins
+
+def tls_options(sni, qs):
+    tls = {'serverName': sni} if sni else {}
+    pins = cert_pins(qs)
+    skip = qs.get('allowInsecure', qs.get('insecure', ['']))[0].lower() in ('1', 'true', 'yes')
+    if pins:
+        tls['pinnedPeerCertSha256'] = ','.join(pins)
+    elif skip:
+        raise ValueError('新版 Xray 不支持 allowInsecure=1。请在链接中提供 pcs 或 pinSHA256 证书指纹，或使用受信证书；原配置未修改')
+    if qs.get('alpn', [''])[0]:
+        tls['alpn'] = [v for v in qs['alpn'][0].split(',') if v]
+    if qs.get('fp', [''])[0]:
+        tls['fingerprint'] = qs['fp'][0]
+    return tls
+
+def sb_tls_options(security, sni, qs):
+    if security not in ('tls', 'reality'):
+        return None
+    tls = {'enabled': True}
+    if sni:
+        tls['server_name'] = sni
+    if qs.get('alpn', [''])[0]:
+        tls['alpn'] = [v for v in qs['alpn'][0].split(',') if v]
+    if qs.get('fp', [''])[0]:
+        tls['utls'] = {'enabled': True, 'fingerprint': qs['fp'][0]}
+    if security == 'reality':
+        tls['reality'] = {'enabled': True, 'public_key': qs.get('pbk', [''])[0], 'short_id': qs.get('sid', [''])[0]}
+        return tls
+    pins = cert_pins(qs)
+    spki = qs.get('certificate_public_key_sha256', [''])[0]
+    if spki:
+        values = spki.split(',')
+        if any(len(base64.b64decode(v, validate=True)) != 32 for v in values):
+            raise ValueError('Sing-box 公钥 SHA256 应为 32 字节摘要的 Base64，不能填入证书十六进制指纹')
+        tls['certificate_public_key_sha256'] = values
+    elif pins and SB_ENABLED:
+        version = re.match(r'^v?(\d+)\.(\d+)\.(\d+)(.*)$', SB_VERSION)
+        supported = False
+        if version:
+            release = tuple(int(v) for v in version.groups()[:3])
+            suffix = version.group(4)
+            alpha = re.fullmatch(r'-alpha\.(\d+)', suffix)
+            supported = release > (1, 15, 0) or (release == (1, 15, 0) and (not suffix or (alpha and int(alpha.group(1)) >= 7)))
+        if not supported:
+            raise ValueError('当前 Sing-box 不支持完整证书 SHA256 固定。双核中继链接还需提供 certificate_public_key_sha256 公钥指纹，或使用受信证书；原配置未修改')
+        tls['certificate_sha256'] = [base64.b64encode(bytes.fromhex(p)).decode() for p in pins]
+    return tls
+
+def sb_transport_options(network, qs):
+    if not SB_ENABLED or network in ('tcp', 'raw', ''):
+        return None
+    path, host = qs.get('path', ['/'])[0] or '/', qs.get('host', [''])[0]
+    if network in ('ws', 'httpupgrade'):
+        transport = {'type': network, 'path': path}
+        if host:
+            if network == 'ws': transport['headers'] = {'Host': host}
+            else: transport['host'] = host
+        return transport
+    if network == 'grpc':
+        return {'type': 'grpc', 'service_name': qs.get('serviceName', [''])[0]}
+    raise ValueError('当前 Sing-box 不支持该中继传输 ' + network + '，请提供双核均支持的节点；原配置未修改')
+
 def apply_stream(out, network='tcp', security='none', sni='', qs=None):
     qs = qs or {}
     stream = {"network": network or "tcp"}
@@ -4786,20 +5474,31 @@ def apply_stream(out, network='tcp', security='none', sni='', qs=None):
         }
     elif security == 'tls':
         stream["security"] = "tls"
-        tls = {"serverName": sni} if sni else {}
-        if qs.get('allowInsecure', qs.get('insecure', ['']))[0] in ('1', 'true', 'yes'):
-            tls["allowInsecure"] = True
-        stream["tlsSettings"] = tls
+        stream["tlsSettings"] = tls_options(sni, qs)
     elif security and security != 'none':
         stream["security"] = security
 
     if stream["network"] == "ws":
-        path = unquote(qs.get('path', ['/'])[0] or '/')
+        path = qs.get('path', ['/'])[0] or '/'
         host = qs.get('host', [''])[0]
         ws = {"path": path}
         if host:
             ws["headers"] = {"Host": host}
         stream["wsSettings"] = ws
+    elif stream['network'] in ('xhttp', 'splithttp'):
+        stream['network'] = 'xhttp'
+        settings = {'path': qs.get('path', ['/'])[0] or '/', 'host': qs.get('host', [''])[0], 'mode': qs.get('mode', ['auto'])[0]}
+        if qs.get('extra', [''])[0]:
+            settings['extra'] = json.loads(qs['extra'][0])
+            if not isinstance(settings['extra'], dict):
+                raise ValueError('XHTTP extra 必须是 JSON 对象')
+        stream['xhttpSettings'] = settings
+    elif stream['network'] == 'grpc':
+        stream['grpcSettings'] = {'serviceName': qs.get('serviceName', [''])[0], 'multiMode': qs.get('mode', [''])[0] == 'multi'}
+    elif stream['network'] == 'httpupgrade':
+        stream['httpupgradeSettings'] = {'path': qs.get('path', ['/'])[0] or '/', 'host': qs.get('host', [''])[0]}
+    elif stream['network'] not in ('tcp', 'raw'):
+        raise ValueError('当前 Xray 不支持该中继传输 ' + stream['network'] + '；原配置未修改')
 
     if stream["network"] != "tcp" or stream.get("security") not in (None, "none"):
         out["streamSettings"] = stream
@@ -4885,7 +5584,10 @@ elif RELAY_LINK.startswith('vless://'):
     if not uuid or not addr:
         raise ValueError('Invalid vless link')
     flow = qs.get('flow', [''])[0]
-    user = {"id": uuid, "encryption": "none"}
+    encryption = qs.get('encryption', ['none'])[0] or 'none'
+    if SB_ENABLED and encryption != 'none':
+        raise ValueError('当前 Sing-box 不支持 VLESS Encryption 双核中继，请提供兼容节点；原配置未修改')
+    user = {"id": uuid, "encryption": encryption}
     if flow:
         user["flow"] = flow
     out = {
@@ -4941,8 +5643,12 @@ elif RELAY_LINK.startswith('vmess://'):
         "domainStrategy": "AsIs",
         "settings": {"vnext": [{"address": addr, "port": port, "users": [{"id": uuid, "alterId": 0}]}]}
     }
-    qs = {"path": [vm.get('path', '/')], "host": [vm.get('host', '')]}
-    apply_stream(out, network, 'tls' if vm.get('tls') == 'tls' else 'none', sni, qs)
+    qs = {"path": [vm.get('path', '/')], "host": [vm.get('host', '')], "serviceName": [vm.get('path', '')]}
+    for key in ('allowInsecure', 'insecure', 'pcs', 'pinSHA256', 'pinnedPeerCertSha256', 'certificate_public_key_sha256', 'fp', 'alpn'):
+        if vm.get(key) is not None:
+            qs[key] = [str(vm[key])]
+    security = 'tls' if vm.get('tls') == 'tls' else 'none'
+    apply_stream(out, network, security, sni, qs)
     sb_out = {"type": "vmess", "tag": "argov-relay", "server": addr,
               "server_port": port, "uuid": uuid, "security": method,
               "alter_id": alter_id}
@@ -4969,7 +5675,7 @@ elif RELAY_LINK.startswith('trojan://'):
     }
     network = qs.get('type', qs.get('network', ['tcp']))[0] or 'tcp'
     sni = qs.get('sni', qs.get('peer', ['']))[0]
-    security = qs.get('security', ['tls' if sni else 'none'])[0]
+    security = qs.get('security', ['tls'])[0]
     apply_stream(out, network, security, sni, qs)
     sb_out = {"type": "trojan", "tag": "argov-relay", "server": addr,
               "server_port": port, "password": password}
@@ -4992,6 +5698,16 @@ elif RELAY_LINK.startswith('trojan://'):
 
 else:
     raise ValueError(f'Unsupported protocol: {proto}')
+
+if SB_ENABLED and proto in ('vless', 'vmess', 'trojan'):
+    tls = sb_tls_options(security, sni, qs)
+    sb_out.pop('tls', None)
+    if tls:
+        sb_out['tls'] = tls
+    transport = sb_transport_options(network, qs)
+    sb_out.pop('transport', None)
+    if transport:
+        sb_out['transport'] = transport
 
 # 防御校验：addr/port 不能为空
 if not addr or not port or port <= 0:
@@ -5670,19 +6386,20 @@ update_xray_core() {
     local ARCH_ARG; ARCH_ARG=$(detect_arch)
     [ -z "$ARCH_ARG" ] && { red_msg "不支持 CPU: $(uname -m)"; sleep 2; return; }
     
-    local utmp="/tmp/xray_update.zip"
-    download_xray_zip_checked "$ARCH_ARG" "$utmp"
-    if [ -s "$utmp" ]; then
-        systemctl stop xray 2>/dev/null
-        unzip -o "$utmp" -d "$WORK_DIR" >/dev/null 2>&1
-        chmod +x "${WORK_DIR}/xray"
-        rm -f "$utmp"
-        systemctl start xray 2>/dev/null
-        green_msg "Xray 内核更新完成！"
+    local update_dir utmp rc=1
+    update_dir=$(mktemp -d -t argov-xray-update.XXXXXX) || return 1
+    utmp="${update_dir}/xray.zip"
+    if download_xray_zip_checked "$ARCH_ARG" "$utmp" && unzip -q "$utmp" -d "$update_dir"; then
+        chmod +x "${update_dir}/xray"
+        if activate_core_binary xray "${update_dir}/xray" "${WORK_DIR}/xray" "$CONFIG_FILE"; then
+            green_msg "Xray 内核更新完成；原配置、证书和数据文件已保留。"
+            rc=0
+        fi
     else
-        red_msg "下载 Xray 内核失败，请检查网络！"
+        red_msg "下载或解压 Xray 内核失败，原内核未修改。"
     fi
-    sleep 2
+    rm -rf "$update_dir"
+    return "$rc"
 }
 
 #==============================================================================
@@ -5762,97 +6479,36 @@ add_argo_protocol() {
 }
 
 add_hy2_protocol() {
-    local uuid ip h_port h_sni h_mport new_inbound
-    uuid=$(get_uuid)
-    ip=$(get_ip)
-    h_port=$(find_free_any_port "$(shuf -i 10000-60000 -n 1)")
-    h_sni="${HY2_SNI:-www.bing.com}"
-
-    clear
-    echo ""
-    echo -e " ${purple}Add Hysteria2${re}"
-    echo ""
-    echo -e "  Default SNI: ${cyan}${h_sni}${re}"
-    echo -ne "  SNI [enter keep]: "; read hs 
-    [ -n "$hs" ] && h_sni="$hs"
-
-    echo -e "  Random port: ${cyan}${h_port}${re}"
-    echo -ne "  Port [enter keep]: "; read hp 
-    if [ -n "$hp" ]; then
-        if ! is_port "$hp"; then
-            red_msg "Invalid port, keep random port."
-        elif port_in_use_any "$hp"; then
-            red_msg "Port occupied: $hp, keep random port."
-        else
-            h_port="$hp"
+    (
+        load_conf
+        if jq -e '.inbounds[]|select(.tag=="hy2")' "$CONFIG_FILE" >/dev/null 2>&1; then
+            edit_hy2_protocol; return $?
         fi
-    fi
-
-    # 端口跳跃 (Hi_Hysteria 同款交互)
-    echo ""
-    echo -e "  ${yellow}端口跳跃 (Port Hopping)?${re}"
-    echo -e "  Tip: 避免长时单端口 UDP 被限速/QoS/断流"
-    echo -e "  ${green}1${re}. 启用 (推荐)    ${green}2${re}. 跳过"
-    echo -ne "  → [2]: "; read hop_yn
-    if [ "${hop_yn:-2}" = "1" ]; then
-        while true; do
-            echo -ne "  起始端口 [47000]: "; read hs
-            [ -z "$hs" ] && hs=47000
-            is_port "$hs" || { echo -e "  ${red}端口范围错误${re}"; continue; }
-            echo -ne "  结束端口 [48000]: "; read he
-            [ -z "$he" ] && he=48000
-            is_port "$he" || { echo -e "  ${red}端口范围错误${re}"; continue; }
-            [ "$hs" -ge "$he" ] && { echo -e "  ${red}起始必须小于结束${re}"; continue; }
-            h_mport="${hs}-${he}"
-            break
-        done
-        echo -e "  ${yellow}跳跃时间模式:${re}"
-        echo -e "  ${green}1${re}. 固定间隔    ${green}2${re}. 随机间隔"
-        echo -ne "  → [1]: "; read hmode
-        if [ "${hmode:-1}" = "2" ]; then
-            echo -ne "  最小间隔(秒) [10]: "; read hmin
-            echo -ne "  最大间隔(秒) [30]: "; read hmax
-            echo -e "  随机间隔: ${green}${hmin:-10}s ~ ${hmax:-30}s${re}"
-        else
-            echo -ne "  间隔(秒, ≥5) [30]: "; read hint
-            echo -e "  固定间隔: ${green}${hint:-30}s${re}"
-        fi
-    fi
-
-    echo ""
-    echo -e "  Hysteria2 SNI: ${green}${h_sni}${re}"
-    echo -e "  Hysteria2 port: ${green}${h_port}${re}"
-    [ -n "$h_mport" ] && echo -e "  Hysteria2 mport: ${green}${h_mport}${re}"
-    echo -ne "  Confirm add? (y/n) [y]: "
-    read cf
-    [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "Canceled."; return; }
-
-    HY2_PORT="$h_port"
-    HY2_SNI="$h_sni"
-    HY2_MPORT="$h_mport"
-    gen_hy2_cert || { red_msg "Failed to generate Hysteria2 self-signed certificate."; return; }
-
-    new_inbound=$(build_hy2_inbound "$HY2_PORT" "$HY2_SNI" "$uuid" "argov-default" "$HY2_MPORT" "$HY2_CONGESTION" "$HY2_UP_MBPS" "$HY2_DOWN_MBPS")
-    jq --argjson i "$new_inbound" '.inbounds += [$i]' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-    ENABLE_HY2=1
-    sync_xray_users || return
-    save_conf
-    yellow_msg "Restarting Xray..."
-    systemctl restart xray 2>/dev/null || true
-    rc-service xray restart 2>/dev/null || true
-    if [ -n "$HY2_MPORT" ]; then
+        local uuid ip new_inbound candidate
+        cyan_msg "添加 Xray Hysteria2"
+        prompt_xray_hy2 || return 1
+        confirm_changes "添加以上 HY2 节点？" || return 1
+        begin_protocol_edit xray || return 1
+        gen_hy2_cert || return 1
+        uuid=$(get_uuid)
+        new_inbound=$(build_hy2_inbound "$HY2_PORT" "$HY2_SNI" "$uuid" argov-default "$HY2_MPORT" "$HY2_CONGESTION" "$HY2_UP_MBPS" "$HY2_DOWN_MBPS")
+        candidate=$(mktemp "${CONFIG_FILE}.edit.XXXXXX") || return 1
+        jq --argjson i "$new_inbound" '.inbounds += [$i]' "$CONFIG_FILE" > "$candidate" || { rm -f "$candidate"; return 1; }
+        commit_xray_candidate "$candidate" || return 1
+        ENABLE_HY2=1
+        sync_xray_users || return 1
+        save_conf || return 1
+        restart_protocol_runtime xray || { red_msg "Xray 重启失败。"; return 1; }
         if ! apply_hy2_hop_rules "$HY2_PORT" "$HY2_MPORT"; then
-            clear_hy2_mport_config
-            save_conf
-            yellow_msg "Hysteria2 port hopping rule failed; mport disabled."
+            clear_hy2_mport_config; save_conf
+            yellow_msg "跳跃规则安装失败，已关闭跳跃；监听端口保持可用。"
         fi
-    fi
-    sleep 2
-    get_status
-    green_msg "Hysteria2 added."
-    [ -n "$ip" ] && echo -e "  ${green}$(gen_hy2_link "$uuid" "$ip" "$HY2_PORT" "$HY2_SNI" "${NODE_NAME}-Hy2" "$HY2_MPORT")${re}"
-    echo ""
-    echo -ne "  Press Enter to continue..."; read -r
+        EDIT_COMMITTED=1
+        start_sub_server >/dev/null 2>&1 &
+        green_msg "Hysteria2 已添加，请刷新客户端订阅。"
+        ip=$(get_ip); [ -n "$ip" ] && gen_hy2_link "$uuid" "$ip" "$HY2_PORT" "$HY2_SNI" "${NODE_NAME}-Hy2" "$HY2_MPORT"
+        echo
+    )
 }
 
 delete_protocol() {
@@ -6122,10 +6778,11 @@ sb_menu() {
 
         case "$c" in
             s1|S1|1)
-                install_singbox update || { echo -ne "  按回车返回..."; read -r; }
-                if sb_is_installed; then
+                if install_singbox update; then
                     SB_ENABLE=true; save_conf; start_sub_server >/dev/null 2>&1 &
-                    green_msg "Sing-box 安装成功！"
+                    green_msg "Sing-box 安装/更新成功！"
+                else
+                    echo -ne "  按回车返回..."; read -r
                 fi
                 ;;
             s2|S2|2) manage_sb_protocols ;;
@@ -6183,23 +6840,23 @@ manage_sb_protocols() {
         local has_any=false
         if [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ -n "${SB_HY2_PORT:-}" ]; then
             has_any=true
-            echo -e "  ${yellow}HY2${re}    port: ${green}${SB_HY2_PORT}${re}  SNI: ${cyan}${SB_SNI:-}${re}"
+            echo -e "  ${yellow}HY2${re}    port: ${green}${SB_HY2_PORT}${re}  SNI: ${cyan}${SB_HY2_SNI:-$SB_SNI}${re}"
         fi
         if [ "${SB_TUIC_ENABLE:-false}" = "true" ] && [ -n "${SB_TUIC_PORT:-}" ]; then
             has_any=true
-            echo -e "  ${yellow}TUIC${re}   port: ${green}${SB_TUIC_PORT}${re}  SNI: ${cyan}${SB_SNI:-}${re}"
+            echo -e "  ${yellow}TUIC${re}   port: ${green}${SB_TUIC_PORT}${re}  SNI: ${cyan}${SB_TUIC_SNI:-$SB_SNI}${re}"
         fi
         if [ "${SB_ANYTLS_ENABLE:-false}" = "true" ] && [ -n "${SB_ANYTLS_PORT:-}" ]; then
             has_any=true
-            echo -e "  ${yellow}AnyTLS${re} port: ${green}${SB_ANYTLS_PORT}${re}  SNI: ${cyan}${SB_SNI:-}${re}"
+            echo -e "  ${yellow}AnyTLS${re} port: ${green}${SB_ANYTLS_PORT}${re}  SNI: ${cyan}${SB_ANYTLS_SNI:-$SB_SNI}${re}"
         fi
         if [ "${SB_REALITY_ENABLE:-false}" = "true" ] && [ -n "${SB_REALITY_PORT:-}" ]; then
             has_any=true
-            echo -e "  ${yellow}Reality${re} port: ${green}${SB_REALITY_PORT}${re}  SNI: ${cyan}${SB_SNI:-}${re}"
+            echo -e "  ${yellow}Reality${re} port: ${green}${SB_REALITY_PORT}${re}  SNI: ${cyan}${SB_REALITY_SNI:-$SB_SNI}${re}"
         fi
         if [ "${SB_SS_ENABLE:-false}" = "true" ] && [ -n "${SB_SS_PORT:-}" ]; then
             has_any=true
-            echo -e "  ${yellow}SS${re}      port: ${green}${SB_SS_PORT}${re}  method: ${cyan}${SS_METHOD:-aes-256-gcm}${re}"
+            echo -e "  ${yellow}SS${re}      port: ${green}${SB_SS_PORT}${re}  method: ${cyan}${SB_SS_METHOD:-$SS_METHOD}${re}"
         fi
         $has_any || echo -e "  ${cyan}(无)${re}"
 
@@ -6210,16 +6867,22 @@ manage_sb_protocols() {
         [ "${SB_ANYTLS_ENABLE:-false}" != "true" ] && echo -e "  ${green}b3${re}. 添加 AnyTLS Reality"
         [ "${SB_REALITY_ENABLE:-false}" != "true" ] && echo -e "  ${green}b4${re}. 添加 VLESS Reality"
         [ "${SB_SS_ENABLE:-false}" != "true" ]     && echo -e "  ${green}b5${re}. 添加 Shadowsocks"
+
+        [ "${SB_HY2_ENABLE:-false}" = true ] && echo "  e1. 编辑 Hysteria2"
+        [ "${SB_TUIC_ENABLE:-false}" = true ] && echo "  e2. 编辑 TUIC"
+        [ "${SB_ANYTLS_ENABLE:-false}" = true ] && echo "  e3. 编辑 AnyTLS Reality"
+        [ "${SB_REALITY_ENABLE:-false}" = true ] && echo "  e4. 编辑 VLESS Reality"
+        [ "${SB_SS_ENABLE:-false}" = true ] && echo "  e5. 编辑 Shadowsocks"
         echo -e "  ${red}d${re}. 删除协议    ${cyan}b0${re}. 返回"
         echo -e " ${purple}────────────────────────────────────────${re}"
         echo -ne "  请选择: "; read c
 
         case "$c" in
-            b1|B1) add_sb_hy2 ;;
-            b2|B2) add_sb_tuic ;;
-            b3|B3) add_sb_anytls ;;
-            b4|B4) add_sb_reality ;;
-            b5|B5) add_sb_ss ;;
+            b1|B1|e1|E1) add_sb_hy2 ;;
+            b2|B2|e2|E2) add_sb_tuic ;;
+            b3|B3|e3|E3) add_sb_anytls ;;
+            b4|B4|e4|E4) add_sb_reality ;;
+            b5|B5|e5|E5) add_sb_ss ;;
             d|D) delete_sb_protocol ;;
             b0|B0|0) return ;;
             *) red_msg "无效选择"; sleep 1 ;;
@@ -6228,182 +6891,15 @@ manage_sb_protocols() {
 }
 
 # Sing-box 协议添加函数
-add_sb_hy2() {
-    load_conf
-    echo -e "\n${cyan}━━━ Hysteria2 (Sing-box) 节点配置 ━━━${re}\n"
+add_sb_hy2() { add_sb_protocol HY2; }
 
-    # (1) 端口
-    local def_port; def_port=$(shuf -i 10000-60000 -n 1)
-    echo -e "${yellow}HY2 端口 (推荐随机, 默认 ${def_port}):${re}"
-    echo -ne "  → "; read p
-    [ -n "$p" ] && is_port "$p" && SB_HY2_PORT="$p" || SB_HY2_PORT="$def_port"
-    echo -e "  端口: ${green}${SB_HY2_PORT}${re}\n"
+add_sb_anytls() { add_sb_protocol ANYTLS; }
 
-    # (2) SNI
-    echo -e "${yellow}SNI/TLS 域名 (默认: ${SB_SNI:-addons.mozilla.org}):${re}"
-    echo -ne "  → "; read sni
-    [ -n "$sni" ] && SB_SNI="$sni"
-    echo -e "  SNI: ${green}${SB_SNI}${re}\n"
+add_sb_tuic() { add_sb_protocol TUIC; }
 
-    # (3) 端口跳跃 (Hi_Hysteria 同款)
-    echo -e "${yellow}是否启用端口跳跃 (Port Hopping)?${re}"
-    echo -e "  Tip: 长时间单端口 UDP 易被限速/QoS/断流, 跳跃可有效避免."
-    echo -e "  ${green}1${re}. 启用(推荐)    ${green}2${re}. 跳过"
-    echo -ne "  → 选择 [1]: "; read hop_yn
-    if [ -z "$hop_yn" ] || [ "$hop_yn" = "1" ]; then
-        SB_HY2_HOP_ENABLE=true
-        while true; do
-            echo -ne "  起始端口 [47000]: "; read hs
-            [ -z "$hs" ] && hs=47000
-            is_port "$hs" || { echo -e "  ${red}端口范围错误${re}"; continue; }
-            echo -ne "  结束端口 [48000]: "; read he
-            [ -z "$he" ] && he=48000
-            is_port "$he" || { echo -e "  ${red}端口范围错误${re}"; continue; }
-            [ "$hs" -ge "$he" ] && { echo -e "  ${red}起始必须小于结束${re}"; continue; }
-            SB_HY2_HOP_START="$hs"; SB_HY2_HOP_END="$he"
-            break
-        done
-        echo -e "  跳跃范围: ${green}${SB_HY2_HOP_START}-${SB_HY2_HOP_END}${re}"
-        echo -e "  ${yellow}跳跃时间模式:${re}"
-        echo -e "  ${green}1${re}. 固定间隔     ${green}2${re}. 随机间隔"
-        echo -ne "  → 选择 [1]: "; read hmode
-        if [ "${hmode:-1}" = "2" ]; then
-            SB_HY2_HOP_MODE="random"
-            echo -ne "  最小间隔(秒) [10]: "; read hmin
-            echo -ne "  最大间隔(秒) [30]: "; read hmax
-            SB_HY2_HOP_MIN="${hmin:-10}"; SB_HY2_HOP_MAX="${hmax:-30}"
-            echo -e "  随机间隔: ${green}${SB_HY2_HOP_MIN}s ~ ${SB_HY2_HOP_MAX}s${re}"
-        else
-            SB_HY2_HOP_MODE="fixed"
-            echo -ne "  跳跃间隔(秒, ≥5) [30]: "; read hint
-            SB_HY2_HOP_INTERVAL="${hint:-30}"
-            echo -e "  固定间隔: ${green}${SB_HY2_HOP_INTERVAL}s${re}"
-        fi
-    else
-        SB_HY2_HOP_ENABLE=false
-        echo -e "  端口跳跃: ${red}未启用${re}"
-    fi
-    echo ""
+add_sb_reality() { add_sb_protocol REALITY; }
 
-    # (4) 拥塞控制 (Hi_Hysteria 同款: Reno/BBR/Brutal)
-    echo -e "${yellow}拥塞控制模式:${re}"
-    echo -e "  Reno:  保守稳定, 优先兼容性"
-    echo -e "  BBR:   均衡积极, 通常吞吐更高"
-    echo -e "  Brutal: Hysteria2 独有, 固定速率, 恶劣网络抗抖动"
-    echo -e "  ${green}1${re}. Reno    ${green}2${re}. BBR    ${green}3${re}. Brutal(默认)"
-    echo -ne "  → 选择 [3]: "; read cc
-    case "${cc:-3}" in
-        1) SB_HY2_CONGESTION="reno" ;;
-        2)
-            SB_HY2_CONGESTION="bbr"
-            echo -e "  ${yellow}BBR 预设:${re}"
-            echo -e "  ${green}1${re}. 保守(conservative)  ${green}2${re}. 标准(standard,默认)  ${green}3${re}. 激进(aggressive)"
-            echo -ne "  → 选择 [2]: "; read bp
-            case "${bp:-2}" in
-                1) SB_HY2_BBR_PROFILE="conservative" ;;
-                3) SB_HY2_BBR_PROFILE="aggressive" ;;
-                *) SB_HY2_BBR_PROFILE="standard" ;;
-            esac
-            ;;
-        *) SB_HY2_CONGESTION="brutal"
-           echo -ne "  上行带宽 Mbps [100]: "; read up_mbps
-           SB_HY2_UP_MBPS="${up_mbps:-100}"
-           echo -ne "  下行带宽 Mbps [200]: "; read down_mbps
-           SB_HY2_DOWN_MBPS="${down_mbps:-200}"
-           ;;
-    esac
-    echo -e "  拥塞控制: ${green}${SB_HY2_CONGESTION}${re}\n"
-
-    # (5) 密码
-    SB_HY2_PSK="${SB_HY2_PSK:-$(rand_token)}"
-    echo -e "${yellow}认证密码 (默认自动生成):${re}"
-    echo -ne "  → [${SB_HY2_PSK}]: "; read custom_psk
-    [ -n "$custom_psk" ] && SB_HY2_PSK="$custom_psk"
-    echo -e "  密码: ${green}${SB_HY2_PSK}${re}\n"
-
-    SB_HY2_ENABLE=true; SB_ENABLE=true
-    generate_singbox_cert
-    SB_HY2_PIN_SHA256=$(cert_pin_sha256 "$SB_CERT_FILE")
-    build_singbox_config
-    [ "${SB_HY2_HOP_ENABLE:-false}" = "true" ] && apply_sb_hy2_hop_rules
-    sb_restart; save_conf; start_sub_server >/dev/null 2>&1 &
-    green_msg "Hysteria2 (Sing-box) 部署完成"
-}
-
-add_sb_anytls() {
-    load_conf
-    echo -e "\n${cyan}━━━ AnyTLS Reality (Sing-box) 节点配置 ━━━${re}\n"
-
-    local def_port; def_port=$(shuf -i 10000-60000 -n 1)
-    echo -e "${yellow}AnyTLS 端口 (默认 ${def_port}):${re}"
-    echo -ne "  → "; read p
-    [ -n "$p" ] && is_port "$p" && SB_ANYTLS_PORT="$p" || SB_ANYTLS_PORT="$def_port"
-    echo -e "  端口: ${green}${SB_ANYTLS_PORT}${re}\n"
-
-    echo -e "${yellow}Reality SNI (默认: ${SB_SNI:-addons.mozilla.org}):${re}"
-    echo -ne "  → "; read sni
-    [ -n "$sni" ] && SB_SNI="$sni"
-    echo -e "  SNI: ${green}${SB_SNI}${re}\n"
-
-    SB_ANYTLS_PSK="${SB_ANYTLS_PSK:-$(rand_token)}"
-    echo -e "${yellow}认证密码 (默认自动生成):${re}"
-    echo -ne "  → [${SB_ANYTLS_PSK}]: "; read custom_psk
-    [ -n "$custom_psk" ] && SB_ANYTLS_PSK="$custom_psk"
-
-    if ! sb_is_installed; then red_msg "请先安装 Sing-box"; return; fi
-    if [ -z "${SB_REALITY_PRIV:-}" ]; then
-        local sb_keys; sb_keys=$(sing-box generate reality-keypair 2>/dev/null)
-        SB_REALITY_PRIV=$(echo "$sb_keys" | awk '/PrivateKey/{print $2}')
-        SB_REALITY_PUB=$(echo "$sb_keys" | awk '/PublicKey/{print $2}')
-    fi
-    [ -z "${SB_REALITY_SID:-}" ] && SB_REALITY_SID=$(sing-box generate rand 8 --hex 2>/dev/null | tr -d '\n')
-    SB_ANYTLS_ENABLE=true; SB_ENABLE=true
-    build_singbox_config; sb_restart; save_conf; start_sub_server >/dev/null 2>&1 &
-    green_msg "AnyTLS Reality (Sing-box) 部署完成"
-}
-
-add_sb_tuic() {
-    load_conf
-    echo -ne "  TUIC 端口 [$(shuf -i 10000-60000 -n 1)]: "; read p
-    [ -n "$p" ] && is_port "$p" && SB_TUIC_PORT="$p" || SB_TUIC_PORT=$(shuf -i 10000-60000 -n 1)
-    SB_TUIC_UUID="${SB_TUIC_UUID:-$(rand_uuid)}"; SB_TUIC_PSK="${SB_TUIC_PSK:-$(rand_token)}"
-    echo -ne "  SNI [${SB_SNI:-addons.mozilla.org}]: "; read sni
-    [ -n "$sni" ] && SB_SNI="$sni"
-    SB_TUIC_ENABLE=true; SB_ENABLE=true
-    generate_singbox_cert; build_singbox_config
-    sb_restart; save_conf; start_sub_server >/dev/null 2>&1 &
-    green_msg "TUIC (Sing-box) 添加成功"
-}
-
-add_sb_reality() {
-    load_conf
-    echo -ne "  Reality 端口 [$(shuf -i 10000-60000 -n 1)]: "; read p
-    [ -n "$p" ] && is_port "$p" && SB_REALITY_PORT="$p" || SB_REALITY_PORT=$(shuf -i 10000-60000 -n 1)
-    echo -ne "  SNI [${SB_SNI:-addons.mozilla.org}]: "; read sni
-    [ -n "$sni" ] && SB_SNI="$sni"
-    if ! sb_is_installed; then red_msg "请先安装 Sing-box"; return; fi
-    if [ -z "${SB_REALITY_PRIV:-}" ]; then
-        local sb_keys; sb_keys=$(sing-box generate reality-keypair 2>/dev/null)
-        SB_REALITY_PRIV=$(echo "$sb_keys" | awk '/PrivateKey/{print $2}')
-        SB_REALITY_PUB=$(echo "$sb_keys" | awk '/PublicKey/{print $2}')
-    fi
-    [ -z "${SB_REALITY_SID:-}" ] && SB_REALITY_SID=$(sing-box generate rand 8 --hex 2>/dev/null | tr -d '\n')
-    SB_REALITY_ENABLE=true; SB_ENABLE=true
-    build_singbox_config; sb_restart; save_conf; start_sub_server >/dev/null 2>&1 &
-    green_msg "VLESS Reality (Sing-box) 添加成功"
-}
-
-add_sb_ss() {
-    load_conf
-    echo -ne "  SS 端口 [$(shuf -i 10000-60000 -n 1)]: "; read p
-    [ -n "$p" ] && is_port "$p" && SB_SS_PORT="$p" || SB_SS_PORT=$(shuf -i 10000-60000 -n 1)
-    echo -ne "  加密方法 [${SS_METHOD:-aes-256-gcm}]: "; read m
-    [ -n "$m" ] && SS_METHOD="$m"
-    SB_SS_PSK="${SB_SS_PSK:-$(rand_token)}"
-    SB_SS_ENABLE=true; SB_ENABLE=true
-    build_singbox_config; sb_restart; save_conf; start_sub_server >/dev/null 2>&1 &
-    green_msg "Shadowsocks (Sing-box) 添加成功"
-}
+add_sb_ss() { add_sb_protocol SS; }
 
 delete_sb_protocol() {
     load_conf
@@ -6457,13 +6953,8 @@ main_menu() {
     # 确保流量计数器已挂载（升级/重启后首次进入 ag 时补装）
     setup_traffic_counters 2>/dev/null || true
     collect_traffic 2>/dev/null || true
-    # 自动计算 HY2 证书指纹 (存量节点升级后补充)
-    if [ -z "${HY2_PIN_SHA256:-}" ] && [ -f "$HY2_CERT_FILE" ]; then
-        HY2_PIN_SHA256=$(cert_pin_sha256 "$HY2_CERT_FILE"); save_conf
-    fi
-    if [ -z "${SB_HY2_PIN_SHA256:-}" ] && [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ -f "$SB_CERT_FILE" ]; then
-        SB_HY2_PIN_SHA256=$(cert_pin_sha256 "$SB_CERT_FILE"); save_conf
-    fi
+    # 从实际入站证书回填，保留域名、端口、凭据和证书本身。
+    if refresh_certificate_pins; then save_conf; fi
     # 无感升级：旧版 stats.py 无配额阻断逻辑 → 静默重新生成
     if [ -f "${WORK_DIR}/stats.py" ] && ! grep -qF 'disabled and sync_config' "${WORK_DIR}/stats.py" 2>/dev/null; then
         start_stats_service >/dev/null 2>&1 &

@@ -225,7 +225,7 @@ forbid(
     "Clash subscription profile names must not include a forced .yaml suffix",
 )
 require(
-    r"safe_name = up\.quote\('\$\{NODE_NAME\}',\s*safe=''\)",
+    r"safe_name = up\.quote\(NODE_NAME,\s*safe=''\)",
     "subscription profile names must percent-encode all unsafe filename characters",
 )
 require(
@@ -269,16 +269,16 @@ require(
     "Clash profile should route unmatched traffic through Final",
 )
 require(
-    r'"encryption": "none"',
-    "Generated VLESS proxies should include encryption none for Mihomo compatibility",
+    r'"encryption": qs.get\("encryption", \["none"\]\)\[0\]',
+    "VLESS conversion must preserve explicit encryption and default legacy links to none",
 )
 require(
     r'p\["flow"\] = qs\.get\("flow", \[""\]\)\[0\]',
     "VLESS Reality/Vision conversion should preserve flow",
 )
 require(
-    r'elif l\.startswith\("hysteria2://"\):',
-    "Custom hysteria2 links should be converted into Clash YAML",
+    r'elif l\.startswith\(\("hysteria2://", "hy2://"\)\):',
+    "Both Hysteria2 URI schemes should be converted into Clash YAML",
 )
 require(
     r'"type": "hysteria2"',
@@ -417,19 +417,19 @@ require(
     "Hysteria2 must be managed by tag hy2",
 )
 require(
-    r'hysteria2://\$\{uuid\}@\$\{ip\}:\$\{hport\}\?sni=\$\{hsni\}&insecure=1&alpn=h3',
+    r'hysteria2://\$\{uuid\}@\$\{ip_host\}:\$\{hport\}\?sni=\$\{hsni:-\$\{HY2_SNI:-\}\}&alpn=h3',
     "subscription generator must include built-in Hysteria2 links with self-signed TLS compatibility for local controllable users",
 )
 require(
-    r'local qs="sni=\$4&insecure=1&alpn=h3"',
-    "Hysteria2 share link helper must include both insecure and allowInsecure for self-signed certificates",
+    r'gen_hy2_link\(\)[\s\S]*certificate_uri_options "\$\{HY2_PIN_SHA256:-\}"',
+    "Hysteria2 share links must use compatible certificate pin options",
 )
 require(
     r'gen_hy2_link\(\)[\s\S]*local mport="\$6"[\s\S]*\[ -n "\$mport" \] && qs="\$\{qs\}&mport=\$\{mport\}"',
     "Hysteria2 share link helper must append mport only when port hopping is enabled",
 )
 require(
-    r'links\+="hysteria2://\$\{uuid\}@\$\{ip\}:\$\{hport\}\?sni=\$\{hsni\}&insecure=1&alpn=h3',
+    r'links\+="hysteria2://[^\n]*\$\{hmport_qs\}\$\{hy2_extra\}',
     "subscription generator must include built-in Hysteria2 mport when port hopping is enabled",
 )
 require(
@@ -461,7 +461,7 @@ require(
     "relay split domains must be normalized to Xray domain matchers so bare domains, wildcards, and URLs route through relay-out reliably",
 )
 require(
-    r'RELAY_LINK_ENV="\$RELAY_LINK" RELAY_MODE_ENV="\$RELAY_MODE" SB_CONFIG_ENV="\$SB_CONFIG_FILE" SB_ENABLED_ENV="\$\{SB_ENABLE:-false\}" python3',
+    r'RELAY_LINK_ENV="\$RELAY_LINK" RELAY_MODE_ENV="\$RELAY_MODE" SB_CONFIG_ENV="\$SB_CONFIG_FILE" SB_ENABLED_ENV="\$\{SB_ENABLE:-false\}" SB_VERSION_ENV="\$\(singbox_version_string\)" python3',
     "relay links must be passed to Python through environment variables so quotes in share links cannot break the script",
 )
 require(
@@ -564,7 +564,7 @@ require(
     "Sing-box management menu must request a real kernel update",
 )
 require(
-    r"SB_HY2_CONGESTION[\s\S]*save_var SB_HY2_CONGESTION[\s\S]*up_mbps[\s\S]*down_mbps",
+    r"SB_HY2_CONGESTION[\s\S]*up_mbps[\s\S]*down_mbps[\s\S]*save_var SB_HY2_CONGESTION",
     "Sing-box Hysteria2 congestion settings must be persisted and emitted",
 )
 require(

@@ -36,7 +36,12 @@ type StreamSettings struct {
 }
 
 type TLSSettings struct {
-	ServerName string `json:"serverName"`
+	ServerName   string           `json:"serverName"`
+	Certificates []TLSCertificate `json:"certificates"`
+}
+
+type TLSCertificate struct {
+	CertificateFile string `json:"certificateFile"`
 }
 
 type RealitySettings struct {

@@ -50,6 +50,18 @@ ag
 NODE_NAME=Tokyo bash <(curl -fsSL https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
 ```
 
+首次选择 HY2 时必须输入 SNI/TLS 域名，随后选择端口、拥塞控制和是否启用端口跳跃。Xray 提供 BBR、Brutal、Reno 和自动协商；Sing-box 提供 BBR、Brutal 和客户端协商。选择 Brutal 后，向导会分别询问服务器上传、下载带宽（Mbps）。域名用于自签证书和握手，不要求你拥有该域名，也不会将代理流量转发到该网站。
+
+安装后可用 `ag → a → e4` 编辑 Xray HY2；Sing-box 的五种协议均可在 `ag → s → s2` 中编辑，HY2 对应 `e1`。编辑时回车保留现值，输入错误会重新询问，可输入 `0` 或 `cancel` 返回。确认后会验证配置；HY2/Sing-box 协议编辑失败时恢复原配置、用户数据和证书。更换域名或证书后请刷新客户端订阅。
+
+完整的易用性审视、已修复项目及待改进项目见 [易用性与可编辑性审视](docs/USABILITY_REVIEW_CN.md)。
+
+开发分支的真实服务器测试步骤见 [VPS 灰度验证指南](docs/VPS_CANARY_VALIDATION_CN.md)，包含干净安装、旧部署升级、检查命令和验收标准。
+
+更新脚本会保留存量节点的协议、域名、端口、凭据和证书。主动更新 Xray 或 Sing-box 内核时，先用新内核校验现有配置；不兼容则取消升级，启动失败则恢复旧二进制。原本停止的服务保持停止，成功升级后旧内核保存在当前二进制旁的 `.argov-previous` 文件中。
+
+HY2/TUIC 订阅会从正在使用的证书读取指纹，保留旧 URI 客户端的兼容参数；Mihomo 订阅使用证书指纹验证。TLS 中继会传递 `pcs` / `pinSHA256`，缺少指纹的旧跳过验证链接不会自动改写现有中继。完整修复状态、版本限制和剩余可选功能见 [内核兼容性审视](docs/CORE_COMPATIBILITY_REVIEW_CN.md)。
+
 ### 部署前准备
 
 | 项目 | 说明 |
@@ -84,7 +96,7 @@ NODE_NAME=Tokyo bash <(curl -fsSL https://raw.githubusercontent.com/m2dumpling/A
 | VLESS + Argo | Xray | 零公网暴露的 Cloudflare Tunnel 节点 | WebSocket；Argo 可选 |
 | VMess + Argo | Xray | 兼容既有 VMess 客户端 | WebSocket；最新 Xray 会给出弃用提示 |
 | VLESS Reality | Xray / Sing-box | TLS 外观的直连节点 | Vision、SNI、Short ID、x25519 密钥 |
-| Hysteria2 | Xray / Sing-box | UDP/QUIC 直连节点 | 证书固定、端口跳跃；Sing-box 支持 Brutal 带宽参数 |
+| Hysteria2 | Xray / Sing-box | UDP/QUIC 直连节点 | 自选域名和拥塞控制、证书固定、端口跳跃；双核均支持 Brutal 带宽参数 |
 | TUIC | Sing-box | QUIC 直连节点 | 启用 Sing-box 后可用 |
 | AnyTLS Reality | Sing-box | Reality 直连节点 | 启用 Sing-box 后可用 |
 | Shadowsocks | Xray / Sing-box | AEAD / SS2022 节点 | TCP/UDP；最新 Xray 会给出弃用提示 |
@@ -105,7 +117,7 @@ NODE_NAME=Tokyo bash <(curl -fsSL https://raw.githubusercontent.com/m2dumpling/A
 
 ### 当前内核兼容性
 
-生成配置已对齐当前 Xray 与 sing-box 格式：Xray Reality 服务端使用 `target` 字段，Sing-box HY2 Brutal 会写入 `up_mbps` / `down_mbps`。Argo WebSocket、VMess 和 Shadowsocks 为保护既有客户端兼容性仍被保留；较新的 Xray 会显示弃用警告。迁移到 XHTTP 或 VLESS Encryption 会改变客户端连接方式，因此不会在更新时强制执行。
+生成配置已对齐当前 Xray 与 sing-box 格式：Xray Reality 服务端使用 `target` 字段，Xray HY2 Brutal 使用 `brutalUp` / `brutalDown`，Sing-box 使用 `up_mbps` / `down_mbps`。Sing-box HY2 的 BBR 模式会忽略客户端带宽声明；BBR 预设仅在支持该字段的 1.14+ 版本显示和写入。Argo WebSocket、VMess 和 Shadowsocks 为保护既有客户端兼容性仍被保留；较新的 Xray 会显示弃用警告。迁移到 XHTTP 或 VLESS Encryption 会改变客户端连接方式，因此不会在更新时强制执行。
 
 ## 安装流程
 
@@ -246,6 +258,7 @@ rc-service argov-sub status
 
 - 直连 Reality、HY2、TUIC、AnyTLS、SS 需要在 VPS 防火墙和云安全组开放端口。
 - 自签 HY2/TUIC 证书要求客户端允许不受信任证书；优先使用订阅中的 `pinSHA256` 固定证书指纹。
+- 内置 Mihomo 订阅会携带 HY2 的证书指纹和 Brutal 带宽。上传、下载相对于客户端，和向导中的服务器方向相反；其他通用 URI 客户端可能忽略带宽提示，需在客户端设置对应值。
 - Sing-box HY2、TUIC、AnyTLS 依赖官方发布包的构建标签；建议通过面板更新，不要随意替换为精简构建。
 - 项目当前未提供 `LICENSE` 文件；复用、分发或部署前请确认授权与合规要求。
 
@@ -257,4 +270,4 @@ rc-service argov-sub status
 bash tests/argov_static_tests.sh argov.sh
 ```
 
-该脚本检查 Bash 语法、全部五组 Python 测试（包括中继配置），以及隧道服务的日志设置。
+该脚本检查 Bash 语法、全部七组 Python 测试（包括交互、配置生成、订阅、迁移、中继和内核兼容性），以及隧道服务的日志设置。交互测试需要 `jq` 和 `openssl`；若 PATH 中提供 Xray、Sing-box 和 Mihomo，还会用真实内核校验配置并运行本机连通测试。
