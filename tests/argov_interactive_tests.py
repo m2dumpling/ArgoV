@@ -96,16 +96,18 @@ printf '\n__RESULT__\n'; jq -n --arg value "$target" '{value:$value}'
             self.assertEqual(self.result_json(result)["value"], "old.example.com")
 
     def test_fresh_hy2_install_asks_domain_and_brutal_bandwidth(self):
-        result = self.run_shell(r'''
+        for entered, expected in (("", "www.tesla.com"), ("user.example.com", "user.example.com")):
+            with self.subTest(domain=entered):
+                result = self.run_shell(r'''
 select_protocols || exit 1
 printf '\n__RESULT__\n'
 build_hy2_inbound "$HY2_PORT" "$HY2_SNI" test-auth default "$HY2_MPORT" "$HY2_CONGESTION" "$HY2_UP_MBPS" "$HY2_DOWN_MBPS"
-''', "2\n0\nuser.example.com\n24567\nbrutal\n80\n120\noff\ny\n")
-        inbound = self.result_json(result)
-        self.assertEqual(inbound["streamSettings"]["tlsSettings"]["serverName"], "user.example.com")
-        params = inbound["streamSettings"]["finalmask"]["quicParams"]
-        self.assertEqual(params, {"congestion": "brutal", "brutalUp": "80 mbps", "brutalDown": "120 mbps"})
-        self.assertFalse((self.root / "argov.conf").exists(), "The form must not persist before the complete installer confirms")
+''', f"2\n0\n{entered}\n24567\nbrutal\n80\n120\noff\ny\n")
+                inbound = self.result_json(result)
+                self.assertEqual(inbound["streamSettings"]["tlsSettings"]["serverName"], expected)
+                params = inbound["streamSettings"]["finalmask"]["quicParams"]
+                self.assertEqual(params, {"congestion": "brutal", "brutalUp": "80 mbps", "brutalDown": "120 mbps"})
+                self.assertFalse((self.root / "argov.conf").exists(), "The form must not persist before the complete installer confirms")
 
     def test_congestion_invalid_input_retries_and_switch_clears_bandwidth(self):
         result = self.run_shell(r'''
@@ -145,19 +147,22 @@ jq -n --arg xray "$HY2_MPORT" --arg sb "$SB_HY2_HOP_START-$SB_HY2_HOP_END" --arg
         self.assertEqual(self.result_json(result), {"xray": "47000-48000", "sb": "49000-50000", "enabled": "true"})
 
     def test_deployed_hy2_keeps_disabled_hopping_on_enter(self):
-        result = self.run_shell(r'''
-ENABLE_HY2=1; HY2_PORT=24567; HY2_SNI=old-xray.example.com; HY2_MPORT=""
+        for domain, missing_metadata in (("old-xray.example.com", False), ("www.bing.com", False), ("www.bing.com", True)):
+            with self.subTest(domain=domain, missing_metadata=missing_metadata):
+                result = self.run_shell("OLD_SNI=" + shlex.quote(domain) + "\nMISSING_METADATA=" + str(int(missing_metadata)) + "\n" + r'''
+ENABLE_HY2=1; HY2_PORT=24567; HY2_SNI="$OLD_SNI"; HY2_MPORT=""
 SB_HY2_ENABLE=true; SB_HY2_PORT=34567; SB_HY2_SNI=old-sb.example.com; SB_HY2_HOP_ENABLE=false
 mkdir -p "$SB_WORK_DIR"
-printf '{"inbounds":[{"tag":"hy2"}]}' > "$CONFIG_FILE"
+jq -n --arg sni "$OLD_SNI" '{inbounds:[{tag:"hy2",streamSettings:{tlsSettings:{serverName:$sni}}}]}' > "$CONFIG_FILE"
 printf '{"inbounds":[{"tag":"sb-hy2"}]}' > "$SB_CONFIG_FILE"
+if [ "$MISSING_METADATA" = 1 ]; then HY2_SNI=""; load_conf; fi
 singbox_supports_bbr_profile() { return 1; }
 prompt_xray_hy2 || exit 1
 configure_sb_protocol HY2 || exit 1
 printf '\n__RESULT__\n'
-jq -n --arg xray "$HY2_MPORT" --arg sb "$SB_HY2_HOP_ENABLE" '{xray:$xray,sb:$sb}'
+jq -n --arg xray "$HY2_MPORT" --arg sb "$SB_HY2_HOP_ENABLE" --arg xray_sni "$HY2_SNI" --arg sb_sni "$SB_HY2_SNI" '{xray:$xray,sb:$sb,xray_sni:$xray_sni,sb_sni:$sb_sni}'
 ''', "\n\n\n\n\n\n\n\n\n")
-        self.assertEqual(self.result_json(result), {"xray": "", "sb": "false"})
+                self.assertEqual(self.result_json(result), {"xray": "", "sb": "false", "xray_sni": domain, "sb_sni": "old-sb.example.com"})
 
     def test_default_hopping_avoids_deployed_ranges_and_ports(self):
         result = self.run_shell(r'''

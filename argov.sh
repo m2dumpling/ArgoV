@@ -4201,11 +4201,14 @@ add_sb_protocol() {
     )
 }
 prompt_xray_hy2() {
-    local def_port="$HY2_PORT" current="" hop_default="$HY2_MPORT"
+    local def_port="$HY2_PORT" current="" hop_default="$HY2_MPORT" sni_default="$HY2_SNI"
     is_port "$def_port" || def_port=$(find_free_any_port "$(shuf -i 10000-60000 -n 1)")
     [ -f "$CONFIG_FILE" ] && [ "${ENABLE_HY2:-0}" = 1 ] && current="$HY2_PORT"
+    if [ -z "$sni_default" ] && ! jq -e '.inbounds[]?|select(.tag=="hy2")' "$CONFIG_FILE" >/dev/null 2>&1; then
+        sni_default="www.tesla.com"
+    fi
     echo "  HY2 使用自签证书；SNI 是握手域名，不会将流量转发到该网站。"
-    prompt_domain HY2_SNI "$HY2_SNI" "HY2 SNI/TLS 域名" || return 1
+    prompt_domain HY2_SNI "$sni_default" "HY2 SNI/TLS 域名" || return 1
     prompt_port HY2_PORT "$def_port" "HY2 UDP 端口" HY2_PORT "$current" || return 1
     prompt_hy2_congestion HY2_CONGESTION HY2_UP_MBPS HY2_DOWN_MBPS xray \
         "${HY2_CONGESTION:-bbr}" "$HY2_UP_MBPS" "$HY2_DOWN_MBPS" || return 1

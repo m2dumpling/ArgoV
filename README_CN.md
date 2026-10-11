@@ -54,7 +54,7 @@ ag
 NODE_NAME=Tokyo bash <(curl -fsSL https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh)
 ```
 
-首次选择 HY2 时必须输入 SNI/TLS 域名，随后选择端口、拥塞控制和端口跳跃。Xray 提供 BBR、Brutal、Reno 和自动协商；Sing-box 提供 BBR、Brutal 和客户端协商。选择 Brutal 后，向导会分别询问服务器上传、下载带宽（Mbps），没有已有值时默认上传 100、下载 200；服务器下载对应客户端上传。域名用于自签证书和握手，不要求你拥有该域名，也不会将代理流量转发到该网站。
+首次配置 Xray HY2 时，SNI/TLS 域名默认 `www.tesla.com`，可回车接受或输入其他域名；Sing-box 增配 HY2 时需输入域名。随后选择端口、拥塞控制和端口跳跃。Xray 提供 BBR、Brutal、Reno 和自动协商；Sing-box 提供 BBR、Brutal 和客户端协商。选择 Brutal 后，向导会分别询问服务器上传、下载带宽（Mbps），没有已有值时默认上传 100、下载 200；服务器下载对应客户端上传。域名用于自签证书和握手，不要求你拥有该域名，也不会将代理流量转发到该网站。已有节点保留原域名，编辑时回车也不会应用新的首次默认值。
 
 新建 HY2 默认开启端口跳跃，Xray 优先使用 UDP `47000-48000`，Sing-box 优先使用 `49000-50000`；冲突时向导会选择其他空闲范围，输入 `off` 可关闭。云安全组与主机防火墙须放行最终显示的整个 UDP 范围。双核都提供开机恢复规则；仅更新脚本不会改变旧节点的带宽、跳跃开关和范围。
 
