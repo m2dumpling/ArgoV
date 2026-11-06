@@ -1,0 +1,72 @@
+{
+  "checked_date": "2026-11-06",
+  "environment": "Linux amd64, Debian under WSL",
+  "script_sha256": "6ef45ac4940768b7ff1d130df2049948b6ba6ca4cb86b448726d8804ea692f76",
+  "command": "python3 tests/run_xray_matrix.py --xray <binary> [--xray <binary> ...] --report <path>",
+  "companion_cores": {
+    "sing_box": "1.14.3",
+    "mihomo": "1.19.33"
+  },
+  "versions": [
+    {
+      "version": "Xray 26.10.31 (Xray, Penetrates Everything.) a4a3dff (go1.27.3 linux/amd64)",
+      "source": "Official Linux amd64 release; archive SHA256 verified against published .dgst",
+      "archive_sha256": "e4bd9119f50ae7c41658b1abd0679ae06f98bd864a2907ff33f2f2cf7081b214",
+      "binary_sha256": "cc4b84d3069569f297a61f04b914f2bb37e9d202fd7b84cb50def1fc30fd40e1",
+      "passed": true,
+      "tests": 115,
+      "skipped": 0,
+      "seconds": 81.36
+    },
+    {
+      "version": "Xray 26.10.21 (Xray, Penetrates Everything.) 1b1647c (go1.27.3 linux/amd64)",
+      "source": "Official Linux amd64 release; archive SHA256 verified against published .dgst",
+      "archive_sha256": "0eec3ed4163c273d8c8bf821f7d219e257921cf584aa3fb970715e458e631978",
+      "binary_sha256": "a27e3f95ab6ce270956d0cecd32eda4686a811afc71c64a6a734a3dede14883e",
+      "passed": true,
+      "tests": 115,
+      "skipped": 0,
+      "seconds": 79.76
+    },
+    {
+      "version": "Xray 26.9.30 (Xray, Penetrates Everything.) b26a91d (go1.27.1 linux/amd64)",
+      "source": "Official Linux amd64 release; archive SHA256 verified against published .dgst",
+      "archive_sha256": "f851110beaff16e78d643f0ccfd9524b4a44dfd59bae3e34bb52bba378f7690e",
+      "binary_sha256": "96efb28b8b2086275598dc46e73b5dc340da948b4e1ccc4f1719f83f67b793a7",
+      "passed": true,
+      "tests": 115,
+      "skipped": 0,
+      "seconds": 80.19
+    },
+    {
+      "version": "Xray 26.9.9 (Xray, Penetrates Everything.) 52a412d (go1.27.1 linux/amd64)",
+      "source": "Official Linux amd64 release; archive SHA256 verified against published .dgst",
+      "archive_sha256": "1eb9175d0f0a8f8149c9230a7fc5ae66ce332ed20a53155ce61fe62e3f58b7df",
+      "binary_sha256": "c4ae6798c38e0e5343b192406746333cd0ba7ff3eb984f8c4b9939dcb68c3f8a",
+      "passed": true,
+      "tests": 115,
+      "skipped": 0,
+      "seconds": 81.91
+    },
+    {
+      "version": "Xray 26.7.28 (Xray, Penetrates Everything.) 5ca6f4b (go1.26.5 linux/amd64)",
+      "source": "Official Linux amd64 release; archive SHA256 verified against published .dgst",
+      "archive_sha256": "8195d909f1109b8f3d99eefe401a3c451d7bf4af71f24d3815420f77e5dd2a40",
+      "binary_sha256": "64d46afb80adea1bf97a0d467e83f4a9ac1ebd0995891e84bca3f1a1d1affb1d",
+      "passed": true,
+      "tests": 115,
+      "skipped": 0,
+      "seconds": 80.17
+    },
+    {
+      "version": "Xray 26.3.27 (Xray, Penetrates Everything.) Custom (go1.26.4 linux/amd64)",
+      "source": "Built from pinned github.com/xtls/xray-core v1.260327.0",
+      "archive_sha256": null,
+      "binary_sha256": "704f16620fa620b250d5d0490e98115f13c4dc062de9044fc453345cdaf3e098",
+      "passed": true,
+      "tests": 115,
+      "skipped": 0,
+      "seconds": 78.46
+    }
+  ]
+}

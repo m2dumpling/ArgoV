@@ -75,6 +75,8 @@ NODE_NAME=Tokyo bash <(curl -fsSL https://raw.githubusercontent.com/m2dumpling/A
 
 配置持久化、服务平台适配、统计采集与 WARP 的兼容重构说明见 [脚本维护结构审视](docs/MAINTENANCE_REFACTOR_CN.md)。
 
+全部 Xray 校验入口、Reality/SS 增删改的预检与回滚，以及近期多版本回归范围见 [Xray 版本兼容性矩阵](docs/XRAY_VERSION_MATRIX_CN.md)。
+
 已有 VPS 更新本次版本无需重装：先输入 `0` 退出旧面板，再在 SSH 命令行运行 `ag`。新版会原子刷新已存在的订阅生成器和统计采集器，保留节点、凭据、证书及核心版本；详见 [已部署 VPS 更新指南](docs/UPGRADE_CN.md)。
 
 开发分支的真实服务器测试步骤见 [VPS 灰度验证指南](docs/VPS_CANARY_VALIDATION_CN.md)，包含干净安装、旧部署升级、检查命令和验收标准。
@@ -295,4 +297,4 @@ rc-service argov-sub status
 bash tests/argov_static_tests.sh argov.sh
 ```
 
-该脚本检查 Bash 语法、全部七组 Python 测试（包括交互、配置生成、订阅、迁移、中继和内核兼容性），以及隧道服务的日志设置。交互测试需要 `jq` 和 `openssl`；若 PATH 中提供 Xray、Sing-box 和 Mihomo，还会用真实内核校验配置并运行本机连通测试。
+该脚本检查 Bash 语法、全部 Python 回归（包括交互、配置生成、订阅、迁移、中继和内核兼容性），以及隧道服务的日志设置。交互测试需要 `jq` 和 `openssl`；若 PATH 中提供 Xray、Sing-box 和 Mihomo，还会用真实内核校验配置并运行本机连通测试。多版本验证可使用 `tests/run_xray_matrix.py`，用法见上述版本矩阵。

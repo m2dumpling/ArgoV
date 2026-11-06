@@ -1332,6 +1332,15 @@ singbox_preflight_current_config() {
     return 0
 }
 
+# 所有 Xray 预检共用入口；随机后缀通过 stdin: 加载，不受新版扩展名检查影响。
+validate_xray_config() {
+    local config="$1" binary="${2:-${WORK_DIR}/xray}" source="$1"
+    [ -x "$binary" ] || { red_msg "Xray 内核不可执行，无法校验配置。" >&2; return 1; }
+    [ -f "$config" ] && [ -r "$config" ] || { red_msg "Xray 配置不存在或不可读：$config" >&2; return 1; }
+    case "$config" in *.json) ;; *) source=stdin: ;; esac
+    "$binary" run -test -format json -config "$source" < "$config"
+}
+
 # 升级只替换二进制；用现有配置预检，不迁移协议、用户或证书。
 activate_core_binary() {
     local core="$1" candidate="$2" target="$3" config="$4" check_result stage backup="" was_running=0 i healthy=1
@@ -1343,7 +1352,7 @@ activate_core_binary() {
     fi
     if [ "$core" = sing-box ] || [ -f "$config" ]; then
         if [ "$core" = xray ]; then
-            check_result=$(XRAY_LOCATION_ASSET="$(dirname "$target")" "$candidate" run -test -config "$config" 2>&1)
+            check_result=$(XRAY_LOCATION_ASSET="$(dirname "$target")" validate_xray_config "$config" "$candidate" 2>&1)
         else
             check_result=$(singbox_preflight_current_config "$candidate" "$config" 2>&1)
         fi
@@ -4182,7 +4191,7 @@ commit_xray_candidate() {
             ;;
     esac
     if [ -x "${WORK_DIR}/xray" ]; then
-        check_result=$("${WORK_DIR}/xray" run -test -format json -config "$candidate" 2>&1) || {
+        check_result=$(validate_xray_config "$candidate" 2>&1) || {
             printf '%s\n' "$check_result"; rm -f "$candidate"; red_msg "Xray 配置验证失败。"; return 1
         }
     fi
@@ -4620,7 +4629,8 @@ do_install() {
         echo "$saved_inbounds" | jq -e '.[] | select(.tag=="ss")'       &>/dev/null && ENABLE_SS=1
         normalize_xray_reality_config 2>/dev/null || true
     fi
-    sync_xray_users
+    sync_xray_users || return 1
+    validate_xray_config "$CONFIG_FILE" || { red_msg "安装配置不兼容当前 Xray，已停止后续启动。"; return 1; }
     green_msg "  完成"
 
     yellow_msg "[6/6] 启动..."
@@ -4827,7 +4837,8 @@ edit_hy2_protocol() {
 }
 
 
-edit_protocol() {
+edit_protocol() (
+    load_conf
     local tag="$1" label="$2" uuid; uuid=$(get_uuid)
     local cur_port cur_method cur_pass cur_sni cur_path rk=""
 
@@ -4837,15 +4848,13 @@ edit_protocol() {
             cur_port=$(jq -r '.inbounds[]|select(.tag=="reality")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
             cur_sni=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames[0]//empty' "$CONFIG_FILE" 2>/dev/null)
             REALITY_SNI="$cur_sni" ;;
-        hy2)
-            cur_port=$(jq -r '.inbounds[]|select(.tag=="hy2")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
-            cur_sni=$(jq -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.serverName//"www.bing.com"' "$CONFIG_FILE" 2>/dev/null)
-            HY2_SNI="$cur_sni" ;;
+        hy2) edit_hy2_protocol; return $? ;;
         ss)
             cur_port=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
             cur_method=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.settings.method//empty' "$CONFIG_FILE" 2>/dev/null)
             cur_pass=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.settings.password//empty' "$CONFIG_FILE" 2>/dev/null)
             SS_METHOD="$cur_method" ;;
+        *) red_msg "未知协议。"; return 1 ;;
     esac
 
     clear
@@ -4932,34 +4941,40 @@ edit_protocol() {
         reality) echo -e "  SNI: ${cyan}${cur_sni}${re} → ${green}${new_sni}${re}"; echo -e "  端口: ${cyan}${cur_port}${re} → ${green}${new_port}${re}"; [ "$nsid" = "new" ] || [ "$nsid" = "NEW" ] || [ -n "$nsid" ] && echo -e "  ShortId: ${cyan}已更新 → ${green}${REALITY_SHORTID}${re}"; echo -e "  指纹: ${green}${new_fp}${re}" ;;
     esac
     echo -e " ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"; echo ""
-    echo -ne "  ${yellow}确认? (y/n) [y]: ${re}"; read cf; [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "已取消。"; return; }
+    echo -ne "  ${yellow}确认? (y/n) [y]: ${re}"; read cf; [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "已取消。"; return 1; }
+
+    begin_protocol_edit xray || return 1
+    local candidate rekey=false change_sid=false
+    candidate=$(mktemp "${CONFIG_FILE}.edit.XXXXXX") || return 1
 
     case "$tag" in
         ss)
             jq --arg m "$new_method" --arg p "$new_pass" --argjson pt "$new_port" --arg n "$new_net" \
                '(.inbounds[]|select(.protocol=="shadowsocks")|.settings.method)=$m|(.inbounds[]|select(.protocol=="shadowsocks")|.settings.password)=$p|(.inbounds[]|select(.protocol=="shadowsocks")|.port)=$pt|(.inbounds[]|select(.protocol=="shadowsocks")|.settings.network)=$n|(.inbounds[]|select(.protocol=="shadowsocks")|.tag)="ss"' \
-               "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+               "$CONFIG_FILE" > "$candidate" || { rm -f "$candidate"; return 1; }
             SS_METHOD="$new_method"; SS_PORT="$new_port" ;;
         reality)
-            jq --arg sni "$new_sni" --argjson pt "$new_port" \
-               '(.inbounds[]|select(.tag=="reality")|.port)=$pt|(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.target)=($sni+":443")|(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings|=del(.dest,.publicKey,.fingerprint))|(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames)=[$sni,""]' \
-               "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+            [[ "$rk" = new || "$rk" = NEW ]] && rekey=true
+            [ -n "$nsid" ] && change_sid=true
+            jq --arg sni "$new_sni" --argjson pt "$new_port" --arg priv "$REALITY_PRIV" --arg sid "$REALITY_SHORTID" \
+               --argjson rekey "$rekey" --argjson change_sid "$change_sid" '
+               (.inbounds[]|select(.tag=="reality")) |= (
+                   .port=$pt | .streamSettings.realitySettings |= (
+                       .target=($sni+":443") | del(.dest,.publicKey,.fingerprint) | .serverNames=[$sni,""] |
+                       if $rekey then .privateKey=$priv else . end |
+                       if $change_sid then .shortIds=[$sid] else . end
+                   )
+               )' "$CONFIG_FILE" > "$candidate" || { rm -f "$candidate"; return 1; }
             REALITY_PORT="$new_port"; REALITY_SNI="$new_sni"
-            if [ "$rk" = "new" ] || [ "$rk" = "NEW" ]; then
-                jq --arg priv "$REALITY_PRIV" \
-                   '(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.privateKey)=$priv|(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings|=del(.dest,.publicKey,.fingerprint))' \
-                   "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-            fi
-            if [ "$nsid" = "new" ] || [ "$nsid" = "NEW" ] || [ -n "$nsid" ]; then
-                local sid_val; [ -n "$REALITY_SHORTID" ] && sid_val="\"$REALITY_SHORTID\"" || sid_val="\"\""
-                jq --argjson s "[${sid_val}]" \
-                   '(.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.shortIds)=$s' \
-                   "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-            fi
             [ -n "$new_fp" ] && REALITY_FP="$new_fp"
             ;;
     esac
-    save_conf; yellow_msg "重启 Xray..."; systemctl restart xray 2>/dev/null; sleep 2; get_status; green_msg "完成"
+    commit_xray_candidate "$candidate" || return 1
+    save_conf || return 1
+    yellow_msg "重启 Xray..."
+    restart_protocol_runtime xray || { red_msg "Xray 重启失败。"; return 1; }
+    EDIT_COMMITTED=1
+    sleep 2; get_status; green_msg "完成"
 
     echo ""; echo -e " ${white}━━━ 更新后链接 ━━━${re}"; echo ""
     local ip hd cd cp; ip=$(get_ip); hd=$(get_argo_domain); cd=$(get_cdn); cp=$(get_cdn_port)
@@ -4969,9 +4984,10 @@ edit_protocol() {
         reality) [ -n "$ip" ] && echo -e "  ${green}$(gen_reality_link "$uuid" "$ip" "$new_port" "$new_sni" "$REALITY_PUB" "$REALITY_SHORTID")${re}" ;; 
     esac
     echo ""; echo -ne "  按回车继续..."; read -r
-}
+)
 
-add_single_protocol() {
+add_single_protocol() (
+    load_conf
     local proto="$1" uuid; uuid=$(get_uuid)
     local sm="$SS_METHOD" sp="" s_port="" s_net="tcp,udp"
     local r_sni="$REALITY_SNI" r_port="" r_sid="" r_fp="chrome"
@@ -5099,7 +5115,8 @@ add_single_protocol() {
     esac
     done
 
-    # === 写入 JSON ===
+    # 先构建候选配置，当前内核接受后才替换并重启。
+    begin_protocol_edit xray || return 1
     local new_inbound=""
     case "$proto" in
         ss)
@@ -5112,9 +5129,16 @@ add_single_protocol() {
             new_inbound='{"port":'"${r_port}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision","email":"argov-default"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"target":"'"${r_sni}"':443","serverNames":["'"${r_sni}"'",""],"privateKey":"'"${REALITY_PRIV}"'","shortIds":['"${sid_val}"']}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
             REALITY_PORT="$r_port"; REALITY_SNI="$r_sni"; REALITY_FP="$r_fp"; ENABLE_REALITY=1 ;;
     esac
-    jq --argjson i "$new_inbound" '.inbounds+=[$i]' "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-    sync_xray_users
-    save_conf; yellow_msg "重启 Xray..."; systemctl restart xray 2>/dev/null; sleep 2; get_status; green_msg "完成"
+    local candidate
+    candidate=$(mktemp "${CONFIG_FILE}.edit.XXXXXX") || return 1
+    jq --argjson i "$new_inbound" '.inbounds+=[$i]' "$CONFIG_FILE" > "$candidate" || { rm -f "$candidate"; return 1; }
+    commit_xray_candidate "$candidate" || return 1
+    sync_xray_users || return 1
+    save_conf || return 1
+    yellow_msg "重启 Xray..."
+    restart_protocol_runtime xray || { red_msg "Xray 重启失败。"; return 1; }
+    EDIT_COMMITTED=1
+    sleep 2; get_status; green_msg "完成"
 
     echo ""; echo -e " ${white}━━━ 链接 ━━━${re}"; echo ""
     local ip; ip=$(get_ip)
@@ -5123,7 +5147,7 @@ add_single_protocol() {
         reality) [ -n "$ip" ] && echo -e "  ${green}$(gen_reality_link "$uuid" "$ip" "$r_port" "$r_sni" "$REALITY_PUB" "$REALITY_SHORTID")${re}" ;;
     esac
     echo ""; echo -ne "  按回车返回..."; read -r
-}
+)
 
 
 #==============================================================================
@@ -5844,7 +5868,7 @@ PYEOF
     # Validate all configured cores before restarting services.
     local config_ok=1
     if [ "$result" -ne 0 ] || ! python3 -c "import json; json.load(open('${CONFIG_FILE}'))" 2>"$py_err" || \
-       [ ! -x "${WORK_DIR}/xray" ] || ! "${WORK_DIR}/xray" run -test -config "$CONFIG_FILE" >"$py_err" 2>&1; then
+       ! validate_xray_config "$CONFIG_FILE" >"$py_err" 2>&1; then
         config_ok=0
     fi
     if [ "$config_ok" = 1 ] && [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CONFIG_FILE" ]; then
@@ -5928,8 +5952,7 @@ PYCLEARSBRELAY
         python3 -c "import json; json.load(open('${CONFIG_FILE}'))" 2>/dev/null || clear_ok=0
         [ "$clear_ok" = 1 ] && [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CONFIG_FILE" ] && \
             { ! sb_is_installed || ! sing-box check -c "$SB_CONFIG_FILE" >/dev/null 2>&1; } && clear_ok=0
-        [ "$clear_ok" = 1 ] && [ -x "${WORK_DIR}/xray" ] && \
-            "${WORK_DIR}/xray" run -test -config "$CONFIG_FILE" >/dev/null 2>&1 || clear_ok=0
+        [ "$clear_ok" = 1 ] && validate_xray_config "$CONFIG_FILE" >/dev/null 2>&1 || clear_ok=0
 
         if [ "$clear_ok" = 1 ]; then
             systemctl restart xray 2>/dev/null
@@ -6582,7 +6605,8 @@ add_hy2_protocol() {
     )
 }
 
-delete_protocol() {
+delete_protocol() (
+    load_conf
     local has_reality=0 has_hy2=0 has_ss=0 choice tag label
     jq -e '.inbounds[]|select(.tag=="reality")' "$CONFIG_FILE" >/dev/null 2>&1 && has_reality=1
     jq -e '.inbounds[]|select(.tag=="hy2")' "$CONFIG_FILE" >/dev/null 2>&1 && has_hy2=1
@@ -6612,28 +6636,33 @@ delete_protocol() {
 
     echo -ne "  Delete ${label}? (y/n): "
     read cf
-    [ "$cf" = "y" ] || [ "$cf" = "Y" ] || { yellow_msg "Canceled."; return; }
+    [ "$cf" = "y" ] || [ "$cf" = "Y" ] || { yellow_msg "Canceled."; return 1; }
+
+    begin_protocol_edit xray || return 1
+    local candidate old_hy2_port old_hy2_mport
+    candidate=$(mktemp "${CONFIG_FILE}.edit.XXXXXX") || return 1
 
     case "$tag" in
         ss)
-            jq 'del(.inbounds[] | select(.tag=="ss" or .protocol=="shadowsocks"))' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+            jq 'del(.inbounds[] | select(.tag=="ss" or .protocol=="shadowsocks"))' "$CONFIG_FILE" > "$candidate" || { rm -f "$candidate"; return 1; }
             ;;
         hy2)
-            local old_hy2_port old_hy2_mport
             old_hy2_port=$(jq -r '.inbounds[]|select(.tag=="hy2")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
             old_hy2_mport=$(jq -r '.inbounds[]|select(.tag=="hy2")|(.streamSettings.finalmask.quicParams.udpHop.ports//.streamSettings.hysteriaSettings.quicParams.udpHop.ports[0]//empty)' "$CONFIG_FILE" 2>/dev/null)
-            disable_hy2_hop_rules "$old_hy2_port" "$old_hy2_mport"
-            jq --arg tag "$tag" 'del(.inbounds[] | select(.tag==$tag))' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+            jq --arg tag "$tag" 'del(.inbounds[] | select(.tag==$tag))' "$CONFIG_FILE" > "$candidate" || { rm -f "$candidate"; return 1; }
             ;;
         *)
-            jq --arg tag "$tag" 'del(.inbounds[] | select(.tag==$tag))' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+            jq --arg tag "$tag" 'del(.inbounds[] | select(.tag==$tag))' "$CONFIG_FILE" > "$candidate" || { rm -f "$candidate"; return 1; }
             ;;
     esac
-    save_conf
-    systemctl restart xray 2>/dev/null || true
+    commit_xray_candidate "$candidate" || return 1
+    save_conf || return 1
+    restart_protocol_runtime xray || { red_msg "Xray 重启失败。"; return 1; }
+    [ "$tag" = hy2 ] && disable_hy2_hop_rules "$old_hy2_port" "$old_hy2_mport"
+    EDIT_COMMITTED=1
     sleep 1
     green_msg "Deleted."
-}
+)
 
 manage_protocols() {
     load_conf

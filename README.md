@@ -294,4 +294,4 @@ Issues and pull requests are welcome. From the repository root, run the complete
 bash tests/argov_static_tests.sh argov.sh
 ```
 
-This checks Bash syntax, all seven Python suites (including interactive forms, configuration generation, subscriptions, migrations, relay configuration, and core compatibility), and the tunnel service log settings. Interactive tests require jq and openssl; Xray, Sing-box, and Mihomo binaries on PATH enable checks against the actual cores and local connection tests.
+This checks Bash syntax, all Python regression suites (including interactive forms, configuration generation, subscriptions, migrations, relay configuration, and core compatibility), and the tunnel service log settings. Interactive tests require jq and openssl; Xray, Sing-box, and Mihomo binaries on PATH enable checks against the actual cores and local connection tests. Use `tests/run_xray_matrix.py` to repeat the full suite for multiple Xray binaries; see the [Xray version matrix](docs/XRAY_VERSION_MATRIX_CN.md) for scope and usage.

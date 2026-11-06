@@ -82,7 +82,7 @@ P1 表示应优先修复的可靠性或配置一致性问题；P2 表示体验�
 | P1 | 首次安装：`interactive_install`、`build_xray_config` | Argo 已按启用状态生成；起始端口的派生值、CDN 端口、UUID、固定隧道输入尚未全部接入统一校验 | 统一输入和端口分配规则，同时保留旧部署身份 |
 | P1 | 订阅 HTTPS：`interactive_install`、`edit_subscription` | 2096 占用后顺序找空端口，可能得到 CF 不支持代理的端口；编辑端口未检查占用；保存后直接报成功 | 明确 CF 代理/直连模式；CF 模式仅在支持集合中选择；启动和请求检测后报告结果 |
 | P1 | 完整安装与服务：`do_install`、`sb_start`、`sb_restart`、`start_sub_server` | 部分依赖、内核及服务操作未传播失败；主流程仍可能输出成功；缺少完整安装回滚 | 各步骤返回明确状态，检查进程和监听；提供分项失败、重试和恢复 |
-| P1 | Xray Reality/SS 旧编辑与添加：`edit_protocol`、`add_single_protocol` | 部分输入直接参与算术或 JSON；改密码/加密方式缺少统一校验；没有 HY2 编辑的完整恢复 | 迁移到共用表单、候选文件和恢复流程；明确凭据变化的用户影响 |
+| P1 | Xray Reality/SS 旧编辑与添加：`edit_protocol`、`add_single_protocol` | 部分输入仍直接参与算术或 JSON；2026-11-06 已补候选配置预检及快照恢复，见 [Xray 多版本复核](XRAY_VERSION_MATRIX_CN.md) | 继续统一输入表单；明确凭据变化的用户影响 |
 | P1 | Sing-box 用户端口：`sb_sync_users` | 基准端口 `+10+序号`，未排除占用、其他用户已分配端口，也未检查上限 | 统一分配器，保留有效端口；冲突时显示受影响用户并重新选择 |
 | P1 | 删除协议：`delete_sb_protocol`、`delete_protocol` | Sing-box 缺少删除前统一确认；非法编号可能进入算术；删除或重启失败仍可能保存变量、报成功 | 显示受影响协议和用户；确认后事务删除，验证失败恢复 |
 | P2 | 用户身份：`user_db_op`、`manage_users` | 中文等字符静默清洗成 `user` 或短名；显示名、内部名、email 不完全一致；菜单中英文混用 | 区分显示名与内部 ID；保存前显示规范化结果；统一语言与取消约定 |

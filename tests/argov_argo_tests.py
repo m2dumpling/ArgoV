@@ -79,6 +79,7 @@ seed() {
     sync_xray_users || exit 4
     jq '.outbounds += [{tag:"preserved",protocol:"blackhole"}]' "$CONFIG_FILE" > "$TEST_ROOT/cfg.tmp"
     mv "$TEST_ROOT/cfg.tmp" "$CONFIG_FILE"
+    rm -f "$WORK_DIR/xray"
     cat > "$WORK_DIR/xray" <<'BIN'
 #!/bin/sh
 for candidate; do :; done
