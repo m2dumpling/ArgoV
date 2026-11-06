@@ -26,6 +26,8 @@ fi
 "$PYTHON_BIN" tests/argov_subscription_tests.py "$SCRIPT"
 "$PYTHON_BIN" tests/argov_user_migration_tests.py "$SCRIPT"
 ARGOV_TEST_SCRIPT="$SCRIPT" "$PYTHON_BIN" tests/argov_interactive_tests.py
+ARGOV_TEST_SCRIPT="$SCRIPT" "$PYTHON_BIN" tests/argov_argo_tests.py
+ARGOV_TEST_SCRIPT="$SCRIPT" "$PYTHON_BIN" tests/argov_refactor_tests.py
 "$PYTHON_BIN" tests/argov_relay_tests.py
 "$PYTHON_BIN" tests/argov_core_compat_tests.py
 

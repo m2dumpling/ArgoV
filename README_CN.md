@@ -40,6 +40,17 @@ bash <(curl -fsSL https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.
 
 安装向导会依次询问节点名称、是否启用 Argo、订阅方式、直连协议及可选 Sing-box 内核。
 
+Argo 默认勾选 VLESS 和 VMess，可在协议选择页用 `4` / `5` 分别切换，只安装其中一种。安装后进入 `ag → a` 独立管理：
+
+| 操作 | VLESS + Argo | VMess + Argo |
+| --- | --- | --- |
+| 添加（尚未添加时显示） | `a4` | `a5` |
+| 编辑内部端口、WS 路径 | `e1` | `e2` |
+| 查看当前参数和链接 | `v1` | `v2` |
+| 删除 | `d1` | `d2` |
+
+例如只删除 VMess：`ag → a → d2`，确认后刷新客户端订阅。VLESS、Reality、HY2 等其他节点继续保留；移除的协议不再出现在节点列表或订阅中，“保留数据重装”也不会重新添加。删除最后一种 Argo 协议时关闭共享隧道，再次添加时恢复隧道。已有部署从实际入站识别协议、端口及 WS 路径，无需重装迁移。新增、编辑、删除都会验证 Xray 配置，失败时回滚；两种 Argo 协议仍共用隧道域名、CDN 设置和用户凭据。仅修改一种协议时不会重启共享隧道。
+
 Sing-box 在首次安装中只询问是否安装内核；选择安装后准备内核和服务定义，暂不创建节点、证书或启动空服务。安装完成后，从 `s → s2` 添加 HY2、TUIC 等协议，配置验证通过后才启动节点并设置开机运行。已有 Sing-box 节点继续保留原配置。
 
 完成后运行：
@@ -61,6 +72,10 @@ NODE_NAME=Tokyo bash <(curl -fsSL https://raw.githubusercontent.com/m2dumpling/A
 安装后可用 `ag → a → e4` 编辑 Xray HY2；Sing-box 的五种协议均可在 `ag → s → s2` 中编辑，HY2 对应 `e1`。编辑时回车保留现值，输入错误会重新询问，可输入 `0` 或 `cancel` 返回。确认后会验证配置；HY2/Sing-box 协议编辑失败时恢复原配置、用户数据和证书。更换域名或证书后请刷新客户端订阅。
 
 完整的易用性审视、已修复项目及待改进项目见 [易用性与可编辑性审视](docs/USABILITY_REVIEW_CN.md)。
+
+配置持久化、服务平台适配、统计采集与 WARP 的兼容重构说明见 [脚本维护结构审视](docs/MAINTENANCE_REFACTOR_CN.md)。
+
+已有 VPS 更新本次版本无需重装：先输入 `0` 退出旧面板，再在 SSH 命令行运行 `ag`。新版会原子刷新已存在的订阅生成器和统计采集器，保留节点、凭据、证书及核心版本；详见 [已部署 VPS 更新指南](docs/UPGRADE_CN.md)。
 
 开发分支的真实服务器测试步骤见 [VPS 灰度验证指南](docs/VPS_CANARY_VALIDATION_CN.md)，包含干净安装、旧部署升级、检查命令和验收标准。
 

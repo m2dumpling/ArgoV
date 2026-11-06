@@ -2,12 +2,73 @@ package sub
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/m2dumpling/ArgoV/core/internal/config"
 )
+
+func TestArgoLinksFollowPresentInbounds(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		tags                 []string
+		mode                 string
+		wantVLESS, wantVMess bool
+	}{
+		{"both", []string{"vless-ws", "vmess-ws"}, "temp", true, true},
+		{"only vless", []string{"vless-ws"}, "temp", true, false},
+		{"only vmess", []string{"vmess-ws"}, "fixed-token", false, true},
+		{"removed", nil, "temp", false, false},
+		{"skipped", []string{"vless-ws", "vmess-ws"}, "skip", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			settings := map[string]string{"NODE_NAME": `节点 "one" #1`, "ARGO_MODE": tc.mode,
+				"LAST_ARGO_DOMAIN": "temp.example.com", "ARGO_FIXED_DOMAIN": "fixed.example.com"}
+			xray := &config.XrayConfig{}
+			for _, tag := range tc.tags {
+				xray.Inbounds = append(xray.Inbounds, config.Inbound{Tag: tag, StreamSettings: config.StreamSettings{
+					WSSettings: &config.WSSettings{Path: "/custom-" + tag},
+				}})
+			}
+			raw, err := base64.StdEncoding.DecodeString(GenerateLinks(config.User{Name: "default", UUID: "test-uuid"}, settings, xray, ""))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var gotVLESS, gotVMess bool
+			for _, line := range strings.Split(string(raw), "\n") {
+				if strings.HasPrefix(line, "vless://") {
+					gotVLESS = true
+					u, err := url.Parse(line)
+					if err != nil || u.Query().Get("path") != "/custom-vless-ws?ed=2560" {
+						t.Fatalf("incorrect VLESS path: %s (%v)", line, err)
+					}
+				}
+				if strings.HasPrefix(line, "vmess://") {
+					gotVMess = true
+					data, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(line, "vmess://"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					var vmess map[string]string
+					if err := json.Unmarshal(data, &vmess); err != nil {
+						t.Fatal(err)
+					}
+					if vmess["path"] != "/custom-vmess-ws?ed=2560" || vmess["ps"] != settings["NODE_NAME"]+"-VMess" {
+						t.Fatalf("incorrect VMess parameters: %v", vmess)
+					}
+					if tc.mode == "fixed-token" && vmess["host"] != settings["ARGO_FIXED_DOMAIN"] {
+						t.Fatal("fixed host changed")
+					}
+				}
+			}
+			if gotVLESS != tc.wantVLESS || gotVMess != tc.wantVMess {
+				t.Fatalf("got VLESS=%v VMess=%v, want %v %v", gotVLESS, gotVMess, tc.wantVLESS, tc.wantVMess)
+			}
+		})
+	}
+}
 
 func TestHY2LegacyIdentityAndClientOptions(t *testing.T) {
 	settings := map[string]string{

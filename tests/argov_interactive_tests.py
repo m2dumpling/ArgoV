@@ -446,6 +446,8 @@ sing-box version || exit 2
     def test_adding_first_singbox_protocol_builds_config_and_enables_service_once(self):
         self.run_shell(r'''
 confirm_changes() { return 0; }
+sb_is_installed() { return 0; }
+sing-box() { [ "$1" != version ] || echo 'sing-box version 1.14.3'; }
 configure_sb_protocol() {
     SB_ENABLE=true; SB_HY2_ENABLE=true; SB_HY2_PORT=24567
     SB_HY2_SNI=hy2.example.com; SB_HY2_PSK=preserved-secret; SB_HY2_CONGESTION=bbr
@@ -692,7 +694,10 @@ printf '\n__RESULT__\n'; jq -n --arg mode "$mode" '{mode:$mode}'
     def test_hopping_ranges_cannot_overlap_other_protocols(self):
         self.run_shell(r'''
 ARGO_MODE=skip; ARGO_PORT=8080
-configured_port_conflict 8080 SB_REALITY_PORT || exit 5
+if configured_port_conflict 8080 SB_REALITY_PORT; then exit 5; fi
+ARGO_MODE=temp; ENABLE_VLESS_ARGO=1; ENABLE_VMESS_ARGO=0
+configured_port_conflict 8080 SB_REALITY_PORT || exit 6
+if configured_port_conflict "$VMESS_WS_PORT" SB_REALITY_PORT; then exit 7; fi
 ENABLE_HY2=1; HY2_PORT=24567; HY2_MPORT=47000-48000
 SB_HY2_ENABLE=true; SB_HY2_PORT=24568
 SB_HY2_HOP_ENABLE=true; SB_HY2_HOP_START=49000; SB_HY2_HOP_END=50000
@@ -805,7 +810,7 @@ done
     def test_standalone_subscription_generates_hy2_settings(self):
         # Execute the exact emitted sub_gen.sh, redirecting only host paths/IP discovery.
         source = SCRIPT.read_text(encoding="utf-8")
-        marker = 'cat > "${WORK_DIR}/sub_gen.sh" << \'SUBEOF\'\n'
+        marker = 'cat << \'SUBEOF\'\n'
         generator = source.split(marker, 1)[1].split("\nSUBEOF", 1)[0]
         generator = generator.replace("/etc/xray/", str(self.root) + "/")
         generator = generator.replace("/etc/sing-box/", str(self.root / "sb") + "/")
@@ -819,7 +824,7 @@ ARGO_MODE=fixed-token; ARGO_FIXED_DOMAIN=argo.example.com
 ENABLE_HY2=1; HY2_PORT=24567; HY2_SNI=xray.example.com; HY2_CONGESTION=brutal
 HY2_UP_MBPS=80; HY2_DOWN_MBPS=120; HY2_PIN_SHA256=$(printf 'ab%.0s' {1..32})
 build_hy2_inbound "$HY2_PORT" "$HY2_SNI" 11111111-1111-4111-8111-111111111111 default "" brutal 80 120 |
-    jq '{inbounds:[.],current_cdn:"cdn.example.com",current_cdn_port:443}' > "$WORK_DIR/config.json"
+    jq --argjson argo "$(build_argo_inbounds 11111111-1111-4111-8111-111111111111)" '{inbounds:([.]+$argo),current_cdn:"cdn.example.com",current_cdn_port:443}' > "$WORK_DIR/config.json"
 SB_ENABLE=true; SB_HY2_ENABLE=true; SB_HY2_PORT=24568; SB_HY2_SNI=sb.example.com
 SB_HY2_PSK='p@ss:"&\word'; SB_HY2_CONGESTION=brutal
 SB_HY2_UP_MBPS=40; SB_HY2_DOWN_MBPS=60; SB_HY2_PIN_SHA256=$(printf 'cd%.0s' {1..32})

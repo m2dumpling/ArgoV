@@ -29,10 +29,15 @@ type Client struct {
 }
 
 type StreamSettings struct {
+	WSSettings       *WSSettings       `json:"wsSettings"`
 	TLSSettings      *TLSSettings      `json:"tlsSettings"`
 	HysteriaSettings *HysteriaSettings `json:"hysteriaSettings"`
 	RealitySettings  *RealitySettings  `json:"realitySettings"`
 	Finalmask        *Finalmask        `json:"finalmask"`
+}
+
+type WSSettings struct {
+	Path string `json:"path"`
 }
 
 type TLSSettings struct {

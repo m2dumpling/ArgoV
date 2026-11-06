@@ -171,23 +171,29 @@ require_count(
     "delete_protocol must have exactly one active definition to avoid editing dead code",
     flags=re.MULTILINE,
 )
+conf_registry = re.search(r"^ARGOV_CONF_KEYS=\((.*?)^\)", text, re.MULTILINE | re.DOTALL)
+if not conf_registry:
+    fail("persistent fields must have a shared registry")
+conf_keys = conf_registry.group(1).split()
+if len(conf_keys) != len(set(conf_keys)):
+    fail("the persistent field registry must not contain duplicate keys")
 require(
-    r"save_var NODE_NAME \"\$NODE_NAME\"",
-    "NODE_NAME must be persisted through save_var so quotes cannot break argov.conf",
+    r'save_conf\(\)[\s\S]*for key in "\$\{ARGOV_CONF_KEYS\[@\]\}"[\s\S]*save_var "\$key"',
+    "all persistent fields must use the common shell-escaping writer",
 )
+require(
+    r'is_safe_conf_file\(\)[\s\S]*ARGOV_CONF_KEYS',
+    "safe loading must use the same registry as saving",
+)
+if "NODE_NAME" not in conf_keys:
+    fail("NODE_NAME must remain a persistent field")
 for var in ("XRAY_VERSION", "XRAY_SHA256", "CLOUDFLARED_VERSION", "CLOUDFLARED_SHA256"):
     require(
         rf"{var}=\"\$\{{{var}:-",
         f"{var} must have a backward-compatible default in load_conf",
     )
-    require(
-        rf"save_var {var} \"\${var}\"",
-        f"{var} must be persisted through save_var",
-    )
-    require(
-        rf"is_safe_conf_file\(\)[\s\S]*{var}",
-        f"{var} must be accepted by the safe config whitelist",
-    )
+    if var not in conf_keys:
+        fail(f"{var} must be persisted and accepted by safe loading")
 require(
     r"do_install\(\)[\s\S]*download_xray_zip_checked \"\$ARCH_ARG\" \"\$\{WORK_DIR\}/xray\.zip\"[\s\S]*download_cloudflared_checked \"\$CF_ARCH\" \"\$\{WORK_DIR\}/argo\"",
     "initial install must use checked Xray/cloudflared download helpers",
@@ -444,10 +450,8 @@ require(
     r'build_hy2_inbound\(\)[\s\S]*"sniffing":\{"enabled":true,"destOverride":\["http","tls","quic"\],"routeOnly":true\}',
     "Hysteria2 inbound must enable route-only sniffing so server-side domain split rules can match QUIC/TLS destinations",
 )
-require(
-    r'build_xray_config\(\)[\s\S]*"tag":"argo-in"[\s\S]*"sniffing":\{"enabled":true,"destOverride":\["http","tls","quic"\],"routeOnly":true\}[\s\S]*"tag":"vless-ws"[\s\S]*"sniffing":\{"enabled":true,"destOverride":\["http","tls","quic"\],"routeOnly":true\}[\s\S]*"tag":"vmess-ws"[\s\S]*"sniffing":\{"enabled":true,"destOverride":\["http","tls","quic"\],"routeOnly":true\}',
-    "Argo/VLESS WS/VMess WS inbounds must enable route-only sniffing for relay domain split rules",
-)
+# Argo sniffing and fallback behavior are checked against generated JSON in
+# argov_argo_tests.py, including single-protocol and disabled deployments.
 require(
     r'ROUTE_SNIFF_TAGS = \{"argo-in", "vless-ws", "vmess-ws", "reality", "hy2", "ss"\}[\s\S]*inbound\["sniffing"\] = dict\(ROUTE_SNIFFING\)',
     "existing proxy inbounds must be patched with route-only sniffing during user sync and relay apply",
@@ -560,7 +564,7 @@ require(
     "Sing-box fallback downloads must use versioned Linux release assets",
 )
 require(
-    r"SB_HY2_CONGESTION[\s\S]*up_mbps[\s\S]*down_mbps[\s\S]*save_var SB_HY2_CONGESTION",
+    r"SB_HY2_CONGESTION[\s\S]*up_mbps[\s\S]*down_mbps",
     "Sing-box Hysteria2 congestion settings must be persisted and emitted",
 )
 require(

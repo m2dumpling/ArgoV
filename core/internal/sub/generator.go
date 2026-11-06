@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"net"
@@ -56,16 +57,23 @@ func GenerateLinks(user config.User, argov map[string]string, xray *config.XrayC
 	if cdnPort == "" {
 		cdnPort = "443"
 	}
-	if argoDomain != "" {
-		// VLESS
-		vless := fmt.Sprintf("vless://%s@%s:%s?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=%%2Fvless-argo%%3Fed%%3D2560#%s-VLESS",
-			uuid, cdnDomain, cdnPort, argoDomain, argoDomain, nodeName)
-		links += vless + "\n"
-
-		// VMESS
-		vmessJson := fmt.Sprintf(`{"v":"2","ps":"%s-VMess","add":"%s","port":"%s","id":"%s","aid":"0","scy":"none","net":"ws","type":"none","host":"%s","path":"/vmess-argo?ed=2560","tls":"tls","sni":"%s","alpn":"","fp":""}`,
-			nodeName, cdnDomain, cdnPort, uuid, argoDomain, argoDomain)
-		links += "vmess://" + base64.StdEncoding.EncodeToString([]byte(vmessJson)) + "\n"
+	if argoDomain != "" && argov["ARGO_MODE"] != "skip" && xray != nil {
+		for _, inbound := range xray.Inbounds {
+			switch inbound.Tag {
+			case "vless-ws":
+				path := argoWSPath(inbound, "/vless-argo")
+				links += fmt.Sprintf("vless://%s@%s:%s?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=%s#%s\n",
+					uuid, cdnDomain, cdnPort, url.QueryEscape(argoDomain), url.QueryEscape(argoDomain), url.QueryEscape(path), url.PathEscape(nodeName+"-VLESS"))
+			case "vmess-ws":
+				data, _ := json.Marshal(map[string]string{
+					"v": "2", "ps": nodeName + "-VMess", "add": cdnDomain, "port": cdnPort,
+					"id": uuid, "aid": "0", "scy": "none", "net": "ws", "type": "none",
+					"host": argoDomain, "path": argoWSPath(inbound, "/vmess-argo"),
+					"tls": "tls", "sni": argoDomain, "alpn": "", "fp": "",
+				})
+				links += "vmess://" + base64.StdEncoding.EncodeToString(data) + "\n"
+			}
+		}
 	}
 
 	// Reality
@@ -150,6 +158,20 @@ func GenerateLinks(user config.User, argov map[string]string, xray *config.XrayC
 	}
 
 	return base64.StdEncoding.EncodeToString([]byte(strings.TrimSpace(links)))
+}
+
+func argoWSPath(inbound config.Inbound, fallback string) string {
+	path := fallback
+	if inbound.StreamSettings.WSSettings != nil && inbound.StreamSettings.WSSettings.Path != "" {
+		path = inbound.StreamSettings.WSSettings.Path
+	}
+	if strings.Contains(path, "?ed=") || strings.Contains(path, "&ed=") {
+		return path
+	}
+	if strings.Contains(path, "?") {
+		return path + "&ed=2560"
+	}
+	return path + "?ed=2560"
 }
 
 func hy2ClientOptions(argov map[string]string, tls *config.TLSSettings) string {

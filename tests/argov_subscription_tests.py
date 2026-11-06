@@ -113,7 +113,7 @@ def assert_singbox_hy2_conversion(text: str) -> None:
 
 
 def assert_sub_generator_contract(text: str) -> None:
-    sub_gen = extract_block(text, "cat > \"${WORK_DIR}/sub_gen.sh\" << 'SUBEOF'", "SUBEOF")
+    sub_gen = extract_block(text, "cat << 'SUBEOF'", "SUBEOF")
     require("USER_TOKEN=\"${1:-}\"" in sub_gen, "sub_gen must accept an explicit per-user token")
     require("($tok == \"\" or $tok == $dtok)" in sub_gen, "empty/default token must resolve to default user")
     require(".users[]|select(.token==$tok and (.enabled//true))" in sub_gen, "per-user token lookup must ignore disabled users")

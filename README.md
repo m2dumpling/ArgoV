@@ -40,6 +40,21 @@ bash <(curl -fsSL https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.
 
 The installer walks through node name, optional Argo, subscriptions, direct protocols, and the optional Sing-box core.
 
+VLESS-Argo and VMess-Argo are selected by default; toggle them independently with `4` / `5` on the protocol selection page. After installation, open `ag → a`:
+
+| Action | VLESS + Argo | VMess + Argo |
+| --- | --- | --- |
+| Add (when absent) | `a4` | `a5` |
+| Edit internal port / WS path | `e1` | `e2` |
+| View parameters and link | `v1` | `v2` |
+| Delete | `d1` | `d2` |
+
+To remove only VMess, use `ag → a → d2`, confirm, then refresh the client subscription. Other nodes are preserved, and reinstalling with data retained does not re-add removed protocols. Removing the last Argo protocol stops the shared tunnel; adding one again restores it. Existing deployments retain their actual enabled protocols, ports and WS paths without reinstalling. Changes validate the Xray configuration and roll back on failure. Both protocols share the tunnel hostname, CDN settings and user credentials; changing one protocol does not restart their shared tunnel.
+
+See the [maintenance review (Chinese)](docs/MAINTENANCE_REFACTOR_CN.md) for the persistence, service lifecycle, traffic collection and WARP refactoring, compatibility checks and remaining limitations.
+
+Existing VPS deployments do not need reinstalling for this update. Exit the old panel with `0`, then run `ag` again from the SSH shell. The new panel atomically refreshes existing subscription and traffic helpers while retaining deployed nodes, credentials, certificates and core versions. See the [VPS upgrade guide (Chinese)](docs/UPGRADE_CN.md).
+
 The initial Sing-box step only asks whether to install the core. It prepares the binary and service definition without creating nodes or certificates, or starting an empty service. Add HY2, TUIC, or other protocols later through `s → s2`; after configuration validation, the first node starts the service and enables it at boot. Existing Sing-box node configurations are preserved.
 
 When it finishes, open the panel with:

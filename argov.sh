@@ -59,8 +59,10 @@ SUB_TOKEN="${SUB_TOKEN:-}"
 NODE_NAME="${NODE_NAME:-ArgoV}"
 
 # --- 可选协议 ---
-ENABLE_VLESS_ARGO=1
-ENABLE_VMESS_ARGO=1
+ENABLE_VLESS_ARGO="${ENABLE_VLESS_ARGO:-1}"
+ENABLE_VMESS_ARGO="${ENABLE_VMESS_ARGO:-1}"
+VLESS_WS_PATH="${VLESS_WS_PATH:-/vless-argo}"
+VMESS_WS_PATH="${VMESS_WS_PATH:-/vmess-argo}"
 ENABLE_REALITY=0
 ENABLE_HY2=0
 ENABLE_SS=0
@@ -132,13 +134,13 @@ cf_arch() {
 # Alpine / systemd 兼容层
 [ -f /etc/alpine-release ] && IS_ALPINE=1 || IS_ALPINE=0
 systemctl() {
-    local cmd="$1"; shift
+    local cmd="$1" result=0; shift
     if [ "$IS_ALPINE" = 1 ]; then
         case "$cmd" in
-            start|stop|restart) for s in "$@"; do rc-service "$s" "$cmd" 2>/dev/null; done ;;
-            enable)  for s in "$@"; do rc-update add "$s" default 2>/dev/null; done ;;
-            disable) for s in "$@"; do rc-update del "$s" default 2>/dev/null; done ;;
-            is-active) rc-service "$1" status 2>/dev/null | grep -q "started" ;;
+            start|stop|restart) local s; for s in "$@"; do rc-service "$s" "$cmd" 2>/dev/null || result=1; done; return "$result" ;;
+            enable)  local s; for s in "$@"; do rc-update add "$s" default 2>/dev/null || result=1; done; return "$result" ;;
+            disable) local s; for s in "$@"; do rc-update del "$s" default 2>/dev/null || result=1; done; return "$result" ;;
+            is-active) core_service_active "$1" ;;
             daemon-reload) true ;;  # Alpine 不需要
         esac
     else
@@ -160,6 +162,34 @@ get_argo_domain() {
     echo "$d"
 }
 get_uuid()   { jq -r 'first(.inbounds[]? | (.settings.clients // .settings.users // [])[]? | .id // .auth // empty) // empty' "$CONFIG_FILE" 2>/dev/null; }
+argo_protocol_present() {
+    [ "${ARGO_MODE:-temp}" != skip ] || return 1
+    jq -e --arg tag "$1" 'any(.inbounds[]?; .tag==$tag)' "$CONFIG_FILE" >/dev/null 2>&1
+}
+argo_enabled() {
+    [ "${ARGO_MODE:-temp}" != skip ] && { [ "$ENABLE_VLESS_ARGO" = 1 ] || [ "$ENABLE_VMESS_ARGO" = 1 ]; }
+}
+load_argo_state() {
+    # 旧部署从真实入站迁移；重装不得复活已删除的协议或重置自定义路径。
+    if [ -f "$CONFIG_FILE" ] && jq -e '.inbounds | type=="array"' "$CONFIG_FILE" >/dev/null 2>&1; then
+        ENABLE_VLESS_ARGO=0; ENABLE_VMESS_ARGO=0
+        if argo_protocol_present vless-ws; then
+            ENABLE_VLESS_ARGO=1
+            VLESS_WS_PORT=$(jq -r '.inbounds[]|select(.tag=="vless-ws")|.port' "$CONFIG_FILE")
+            VLESS_WS_PATH=$(jq -r '.inbounds[]|select(.tag=="vless-ws")|.streamSettings.wsSettings.path//"/vless-argo"' "$CONFIG_FILE")
+        fi
+        if argo_protocol_present vmess-ws; then
+            ENABLE_VMESS_ARGO=1
+            VMESS_WS_PORT=$(jq -r '.inbounds[]|select(.tag=="vmess-ws")|.port' "$CONFIG_FILE")
+            VMESS_WS_PATH=$(jq -r '.inbounds[]|select(.tag=="vmess-ws")|.streamSettings.wsSettings.path//"/vmess-argo"' "$CONFIG_FILE")
+        fi
+        local argo_port
+        argo_port=$(jq -r '.inbounds[]?|select(.tag=="argo-in")|.port' "$CONFIG_FILE")
+        [ -n "$argo_port" ] && ARGO_PORT="$argo_port"
+    fi
+    argo_enabled && SKIP_ARGO=0 || SKIP_ARGO=1
+    return 0
+}
 get_cdn() {
     local v=""
     [ -f "$CONFIG_FILE" ] && v=$(jq -r '.current_cdn // empty' "$CONFIG_FILE" 2>/dev/null)
@@ -240,9 +270,9 @@ configured_port_conflict() {
         SB_HY2_PORT SB_TUIC_PORT SB_ANYTLS_PORT SB_REALITY_PORT SB_SS_PORT; do
         [ "$key" = "$owner" ] && continue
         case "$key" in
-            # The Xray template reserves these internal listeners even when
-            # the Cloudflare tunnel is skipped.
-            ARGO_PORT|VLESS_WS_PORT|VMESS_WS_PORT) : ;;
+            ARGO_PORT) argo_enabled || continue ;;
+            VLESS_WS_PORT) argo_enabled && [ "$ENABLE_VLESS_ARGO" = 1 ] || continue ;;
+            VMESS_WS_PORT) argo_enabled && [ "$ENABLE_VMESS_ARGO" = 1 ] || continue ;;
             REALITY_PORT) [ "${ENABLE_REALITY:-0}" != 1 ] && continue ;;
             HY2_PORT) [ "${ENABLE_HY2:-0}" != 1 ] && continue ;;
             SS_PORT) [ "${ENABLE_SS:-0}" != 1 ] && continue ;;
@@ -443,7 +473,6 @@ disable_hy2_hop_rules() {
     dport="${mport//-/:}"
     systemctl stop argov-hy2-hop 2>/dev/null || true
     systemctl disable argov-hy2-hop 2>/dev/null || true
-    rc-service argov-hy2-hop stop 2>/dev/null || true
     rc-update del argov-hy2-hop default 2>/dev/null || true
     if [ -n "$listen_port" ] && [ -n "$mport" ] && command -v iptables >/dev/null 2>&1; then
         while iptables -t nat -C PREROUTING -p udp --dport "$dport" -j REDIRECT --to-ports "$listen_port" 2>/dev/null; do
@@ -947,62 +976,92 @@ PYPERUSER
     fi
 }
 
-sb_collect_user_traffic() {
-    # 读取每用户端口的 iptables 计数器, 更新 argov_users.json
-    local py; py=$(py_bin); [ -z "$py" ] && return
-    [ ! -f "$ARGOV_USERS_FILE" ] && return
+# 前台采集与守护进程使用同一份实现；安装产物仍是独立脚本。
+emit_sb_collect_script() {
+    cat << 'SBCOLLECTEOF'
+#!/usr/bin/env bash
+ARGOV_USERS_FILE="${ARGOV_USERS_FILE:-/etc/xray/argov_users.json}"
+py=$(command -v python3 || command -v python || true)
+[ -z "$py" ] && exit 0
+[ ! -f "$ARGOV_USERS_FILE" ] && exit 0
 
-    # 收集所有用户端口
-    local port_map=""
-    local users_json; users_json=$(jq -c '.users[] | select(.name != "default")' "$ARGOV_USERS_FILE" 2>/dev/null)
-    while IFS= read -r user; do
-        [ -z "$user" ] && continue
-        local uname; uname=$(echo "$user" | jq -r '.name')
-        local sb_ports; sb_ports=$(echo "$user" | jq -c '.sb_ports // {}')
+# 锁覆盖采样与写入，避免旧采样回写导致下一轮重复累加。
+{ exec 9>"$(dirname -- "$ARGOV_USERS_FILE")/.argov.lock"; } 2>/dev/null || exit 1
+if command -v flock >/dev/null 2>&1; then flock -x 9 || exit 1; fi
+port_map=""; rules_loaded=0
+users_json=$(jq -c '.users[] | select(.name != "default")' "$ARGOV_USERS_FILE" 2>/dev/null) || exit 1
+while IFS= read -r user; do
+    [ -z "$user" ] && continue
+    uname=$(echo "$user" | jq -r '.name')
+    sb_ports=$(echo "$user" | jq -c '.sb_ports // {}')
+    for proto in hy2 tuic anytls reality ss; do
+        up=$(echo "$sb_ports" | jq -r ".${proto} // 0")
+        [ "$up" -gt 0 ] 2>/dev/null && [ "$up" -le 65535 ] 2>/dev/null || continue
+        if [ "$rules_loaded" = 0 ]; then
+            input_rules=$(iptables -L INPUT -v -n -x 2>/dev/null) || exit 1
+            output_rules=$(iptables -L OUTPUT -v -n -x 2>/dev/null) || exit 1
+            rules_loaded=1
+        fi
+        tin=$(printf '%s\n' "$input_rules" | awk -v p="$up" '/argov-traffic-in/ {for (i=1;i<=NF;i++) if ($i=="dpt:"p) {sum+=$2; break}} END {print sum+0}')
+        tout=$(printf '%s\n' "$output_rules" | awk -v p="$up" '/argov-traffic-out/ {for (i=1;i<=NF;i++) if ($i=="spt:"p) {sum+=$2; break}} END {print sum+0}')
+        port_map="${port_map}${uname} ${proto} ${tin} ${tout}\n"
+    done
+done <<< "$users_json"
 
-        for proto in hy2 tuic anytls reality ss; do
-            local up; up=$(echo "$sb_ports" | jq -r ".${proto} // 0")
-            if [ "$up" -gt 0 ]; then
-                # 读取该端口的 iptables INPUT 计数器 (入站=用户的 uplink, 即服务器 downlink)
-                local tin; tin=$(iptables -L INPUT -v -n -x 2>/dev/null | awk -v p="$up" '$NF ~ p {sum+=$2} END {print sum+0}')
-                local tout; tout=$(iptables -L OUTPUT -v -n -x 2>/dev/null | awk -v p="$up" '$NF ~ p {sum+=$2} END {print sum+0}')
-                port_map="${port_map}${uname} ${proto} ${tin} ${tout}\n"
-            fi
-        done
-    done <<< "$users_json"
+[ -z "$port_map" ] && exit 0
 
-    [ -z "$port_map" ] && return
-
-    begin_argov_lock
-    printf '%b' "$port_map" | "$py" - "$ARGOV_USERS_FILE" << 'PYEOF'
-import json, sys
-
+# stdin 承载程序，fd 3 承载采样；不使用共享的 /tmp Python 文件。
+"$py" - "$ARGOV_USERS_FILE" 3< <(printf '%b' "$port_map") << 'PYEOF'
+import json, sys, os, tempfile
 users_file = sys.argv[1]
 with open(users_file, 'r') as f:
     data = json.load(f)
-
-# 读取端口流量映射: name proto in_bytes out_bytes
 user_traffic = {}
-for line in sys.stdin:
+for line in os.fdopen(3):
     parts = line.strip().split()
-    if len(parts) != 4:
-        continue
+    if len(parts) != 4: continue
     name, proto, tin, tout = parts[0], parts[1], int(parts[2]), int(parts[3])
     user_traffic.setdefault(name, {'up': 0, 'down': 0})
-    user_traffic[name]['up'] += tout   # 服务器出站 = 用户下行(uplink)
-    user_traffic[name]['down'] += tin  # 服务器入站 = 用户上行(downlink)
-
+    user_traffic[name]['up'] += tout
+    user_traffic[name]['down'] += tin
 for u in data.get('users', []):
     name = u.get('name', '')
     if name in user_traffic:
-        u['used_up'] = u.get('used_up', 0) + user_traffic[name]['up']
-        u['used_down'] = u.get('used_down', 0) + user_traffic[name]['down']
-
-with open(users_file + '.tmp', 'w') as f:
-    json.dump(data, f, indent=2, ensure_ascii=False)
-import os; os.replace(users_file + '.tmp', users_file)
+        # delta 模式: iptables 计数器是累积值, 只加增量
+        prev_in = u.get('sb_prev_in') or 0
+        prev_out = u.get('sb_prev_out') or 0
+        # 兼容旧存储：sb_prev_in 对应 OUTPUT，sb_prev_out 对应 INPUT。
+        cur_in = user_traffic[name]['up']
+        cur_out = user_traffic[name]['down']
+        delta_up = cur_out - prev_out
+        delta_down = cur_in - prev_in
+        if delta_up > 0:
+            u['used_up'] = u.get('used_up', 0) + delta_up
+        if delta_down > 0:
+            u['used_down'] = u.get('used_down', 0) + delta_down
+        u['sb_prev_in'] = cur_in
+        u['sb_prev_out'] = cur_out
+        # 检查配额
+        quota = u.get('quota_bytes', 0)
+        if quota > 0:
+            total = (u.get('used_up') or 0) + (u.get('used_down') or 0)
+            if total >= quota:
+                u['enabled'] = False
+fd, candidate = tempfile.mkstemp(prefix='.sb-users.', dir=os.path.dirname(users_file) or '.')
+try:
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(candidate, users_file)
+finally:
+    if os.path.exists(candidate):
+        os.unlink(candidate)
 PYEOF
-    end_argov_lock
+exit "$?"
+SBCOLLECTEOF
+}
+sb_collect_user_traffic() {
+    [ -f "$ARGOV_USERS_FILE" ] || return 0
+    ARGOV_USERS_FILE="$ARGOV_USERS_FILE" bash <(emit_sb_collect_script)
 }
 
 start_sb_stats_service() {
@@ -1018,7 +1077,7 @@ while true; do
     sleep 60
     [ "${SB_ENABLE:-false}" != "true" ] && continue
     [ ! -f "$ARGOV_USERS_FILE" ] && continue
-    # 调用 argov.sh 中的采集函数 (通过 source 加载)
+    # 调用安装时生成的独立采集脚本
     if [ -f "${WORK_DIR}/sb_collect.sh" ]; then
         bash "${WORK_DIR}/sb_collect.sh" 2>/dev/null || true
     fi
@@ -1026,77 +1085,7 @@ done
 SBSTATSEOF
 
     # 独立采集脚本 (避免 source 整个 argov.sh)
-    cat > "${WORK_DIR}/sb_collect.sh" << 'SBCOLLECTEOF'
-#!/usr/bin/env bash
-ARGOV_USERS_FILE="/etc/xray/argov_users.json"
-py=$(command -v python3 || command -v python || true)
-[ -z "$py" ] && exit 0
-[ ! -f "$ARGOV_USERS_FILE" ] && exit 0
-
-port_map=""
-users_json=$(jq -c '.users[] | select(.name != "default")' "$ARGOV_USERS_FILE" 2>/dev/null)
-while IFS= read -r user; do
-    [ -z "$user" ] && continue
-    uname=$(echo "$user" | jq -r '.name')
-    sb_ports=$(echo "$user" | jq -c '.sb_ports // {}')
-    for proto in hy2 tuic anytls reality ss; do
-        up=$(echo "$sb_ports" | jq -r ".${proto} // 0")
-        [ "$up" = "0" ] && continue
-        tin=$(iptables -L INPUT -v -n -x 2>/dev/null | awk -v p="$up" '/argov-traffic-in/ && $0 ~ "dpt:"p {sum+=$2} END {print sum+0}')
-        tout=$(iptables -L OUTPUT -v -n -x 2>/dev/null | awk -v p="$up" '/argov-traffic-out/ && $0 ~ "spt:"p {sum+=$2} END {print sum+0}')
-        port_map="${port_map}${uname} ${proto} ${tin} ${tout}\n"
-    done
-done <<< "$users_json"
-
-[ -z "$port_map" ] && exit 0
-
-# 写 Python 脚本到临时文件 (避免 pipe+heredoc 争抢 stdin)
-cat > /tmp/.sb_collect.py << 'PYEOF'
-import json, sys, os
-users_file = sys.argv[1]
-with open(users_file, 'r') as f:
-    data = json.load(f)
-user_traffic = {}
-for line in sys.stdin:
-    parts = line.strip().split()
-    if len(parts) != 4: continue
-    name, proto, tin, tout = parts[0], parts[1], int(parts[2]), int(parts[3])
-    user_traffic.setdefault(name, {'up': 0, 'down': 0})
-    user_traffic[name]['up'] += tout
-    user_traffic[name]['down'] += tin
-for u in data.get('users', []):
-    name = u.get('name', '')
-    if name in user_traffic:
-        # delta 模式: iptables 计数器是累积值, 只加增量
-        prev_in = u.get('sb_prev_in') or 0
-        prev_out = u.get('sb_prev_out') or 0
-        cur_in = user_traffic[name]['up']
-        cur_out = user_traffic[name]['down']
-        delta_up = cur_out - prev_out
-        delta_down = cur_in - prev_in
-        if delta_up > 0:
-            u['used_up'] = u.get('used_up', 0) + delta_up
-        if delta_down > 0:
-            u['used_down'] = u.get('used_down', 0) + delta_down
-        u['sb_prev_in'] = cur_in
-        u['sb_prev_out'] = cur_out
-        # 检查配额
-        quota = u.get('quota_bytes', 0)
-        if quota > 0:
-            total = u['used_up'] + u['used_down']
-            if total >= quota:
-                u['enabled'] = False
-with open(users_file + '.tmp', 'w') as f:
-    json.dump(data, f, indent=2, ensure_ascii=False)
-os.replace(users_file + '.tmp', users_file)
-PYEOF
-# 管道喂数据给 Python 脚本 (heredoc 和 pipe 分两步, 不抢 stdin)
-exec 9>"/etc/xray/.argov.lock" 2>/dev/null
-flock -x 9 2>/dev/null || true
-printf '%b' "$port_map" | "$py" /tmp/.sb_collect.py "$ARGOV_USERS_FILE"
-rm -f /tmp/.sb_collect.py
-exec 9>&- 2>/dev/null || true
-SBCOLLECTEOF
+    install_generated_helper sb_collect.sh emit_sb_collect_script || return 1
     chmod +x "${WORK_DIR}/sb_stats.sh" "${WORK_DIR}/sb_collect.sh"
 
     # 安装系统服务
@@ -1136,8 +1125,6 @@ SBSYSTEMD
 stop_sb_stats_service() {
     systemctl stop argov-sb-stats 2>/dev/null || true
     systemctl disable argov-sb-stats 2>/dev/null || true
-    rc-service argov-sb-stats stop 2>/dev/null || true
-    rc-update del argov-sb-stats default 2>/dev/null || true
     rm -f /etc/systemd/system/argov-sb-stats.service /etc/init.d/argov-sb-stats "${WORK_DIR}/sb_stats.sh" "${WORK_DIR}/sb_collect.sh" 2>/dev/null
 }
 save_var() { printf "%s=%q\n" "$1" "$2"; }
@@ -1184,14 +1171,14 @@ singbox_runtime_config_ready() {
 }
 sb_start() {
     singbox_runtime_config_ready || return 1
-    if [ "$IS_ALPINE" = 1 ]; then rc-service sing-box start; else systemctl start sing-box; fi
+    systemctl start sing-box
 }
 sb_stop() {
-    if [ "$IS_ALPINE" = 1 ]; then rc-service sing-box stop; else systemctl stop sing-box; fi
+    systemctl stop sing-box
 }
 sb_restart() {
     singbox_runtime_config_ready || return 1
-    if [ "$IS_ALPINE" = 1 ]; then rc-service sing-box restart; else systemctl restart sing-box; fi
+    systemctl restart sing-box
 }
 stop_singbox_for_uninstall() {
     sb_stop
@@ -1306,7 +1293,9 @@ singbox_archive_url() {
 
 core_service_active() {
     if [ "${IS_ALPINE:-0}" = 1 ]; then
-        rc-service "$1" status 2>/dev/null | grep -q 'started'
+        local status
+        status=$(rc-service "$1" status 2>/dev/null) || return 1
+        printf '%s\n' "$status" | grep -q 'started'
     else
         command systemctl is-active --quiet "$1" 2>/dev/null
     fi
@@ -1533,7 +1522,6 @@ EOF
 disable_sb_hy2_hop_rules() {
     systemctl stop argov-sb-hy2-hop 2>/dev/null || true
     systemctl disable argov-sb-hy2-hop 2>/dev/null || true
-    rc-service argov-sb-hy2-hop stop 2>/dev/null || true
     rc-update del argov-sb-hy2-hop default 2>/dev/null || true
     while iptables -t nat -L PREROUTING -n --line-numbers 2>/dev/null | grep -q "argov-sb-hy2-hop"; do
         local ln; ln=$(iptables -t nat -L PREROUTING -n --line-numbers 2>/dev/null | grep "argov-sb-hy2-hop" | head -1 | awk '{print $1}')
@@ -1883,6 +1871,28 @@ is_safe_conf_value() {
     done
     [ -z "$quote" ]
 }
+# 持久化字段的唯一清单：保存与安全加载必须使用同一集合。
+ARGOV_CONF_KEYS=(
+    NODE_NAME ARGO_PORT VLESS_WS_PORT VMESS_WS_PORT CDN_PORT
+    ENABLE_VLESS_ARGO ENABLE_VMESS_ARGO VLESS_WS_PATH VMESS_WS_PATH CDN_DOMAIN
+    ARGO_MODE ARGO_AUTH ARGO_FIXED_DOMAIN UUID_CUSTOM REALITY_PORT
+    HY2_PORT HY2_MPORT HY2_CONGESTION HY2_UP_MBPS HY2_DOWN_MBPS
+    SS_PORT SUB_PORT SUB_PATH SUB_DOMAIN SUB_TOKEN
+    AGG_TOKEN REALITY_SNI REALITY_FP HY2_SNI SS_METHOD
+    ENABLE_REALITY ENABLE_HY2 ENABLE_SS HY2_CERT_FILE HY2_KEY_FILE
+    REALITY_PRIV REALITY_PUB REALITY_SHORTID LAST_ARGO_DOMAIN RELAY_ENABLED
+    RELAY_LINK RELAY_MODE XRAY_VERSION XRAY_SHA256 CLOUDFLARED_VERSION
+    CLOUDFLARED_SHA256 SB_ENABLE SB_VERSION SB_HY2_ENABLE SB_HY2_CONGESTION
+    SB_HY2_UP_MBPS SB_HY2_DOWN_MBPS SB_HY2_BBR_PROFILE SB_TUIC_ENABLE SB_ANYTLS_ENABLE
+    SB_REALITY_ENABLE SB_SS_ENABLE SB_HY2_PORT SB_TUIC_PORT SB_ANYTLS_PORT
+    SB_REALITY_PORT SB_SS_PORT SB_REALITY_PRIV SB_REALITY_PUB SB_REALITY_SID
+    SB_ANYTLS_PSK SB_TUIC_UUID SB_TUIC_PSK SB_HY2_PSK SB_SS_PSK
+    SB_ANYTLS_USER SB_HY2_HOP_ENABLE SB_HY2_HOP_START SB_HY2_HOP_END SB_HY2_HOP_MODE
+    SB_HY2_HOP_INTERVAL SB_HY2_HOP_MIN SB_HY2_HOP_MAX HY2_PIN_SHA256 SB_HY2_PIN_SHA256
+    SB_TUIC_PIN_SHA256 SB_SNI SB_CERT_FILE SB_KEY_FILE SB_HY2_SNI
+    SB_TUIC_SNI SB_ANYTLS_SNI SB_REALITY_SNI SB_SS_METHOD SB_HY2_CERT_FILE
+    SB_HY2_KEY_FILE TRAFFIC_IN TRAFFIC_OUT
+)
 is_safe_conf_file() {
     local file="$1" line key
     [ -f "$file" ] || return 0
@@ -1892,8 +1902,8 @@ is_safe_conf_file() {
         esac
         [[ "$line" =~ ^[A-Z][A-Z0-9_]*= ]] || return 1
         key="${line%%=*}"
-        case "$key" in
-            NODE_NAME|ARGO_PORT|VLESS_WS_PORT|VMESS_WS_PORT|CDN_PORT|CDN_DOMAIN|ARGO_MODE|ARGO_AUTH|ARGO_FIXED_DOMAIN|UUID_CUSTOM|REALITY_PORT|HY2_PORT|HY2_MPORT|HY2_CONGESTION|HY2_UP_MBPS|HY2_DOWN_MBPS|SS_PORT|SUB_PORT|SUB_PATH|SUB_DOMAIN|SUB_TOKEN|REALITY_SNI|REALITY_FP|HY2_SNI|SS_METHOD|ENABLE_REALITY|ENABLE_HY2|ENABLE_SS|HY2_CERT_FILE|HY2_KEY_FILE|REALITY_PRIV|REALITY_PUB|REALITY_SHORTID|LAST_ARGO_DOMAIN|RELAY_ENABLED|RELAY_LINK|RELAY_MODE|XRAY_VERSION|XRAY_SHA256|CLOUDFLARED_VERSION|CLOUDFLARED_SHA256|AGG_TOKEN|SB_ENABLE|SB_VERSION|SB_HY2_ENABLE|SB_HY2_CONGESTION|SB_HY2_UP_MBPS|SB_HY2_DOWN_MBPS|SB_HY2_BBR_PROFILE|SB_TUIC_ENABLE|SB_ANYTLS_ENABLE|SB_REALITY_ENABLE|SB_SS_ENABLE|SB_HY2_PORT|SB_TUIC_PORT|SB_ANYTLS_PORT|SB_REALITY_PORT|SB_SS_PORT|SB_REALITY_PRIV|SB_REALITY_PUB|SB_REALITY_SID|SB_ANYTLS_PSK|SB_TUIC_UUID|SB_TUIC_PSK|SB_HY2_PSK|SB_SS_PSK|SB_ANYTLS_USER|SB_SNI|SB_CERT_FILE|SB_KEY_FILE|TRAFFIC_IN|TRAFFIC_OUT|SB_HY2_HOP_ENABLE|SB_HY2_HOP_START|SB_HY2_HOP_END|SB_HY2_HOP_MODE|SB_HY2_HOP_INTERVAL|SB_HY2_HOP_MIN|SB_HY2_HOP_MAX|HY2_PIN_SHA256|SB_HY2_PIN_SHA256|SB_TUIC_PIN_SHA256|SB_HY2_SNI|SB_TUIC_SNI|SB_ANYTLS_SNI|SB_REALITY_SNI|SB_SS_METHOD|SB_HY2_CERT_FILE|SB_HY2_KEY_FILE) ;;
+        case " ${ARGOV_CONF_KEYS[*]} " in
+            *" $key "*) ;;
             *) return 1 ;;
         esac
         case "$line" in
@@ -2351,6 +2361,7 @@ load_conf() {
     fi
     TRAFFIC_IN="${TRAFFIC_IN:-0}"; TRAFFIC_OUT="${TRAFFIC_OUT:-0}"
     [ -n "$HY2_MPORT" ] && ! is_port_range "$HY2_MPORT" && HY2_MPORT=""
+    load_argo_state
 }
 save_conf() {
     mkdir -p "$WORK_DIR" 2>/dev/null
@@ -2359,42 +2370,10 @@ save_conf() {
     begin_argov_lock
     {
         echo "# ArgoV — $(date '+%Y-%m-%d %H:%M:%S')"
-        save_var NODE_NAME "$NODE_NAME"
-        save_var ARGO_PORT "$ARGO_PORT"; save_var VLESS_WS_PORT "$VLESS_WS_PORT"
-        save_var VMESS_WS_PORT "$VMESS_WS_PORT"; save_var CDN_PORT "$CDN_PORT"
-        save_var CDN_DOMAIN "$CDN_DOMAIN"; save_var ARGO_MODE "$ARGO_MODE"; save_var ARGO_AUTH "$ARGO_AUTH"
-        save_var ARGO_FIXED_DOMAIN "$ARGO_FIXED_DOMAIN"; save_var UUID_CUSTOM "$UUID_CUSTOM"
-        save_var REALITY_PORT "$REALITY_PORT"; save_var HY2_PORT "$HY2_PORT"; save_var HY2_MPORT "$HY2_MPORT"
-        save_var HY2_CONGESTION "$HY2_CONGESTION"; save_var HY2_UP_MBPS "$HY2_UP_MBPS"; save_var HY2_DOWN_MBPS "$HY2_DOWN_MBPS"
-        save_var SS_PORT "$SS_PORT"; save_var SUB_PORT "$SUB_PORT"; save_var SUB_PATH "$SUB_PATH"; save_var SUB_DOMAIN "$SUB_DOMAIN"; save_var SUB_TOKEN "$SUB_TOKEN"; save_var AGG_TOKEN "$AGG_TOKEN"
-        save_var REALITY_SNI "$REALITY_SNI"; save_var REALITY_FP "$REALITY_FP"; save_var HY2_SNI "$HY2_SNI"; save_var SS_METHOD "$SS_METHOD"
-        save_var ENABLE_REALITY "$ENABLE_REALITY"; save_var ENABLE_HY2 "$ENABLE_HY2"; save_var ENABLE_SS "$ENABLE_SS"
-        save_var HY2_CERT_FILE "$HY2_CERT_FILE"; save_var HY2_KEY_FILE "$HY2_KEY_FILE"
-        save_var REALITY_PRIV "$REALITY_PRIV"; save_var REALITY_PUB "$REALITY_PUB"
-        save_var REALITY_SHORTID "$REALITY_SHORTID"; save_var LAST_ARGO_DOMAIN "$LAST_ARGO_DOMAIN"
-        save_var RELAY_ENABLED "$RELAY_ENABLED"; save_var RELAY_LINK "$RELAY_LINK"; save_var RELAY_MODE "$RELAY_MODE"
-        save_var XRAY_VERSION "$XRAY_VERSION"; save_var XRAY_SHA256 "$XRAY_SHA256"
-        save_var CLOUDFLARED_VERSION "$CLOUDFLARED_VERSION"; save_var CLOUDFLARED_SHA256 "$CLOUDFLARED_SHA256"
-        # Sing-box
-        save_var SB_ENABLE "$SB_ENABLE"; save_var SB_VERSION "$SB_VERSION"
-        save_var SB_HY2_ENABLE "$SB_HY2_ENABLE"; save_var SB_HY2_CONGESTION "$SB_HY2_CONGESTION"; save_var SB_HY2_UP_MBPS "$SB_HY2_UP_MBPS"; save_var SB_HY2_DOWN_MBPS "$SB_HY2_DOWN_MBPS"; save_var SB_HY2_BBR_PROFILE "$SB_HY2_BBR_PROFILE"
-        save_var SB_TUIC_ENABLE "$SB_TUIC_ENABLE"; save_var SB_ANYTLS_ENABLE "$SB_ANYTLS_ENABLE"
-        save_var SB_REALITY_ENABLE "$SB_REALITY_ENABLE"; save_var SB_SS_ENABLE "$SB_SS_ENABLE"
-        save_var SB_HY2_PORT "$SB_HY2_PORT"; save_var SB_TUIC_PORT "$SB_TUIC_PORT"; save_var SB_ANYTLS_PORT "$SB_ANYTLS_PORT"
-        save_var SB_REALITY_PORT "$SB_REALITY_PORT"; save_var SB_SS_PORT "$SB_SS_PORT"
-        save_var SB_REALITY_PRIV "$SB_REALITY_PRIV"; save_var SB_REALITY_PUB "$SB_REALITY_PUB"; save_var SB_REALITY_SID "$SB_REALITY_SID"
-        save_var SB_ANYTLS_PSK "$SB_ANYTLS_PSK"; save_var SB_TUIC_UUID "$SB_TUIC_UUID"; save_var SB_TUIC_PSK "$SB_TUIC_PSK"
-        save_var SB_HY2_PSK "$SB_HY2_PSK"; save_var SB_SS_PSK "$SB_SS_PSK"; save_var SB_ANYTLS_USER "$SB_ANYTLS_USER"
-        save_var SB_HY2_HOP_ENABLE "$SB_HY2_HOP_ENABLE"; save_var SB_HY2_HOP_START "$SB_HY2_HOP_START"; save_var SB_HY2_HOP_END "$SB_HY2_HOP_END"
-        save_var SB_HY2_HOP_MODE "$SB_HY2_HOP_MODE"; save_var SB_HY2_HOP_INTERVAL "$SB_HY2_HOP_INTERVAL"; save_var SB_HY2_HOP_MIN "$SB_HY2_HOP_MIN"; save_var SB_HY2_HOP_MAX "$SB_HY2_HOP_MAX"
-        save_var HY2_PIN_SHA256 "$HY2_PIN_SHA256"; save_var SB_HY2_PIN_SHA256 "$SB_HY2_PIN_SHA256"; save_var SB_TUIC_PIN_SHA256 "$SB_TUIC_PIN_SHA256"
-
-        save_var SB_SNI "$SB_SNI"; save_var SB_CERT_FILE "$SB_CERT_FILE"; save_var SB_KEY_FILE "$SB_KEY_FILE"
-        save_var SB_HY2_SNI "$SB_HY2_SNI"; save_var SB_TUIC_SNI "$SB_TUIC_SNI"
-        save_var SB_ANYTLS_SNI "$SB_ANYTLS_SNI"; save_var SB_REALITY_SNI "$SB_REALITY_SNI"
-        save_var SB_SS_METHOD "$SB_SS_METHOD"
-        save_var SB_HY2_CERT_FILE "$SB_HY2_CERT_FILE"; save_var SB_HY2_KEY_FILE "$SB_HY2_KEY_FILE"
-        save_var TRAFFIC_IN "$TRAFFIC_IN"; save_var TRAFFIC_OUT "$TRAFFIC_OUT"
+        local key
+        for key in "${ARGOV_CONF_KEYS[@]}"; do
+            save_var "$key" "${!key-}"
+        done
     } > "$tmp" && mv -f "$tmp" "$USER_CONF"
     local rc=$?
     [ "$rc" -ne 0 ] && rm -f "$tmp" 2>/dev/null || true
@@ -2600,13 +2579,268 @@ edit_subscription() {
     done
 }
 
+emit_sub_generator() {
+    cat << 'SUBEOF'
+#!/usr/bin/env bash
+JQ=/usr/bin/jq
+CFG=/etc/xray/config.json; LOG=/etc/xray/argo.log; CONF=/etc/xray/argov.conf; USERS=/etc/xray/argov_users.json
+USER_TOKEN="${1:-}"
+[ -f "$CONF" ] && . "$CONF"
+NODE_NAME="${NODE_NAME:-ArgoV}"; MODE="${ARGO_MODE:-temp}"; FIXED="${ARGO_FIXED_DOMAIN:-}"
+CDN_PORT="${CDN_PORT:-443}"
+get_domain() {
+    local d
+    [ -f "$LOG" ] && for i in 1 2 3 4 5; do
+        d=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' "$LOG" | tail -1)
+        [ -n "$d" ] && echo "$d" && return; sleep 2
+    done
+    echo "$LAST_ARGO_DOMAIN"
+}
+b64() { printf '%s' "$1" | base64 -w0 2>/dev/null || printf '%s' "$1" | base64 | tr -d '\n'; }
+cert_pin_sha256() {
+    [ -f "$1" ] || return 1
+    openssl x509 -in "$1" -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//' | tr '[:lower:]' '[:upper:]'
+}
+certificate_uri_options() {
+    local pin="${1//:/}"
+    printf '&insecure=1&allowInsecure=0'
+    [[ "$pin" =~ ^[[:xdigit:]]{64}$ ]] && printf '&pinSHA256=%s' "$pin"
+    return 0
+}
+[ -f "$USERS" ] || exit 1
+# 默认用户永远有效（即使被误禁用）；其他用户需 enabled=true
+UQ='if ($tok == "" or $tok == $dtok) then (.users[]|select(.name=="default")) else (.users[]|select(.token==$tok and (.enabled//true))) end'
+USER_JSON=$($JQ -c --arg tok "$USER_TOKEN" --arg dtok "${SUB_TOKEN:-}" "$UQ" "$USERS" 2>/dev/null | head -n 1)
+[ -z "$USER_JSON" ] && exit 1
+uuid=$(printf '%s' "$USER_JSON" | $JQ -r '.uuid//empty')
+user_name=$(printf '%s' "$USER_JSON" | $JQ -r '.name//"user"')
+[ -z "$uuid" ] && exit 1
+IS_DEFAULT_USER=0
+[ "$user_name" = "default" ] && IS_DEFAULT_USER=1
+INCLUDE_CUSTOM=0
+if [ "$IS_DEFAULT_USER" = "1" ]; then
+    INCLUDE_CUSTOM=1
+fi
+cdn=$($JQ -r '.current_cdn//"xx.cloudflare.182682.xyz"' "$CFG")
+cp=$($JQ -r '.current_cdn_port//443' "$CFG")
+hd=$(get_domain)
+ip=""; for s in ifconfig.me icanhazip.com checkip.amazonaws.com api.ipify.org; do
+    ip=$(curl -s --max-time 3 "$s" 2>/dev/null || wget -qO- -T3 "$s" 2>/dev/null)
+    echo "$ip" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' && break || ip=""
+done
+[ "$MODE" = "fixed-token" ] && hd="$FIXED"
+[ "$MODE" = "skip" ] && hd=""
+uri_encode() { "$JQ" -rn --arg value "$1" '$value | @uri'; }
+uri_host() { if [[ "$1" == *:* && "$1" != \[*\] ]]; then printf '[%s]' "$1"; else printf '%s' "$1"; fi; }
+ip_host=$(uri_host "$ip")
+links=""
+if [ -n "$hd" ]; then
+    ws_client_path() {
+        local tag="$1" path
+        path=$("$JQ" -r --arg tag "$tag" '.inbounds[]?|select(.tag==$tag)|.streamSettings.wsSettings.path//empty' "$CFG" | head -n 1)
+        path="${path:-$2}"
+        case "$path" in
+            *\?ed=*|*\&ed=*) ;;
+            *\?*) path="${path}&ed=2560" ;;
+            *) path="${path}?ed=2560" ;;
+        esac
+        printf '%s' "$path"
+    }
+    if "$JQ" -e 'any(.inbounds[]?; .tag=="vless-ws")' "$CFG" >/dev/null; then
+        links+="vless://${uuid}@${cdn}:${cp}?encryption=none&security=tls&sni=${hd}&type=ws&host=${hd}&path=$(uri_encode "$(ws_client_path vless-ws /vless-argo)")#$(uri_encode "${NODE_NAME}-VLESS")"$'\n'
+    fi
+    if "$JQ" -e 'any(.inbounds[]?; .tag=="vmess-ws")' "$CFG" >/dev/null; then
+        j=$("$JQ" -nc --arg name "${NODE_NAME}-VMess" --arg cdn "$cdn" --arg port "$cp" --arg uuid "$uuid" --arg host "$hd" --arg path "$(ws_client_path vmess-ws /vmess-argo)" \
+            '{v:"2",ps:$name,add:$cdn,port:$port,id:$uuid,aid:"0",scy:"none",net:"ws",type:"none",host:$host,path:$path,tls:"tls",sni:$host,alpn:"",fp:""}')
+        links+="vmess://$(b64 "$j")"$'\n'
+    fi
+fi
+client_hy2_bandwidth() {
+    local mode_key="${1}_CONGESTION" up_key="${1}_UP_MBPS" down_key="${1}_DOWN_MBPS"
+    local up="${!up_key}" down="${!down_key}"
+    # ArgoV subscription hints for Mihomo; portable URI clients may ignore them.
+    # Server upload is client download, and server download is client upload.
+    if [ "${!mode_key}" = brutal ] && [[ "$up" =~ ^[0-9]{1,7}$ && "$down" =~ ^[0-9]{1,7}$ ]] && ((10#$up > 0 && 10#$down > 0)); then
+        printf '&up=%smbps&down=%smbps' "$down" "$up"
+    fi
+    return 0
+}
+if $JQ -e '.inbounds[]|select(.tag=="reality")' "$CFG" >/dev/null 2>&1 && [ -n "$ip" ]; then
+    rport=$($JQ -r '.inbounds[]|select(.tag=="reality")|.port' "$CFG")
+    rs=$($JQ -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames[0]' "$CFG")
+    rpub="${REALITY_PUB:-}"
+    [ -n "$rpub" ] || rpub=$($JQ -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.publicKey//empty' "$CFG")
+    rsid=$($JQ -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.shortIds[0]//empty' "$CFG")
+    [ -n "$rsid" ] && rsid="&sid=${rsid}" || rsid=""
+    [ -n "$rport" ] && links+="vless://${uuid}@${ip_host}:${rport}?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=${rs}&pbk=${rpub}&fp=${REALITY_FP:-chrome}${rsid}#$(uri_encode "${NODE_NAME}-Reality")"$'\n'
+fi
+# 自定义链接（用户自添加）
+if [ "$INCLUDE_CUSTOM" = "1" ] && [ -f /etc/xray/custom_links.txt ]; then
+    while IFS= read -r cl; do
+        [ -n "$cl" ] && links+="${cl}"$'\n'
+    done < /etc/xray/custom_links.txt
+fi
+if $JQ -e '.inbounds[]|select(.tag=="hy2")' "$CFG" >/dev/null 2>&1 && [ -n "$ip" ]; then
+    hport=$($JQ -r '.inbounds[]|select(.tag=="hy2")|.port' "$CFG")
+    hsni=$($JQ -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.serverName//empty' "$CFG")
+    hmport=$($JQ -r '.inbounds[]|select(.tag=="hy2")|(.streamSettings.finalmask.quicParams.udpHop.ports//.streamSettings.hysteriaSettings.quicParams.udpHop.ports[0]//empty)' "$CFG")
+    hmport_qs=""; [ -n "$hmport" ] && hmport_qs="&mport=${hmport}"
+    hcert=$($JQ -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.certificates[0].certificateFile//empty' "$CFG")
+    hpin=$(cert_pin_sha256 "${hcert:-${HY2_CERT_FILE:-}}")
+    hy2_extra=$(certificate_uri_options "${hpin:-${HY2_PIN_SHA256:-}}")
+    hy2_extra+="$(client_hy2_bandwidth HY2)"
+    [ -n "$hport" ] && links+="hysteria2://${uuid}@${ip_host}:${hport}?sni=${hsni:-${HY2_SNI:-}}&alpn=h3${hmport_qs}${hy2_extra}#$(uri_encode "${NODE_NAME}-HY2")"$'\n'
+fi
+# ===== Sing-box 节点 (仅 default 用户获取共享端口; 限额用户用专属端口) =====
+SB_CFG="/etc/sing-box/config.json"
+if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CFG" ] && [ -n "$ip" ]; then
+    SB_SNI="${SB_SNI:-addons.mozilla.org}"
+    sb_hcert=$($JQ -r '.inbounds[]?|select(.tag=="sb-hy2")|.tls.certificate_path//empty' "$SB_CFG" | head -n 1)
+    sb_hpin=$(cert_pin_sha256 "${sb_hcert:-${SB_HY2_CERT_FILE:-${SB_CERT_FILE:-}}}")
+    sb_hy2_tls=$(certificate_uri_options "${sb_hpin:-${SB_HY2_PIN_SHA256:-}}")
+    sb_tcert=$($JQ -r '.inbounds[]?|select(.tag=="sb-tuic")|.tls.certificate_path//empty' "$SB_CFG" | head -n 1)
+    sb_tpin=$(cert_pin_sha256 "${sb_tcert:-${SB_CERT_FILE:-}}")
+    sb_tuic_tls=$(certificate_uri_options "${sb_tpin:-${SB_TUIC_PIN_SHA256:-}}")
+    sb_hy2_name="${NODE_NAME}-HY2"
+    sb_reality_name="${NODE_NAME}-Reality"
+    sb_ss_name="${NODE_NAME}-SS"
+    $JQ -e '.inbounds[]|select(.tag=="hy2")' "$CFG" >/dev/null 2>&1 && sb_hy2_name="${NODE_NAME}-SingBox-HY2"
+    $JQ -e '.inbounds[]|select(.tag=="reality")' "$CFG" >/dev/null 2>&1 && sb_reality_name="${NODE_NAME}-SingBox-Reality"
+    $JQ -e '.inbounds[]|select(.tag=="ss")' "$CFG" >/dev/null 2>&1 && sb_ss_name="${NODE_NAME}-SingBox-SS"
+    if [ "$IS_DEFAULT_USER" = "1" ]; then
+        # 共享节点 — 仅 default 用户. 直接读 conf 变量, 不 jq 查 config.json
+        sb_hy2_hop=""
+        [ "${SB_HY2_HOP_ENABLE:-false}" = "true" ] && sb_hy2_hop="&mport=${SB_HY2_HOP_START}-${SB_HY2_HOP_END}"
+        if [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ -n "${SB_HY2_PORT:-}" ] && [ -n "${SB_HY2_PSK:-}" ]; then
+            sb_hy2_pin="$sb_hy2_tls"
+            sb_hy2_pin+="$(client_hy2_bandwidth SB_HY2)"
+            links+="hy2://$(uri_encode "$SB_HY2_PSK")@${ip_host}:${SB_HY2_PORT}?sni=${SB_HY2_SNI:-$SB_SNI}&alpn=h3${sb_hy2_hop}${sb_hy2_pin}#$(uri_encode "$sb_hy2_name")"$'\n'
+        fi
+        if [ "${SB_TUIC_ENABLE:-false}" = "true" ] && [ -n "${SB_TUIC_PORT:-}" ] && [ -n "${SB_TUIC_UUID:-}" ]; then
+            links+="tuic://${SB_TUIC_UUID}:$(uri_encode "$SB_TUIC_PSK")@${ip_host}:${SB_TUIC_PORT}?congestion_control=bbr&alpn=h3&sni=${SB_TUIC_SNI:-$SB_SNI}${sb_tuic_tls}#$(uri_encode "${NODE_NAME}-TUIC")"$'\n'
+        fi
+        if [ "${SB_ANYTLS_ENABLE:-false}" = "true" ] && [ -n "${SB_ANYTLS_PORT:-}" ] && [ -n "${SB_ANYTLS_PSK:-}" ]; then
+            links+="anytls://$(uri_encode "$SB_ANYTLS_PSK")@${ip_host}:${SB_ANYTLS_PORT}?security=reality&sni=${SB_ANYTLS_SNI:-$SB_SNI}&fp=chrome&pbk=${SB_REALITY_PUB:-}&sid=${SB_REALITY_SID:-}#$(uri_encode "${NODE_NAME}-AnyTLS")"$'\n'
+        fi
+        if [ "${SB_REALITY_ENABLE:-false}" = "true" ] && [ -n "${SB_REALITY_PORT:-}" ]; then
+            links+="vless://${uuid}@${ip_host}:${SB_REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SB_REALITY_SNI:-$SB_SNI}&pbk=${SB_REALITY_PUB:-}&fp=chrome&sid=${SB_REALITY_SID:-}#$(uri_encode "$sb_reality_name")"$'\n'
+        fi
+        if [ "${SB_SS_ENABLE:-false}" = "true" ] && [ -n "${SB_SS_PORT:-}" ] && [ -n "${SB_SS_PSK:-}" ]; then
+            sb_ss_b64=$(printf '%s' "${SB_SS_METHOD:-${SS_METHOD:-aes-256-gcm}}:${SB_SS_PSK}" | base64 -w0 2>/dev/null || printf '%s' "${SB_SS_METHOD:-${SS_METHOD:-aes-256-gcm}}:${SB_SS_PSK}" | base64 | tr -d '\n')
+            links+="ss://${sb_ss_b64}@${ip_host}:${SB_SS_PORT}#$(uri_encode "$sb_ss_name")"$'\n'
+        fi
+    else
+    # v2: 限额用户获取自己专属的 Sing-box 节点 (独立端口+密码, 可追踪流量)
+        sb_ports=$(printf '%s' "$USER_JSON" | $JQ -c '.sb_ports // {}' 2>/dev/null)
+        sb_creds=$(printf '%s' "$USER_JSON" | $JQ -c '.sb_creds // {}' 2>/dev/null)
+        # HY2 不走限额用户 — 跳变兼容性问题
+        # TUIC per-user
+        tuic_up=$(echo "$sb_ports" | $JQ -r '.tuic // 0')
+        if [ "${SB_TUIC_ENABLE:-false}" = true ] && [ "$tuic_up" -gt 0 ]; then
+            t_uuid=$(echo "$sb_creds" | $JQ -r '.tuic_uuid // ""')
+            t_pass=$(echo "$sb_creds" | $JQ -r '.tuic_pass // ""')
+            [ -n "$t_uuid" ] && links+="tuic://${t_uuid}:$(uri_encode "$t_pass")@${ip_host}:${tuic_up}?congestion_control=bbr&alpn=h3&sni=${SB_TUIC_SNI:-$SB_SNI}${sb_tuic_tls}#$(uri_encode "${NODE_NAME}-TUIC")"$'\n'
+        fi
+        # AnyTLS per-user
+        anytls_up=$(echo "$sb_ports" | $JQ -r '.anytls // 0')
+        if [ "${SB_ANYTLS_ENABLE:-false}" = true ] && [ "$anytls_up" -gt 0 ]; then
+            a_pass=$(echo "$sb_creds" | $JQ -r '.anytls_pass // ""')
+            [ -n "$a_pass" ] && links+="anytls://$(uri_encode "$a_pass")@${ip_host}:${anytls_up}?security=reality&sni=${SB_ANYTLS_SNI:-$SB_SNI}&fp=chrome&pbk=${SB_REALITY_PUB:-}&sid=${SB_REALITY_SID:-}#$(uri_encode "${NODE_NAME}-AnyTLS")"$'\n'
+        fi
+        # Reality per-user
+        reality_up=$(echo "$sb_ports" | $JQ -r '.reality // 0')
+        if [ "${SB_REALITY_ENABLE:-false}" = true ] && [ "$reality_up" -gt 0 ]; then
+            links+="vless://${uuid}@${ip_host}:${reality_up}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SB_REALITY_SNI:-$SB_SNI}&pbk=${SB_REALITY_PUB:-}&fp=chrome&sid=${SB_REALITY_SID:-}#$(uri_encode "$sb_reality_name")"$'\n'
+        fi
+        # SS per-user
+        ss_up=$(echo "$sb_ports" | $JQ -r '.ss // 0')
+        if [ "${SB_SS_ENABLE:-false}" = true ] && [ "$ss_up" -gt 0 ]; then
+            ss_pass=$(echo "$sb_creds" | $JQ -r '.ss_pass // ""')
+            ss_m="${SB_SS_METHOD:-${SS_METHOD:-aes-256-gcm}}"
+            [ -n "$ss_pass" ] && { ss_b64=$(printf '%s' "${ss_m}:${ss_pass}" | base64 -w0 2>/dev/null || printf '%s' "${ss_m}:${ss_pass}" | base64 | tr -d '\n'); links+="ss://${ss_b64}@${ip_host}:${ss_up}#$(uri_encode "$sb_ss_name")"$'\n'; }
+        fi
+    fi   # close else (IS_DEFAULT_USER != 1)
+fi   # close SB_ENABLE check
+out=$(printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n')
+[ "$IS_DEFAULT_USER" = "1" ] && printf '%s' "$out" > /etc/xray/sub.txt
+
+if [ "$IS_DEFAULT_USER" != "1" ]; then
+    quota=$(printf '%s' "$USER_JSON" | $JQ -r '.quota_bytes//0')
+    used_up=$(printf '%s' "$USER_JSON" | $JQ -r '.used_up//0')
+    used_down=$(printf '%s' "$USER_JSON" | $JQ -r '.used_down//0')
+    reset_day=$(printf '%s' "$USER_JSON" | $JQ -r '.reset_day//0')
+
+    used_total=$((used_up + used_down))
+
+    format_bytes() {
+        local b=$1
+        if [ -z "$b" ] || [ "$b" -eq 0 ]; then echo "0 B"; return; fi
+        if [ "$b" -ge 1073741824 ]; then awk "BEGIN {printf \"%.2f GB\", $b/1073741824}"; return; fi
+        if [ "$b" -ge 1048576 ]; then awk "BEGIN {printf \"%.2f MB\", $b/1048576}"; return; fi
+        if [ "$b" -ge 1024 ]; then awk "BEGIN {printf \"%.2f KB\", $b/1024}"; return; fi
+        echo "${b} B"
+    }
+
+    if [ "$quota" -gt 0 ]; then
+        rem=$((quota - used_total))
+        [ "$rem" -lt 0 ] && rem=0
+        rem_str=$(format_bytes "$rem")
+    else
+        rem_str="无限"
+    fi
+
+    fake_nodes="vless://00000000-0000-0000-0000-000000000000@127.0.0.1:443?encryption=none&security=tls&type=ws#🎯剩余流量: ${rem_str}"$'\n'
+
+    if [ "$reset_day" -gt 0 ]; then
+        d=$(date +%d | sed 's/^0*//')
+        if [ "$d" -le "$reset_day" ]; then
+            days=$((reset_day - d))
+        else
+            days=$((30 - d + reset_day))
+        fi
+        fake_nodes+="vless://00000000-0000-0000-0000-000000000000@127.0.0.1:443?encryption=none&security=tls&type=ws#距离下次重置剩余: ${days} 天"$'\n'
+    fi
+
+    links="${fake_nodes}${links}"
+    out=$(printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n')
+fi
+
+printf '%s' "$out"
+SUBEOF
+}
+install_generated_helper() {
+    local name="$1" emitter="$2" target candidate
+    case "$name" in sub_gen.sh|sb_collect.sh) ;; *) return 1 ;; esac
+    target="${WORK_DIR}/${name}"
+    candidate=$(mktemp "${target}.new.XXXXXX") || return 1
+    if ! "$emitter" > "$candidate" || [ ! -s "$candidate" ] || ! bash -n "$candidate"; then
+        rm -f "$candidate"; return 1
+    fi
+    chmod 700 "$candidate" || { rm -f "$candidate"; return 1; }
+    if [ -f "$target" ] && cmp -s "$candidate" "$target"; then
+        rm -f "$candidate"; return 0
+    fi
+    mv -f "$candidate" "$target" || { rm -f "$candidate"; return 1; }
+}
+refresh_generated_helpers() {
+    local result=0
+    # 运行中的订阅和统计服务每轮重新调用脚本，无需重启代理核心。
+    if [ -f "${WORK_DIR}/sub_gen.sh" ]; then
+        install_generated_helper sub_gen.sh emit_sub_generator || result=1
+    fi
+    if [ -f "${WORK_DIR}/sb_collect.sh" ]; then
+        install_generated_helper sb_collect.sh emit_sb_collect_script || result=1
+    fi
+    return "$result"
+}
 start_sub_server() {
+    install_generated_helper sub_gen.sh emit_sub_generator || return 1
     [ -z "$AGG_TOKEN" ] && AGG_TOKEN=$(rand_token) && save_conf
     if [ "$SUB_PORT" = "0" ]; then
         [ -n "$SUB_DOMAIN" ] && SUB_PORT=2096 || SUB_PORT=$(find_free_port "$(shuf -i 20000-50000 -n 1)")
     fi
     # 先停旧服务再查端口（避免自己的旧进程被误判为占用）
-    systemctl stop argov-sub 2>/dev/null; rc-service argov-sub stop 2>/dev/null; sleep 1
+    systemctl stop argov-sub 2>/dev/null; sleep 1
     port_in_use "$SUB_PORT" && SUB_PORT=$(find_free_port "$SUB_PORT")
     [ -z "$SUB_TOKEN" ] && SUB_TOKEN=$(openssl rand -hex 8 2>/dev/null || printf '%08x%08x' $RANDOM $RANDOM)
     [ -z "$SUB_PATH" ] && SUB_PATH="/${SUB_TOKEN}"
@@ -3107,229 +3341,7 @@ PYEOF
     mv -f "$sub_candidate" "${WORK_DIR}/sub.py" || return 1
 
     # 刷新脚本：供 Python 调用，每次请求前更新订阅文件
-    cat > "${WORK_DIR}/sub_gen.sh" << 'SUBEOF'
-#!/usr/bin/env bash
-JQ=/usr/bin/jq
-CFG=/etc/xray/config.json; LOG=/etc/xray/argo.log; CONF=/etc/xray/argov.conf; USERS=/etc/xray/argov_users.json
-USER_TOKEN="${1:-}"
-[ -f "$CONF" ] && . "$CONF"
-NODE_NAME="${NODE_NAME:-ArgoV}"; MODE="${ARGO_MODE:-temp}"; FIXED="${ARGO_FIXED_DOMAIN:-}"
-CDN_PORT="${CDN_PORT:-443}"
-get_domain() {
-    local d
-    [ -f "$LOG" ] && for i in 1 2 3 4 5; do
-        d=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' "$LOG" | tail -1)
-        [ -n "$d" ] && echo "$d" && return; sleep 2
-    done
-    echo "$LAST_ARGO_DOMAIN"
-}
-b64() { printf '%s' "$1" | base64 -w0 2>/dev/null || printf '%s' "$1" | base64 | tr -d '\n'; }
-cert_pin_sha256() {
-    [ -f "$1" ] || return 1
-    openssl x509 -in "$1" -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//' | tr '[:lower:]' '[:upper:]'
-}
-certificate_uri_options() {
-    local pin="${1//:/}"
-    printf '&insecure=1&allowInsecure=0'
-    [[ "$pin" =~ ^[[:xdigit:]]{64}$ ]] && printf '&pinSHA256=%s' "$pin"
-    return 0
-}
-[ -f "$USERS" ] || exit 1
-# 默认用户永远有效（即使被误禁用）；其他用户需 enabled=true
-UQ='if ($tok == "" or $tok == $dtok) then (.users[]|select(.name=="default")) else (.users[]|select(.token==$tok and (.enabled//true))) end'
-USER_JSON=$($JQ -c --arg tok "$USER_TOKEN" --arg dtok "${SUB_TOKEN:-}" "$UQ" "$USERS" 2>/dev/null | head -n 1)
-[ -z "$USER_JSON" ] && exit 1
-uuid=$(printf '%s' "$USER_JSON" | $JQ -r '.uuid//empty')
-user_name=$(printf '%s' "$USER_JSON" | $JQ -r '.name//"user"')
-[ -z "$uuid" ] && exit 1
-IS_DEFAULT_USER=0
-[ "$user_name" = "default" ] && IS_DEFAULT_USER=1
-INCLUDE_CUSTOM=0
-if [ "$IS_DEFAULT_USER" = "1" ]; then
-    INCLUDE_CUSTOM=1
-fi
-cdn=$($JQ -r '.current_cdn//"xx.cloudflare.182682.xyz"' "$CFG")
-cp=$($JQ -r '.current_cdn_port//443' "$CFG")
-hd=$(get_domain)
-ip=""; for s in ifconfig.me icanhazip.com checkip.amazonaws.com api.ipify.org; do
-    ip=$(curl -s --max-time 3 "$s" 2>/dev/null || wget -qO- -T3 "$s" 2>/dev/null)
-    echo "$ip" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' && break || ip=""
-done
-[ "$MODE" = "fixed-token" ] && hd="$FIXED"
-[ "$MODE" = "skip" ] && hd=""
-uri_encode() { "$JQ" -rn --arg value "$1" '$value | @uri'; }
-uri_host() { if [[ "$1" == *:* && "$1" != \[*\] ]]; then printf '[%s]' "$1"; else printf '%s' "$1"; fi; }
-ip_host=$(uri_host "$ip")
-links=""
-if [ -n "$hd" ]; then
-    ws_client_path() {
-        local tag="$1" path
-        path=$("$JQ" -r --arg tag "$tag" '.inbounds[]?|select(.tag==$tag)|.streamSettings.wsSettings.path//empty' "$CFG" | head -n 1)
-        path="${path:-$2}"
-        case "$path" in
-            *\?ed=*|*\&ed=*) ;;
-            *\?*) path="${path}&ed=2560" ;;
-            *) path="${path}?ed=2560" ;;
-        esac
-        printf '%s' "$path"
-    }
-    links+="vless://${uuid}@${cdn}:${cp}?encryption=none&security=tls&sni=${hd}&type=ws&host=${hd}&path=$(uri_encode "$(ws_client_path vless-ws /vless-argo)")#$(uri_encode "${NODE_NAME}-VLESS")"$'\n'
-    j=$("$JQ" -nc --arg name "${NODE_NAME}-VMess" --arg cdn "$cdn" --arg port "$cp" --arg uuid "$uuid" --arg host "$hd" --arg path "$(ws_client_path vmess-ws /vmess-argo)" \
-        '{v:"2",ps:$name,add:$cdn,port:$port,id:$uuid,aid:"0",scy:"none",net:"ws",type:"none",host:$host,path:$path,tls:"tls",sni:$host,alpn:"",fp:""}')
-    links+="vmess://$(b64 "$j")"$'\n'
-fi
-client_hy2_bandwidth() {
-    local mode_key="${1}_CONGESTION" up_key="${1}_UP_MBPS" down_key="${1}_DOWN_MBPS"
-    local up="${!up_key}" down="${!down_key}"
-    # ArgoV subscription hints for Mihomo; portable URI clients may ignore them.
-    # Server upload is client download, and server download is client upload.
-    if [ "${!mode_key}" = brutal ] && [[ "$up" =~ ^[0-9]{1,7}$ && "$down" =~ ^[0-9]{1,7}$ ]] && ((10#$up > 0 && 10#$down > 0)); then
-        printf '&up=%smbps&down=%smbps' "$down" "$up"
-    fi
-    return 0
-}
-if $JQ -e '.inbounds[]|select(.tag=="reality")' "$CFG" >/dev/null 2>&1 && [ -n "$ip" ]; then
-    rport=$($JQ -r '.inbounds[]|select(.tag=="reality")|.port' "$CFG")
-    rs=$($JQ -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames[0]' "$CFG")
-    rpub="${REALITY_PUB:-}"
-    [ -n "$rpub" ] || rpub=$($JQ -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.publicKey//empty' "$CFG")
-    rsid=$($JQ -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.shortIds[0]//empty' "$CFG")
-    [ -n "$rsid" ] && rsid="&sid=${rsid}" || rsid=""
-    [ -n "$rport" ] && links+="vless://${uuid}@${ip_host}:${rport}?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=${rs}&pbk=${rpub}&fp=${REALITY_FP:-chrome}${rsid}#$(uri_encode "${NODE_NAME}-Reality")"$'\n'
-fi
-# 自定义链接（用户自添加）
-if [ "$INCLUDE_CUSTOM" = "1" ] && [ -f /etc/xray/custom_links.txt ]; then
-    while IFS= read -r cl; do
-        [ -n "$cl" ] && links+="${cl}"$'\n'
-    done < /etc/xray/custom_links.txt
-fi
-if $JQ -e '.inbounds[]|select(.tag=="hy2")' "$CFG" >/dev/null 2>&1 && [ -n "$ip" ]; then
-    hport=$($JQ -r '.inbounds[]|select(.tag=="hy2")|.port' "$CFG")
-    hsni=$($JQ -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.serverName//empty' "$CFG")
-    hmport=$($JQ -r '.inbounds[]|select(.tag=="hy2")|(.streamSettings.finalmask.quicParams.udpHop.ports//.streamSettings.hysteriaSettings.quicParams.udpHop.ports[0]//empty)' "$CFG")
-    hmport_qs=""; [ -n "$hmport" ] && hmport_qs="&mport=${hmport}"
-    hcert=$($JQ -r '.inbounds[]|select(.tag=="hy2")|.streamSettings.tlsSettings.certificates[0].certificateFile//empty' "$CFG")
-    hpin=$(cert_pin_sha256 "${hcert:-${HY2_CERT_FILE:-}}")
-    hy2_extra=$(certificate_uri_options "${hpin:-${HY2_PIN_SHA256:-}}")
-    hy2_extra+="$(client_hy2_bandwidth HY2)"
-    [ -n "$hport" ] && links+="hysteria2://${uuid}@${ip_host}:${hport}?sni=${hsni:-${HY2_SNI:-}}&alpn=h3${hmport_qs}${hy2_extra}#$(uri_encode "${NODE_NAME}-HY2")"$'\n'
-fi
-# ===== Sing-box 节点 (仅 default 用户获取共享端口; 限额用户用专属端口) =====
-SB_CFG="/etc/sing-box/config.json"
-if [ "${SB_ENABLE:-false}" = "true" ] && [ -f "$SB_CFG" ] && [ -n "$ip" ]; then
-    SB_SNI="${SB_SNI:-addons.mozilla.org}"
-    sb_hcert=$($JQ -r '.inbounds[]?|select(.tag=="sb-hy2")|.tls.certificate_path//empty' "$SB_CFG" | head -n 1)
-    sb_hpin=$(cert_pin_sha256 "${sb_hcert:-${SB_HY2_CERT_FILE:-${SB_CERT_FILE:-}}}")
-    sb_hy2_tls=$(certificate_uri_options "${sb_hpin:-${SB_HY2_PIN_SHA256:-}}")
-    sb_tcert=$($JQ -r '.inbounds[]?|select(.tag=="sb-tuic")|.tls.certificate_path//empty' "$SB_CFG" | head -n 1)
-    sb_tpin=$(cert_pin_sha256 "${sb_tcert:-${SB_CERT_FILE:-}}")
-    sb_tuic_tls=$(certificate_uri_options "${sb_tpin:-${SB_TUIC_PIN_SHA256:-}}")
-    sb_hy2_name="${NODE_NAME}-HY2"
-    sb_reality_name="${NODE_NAME}-Reality"
-    sb_ss_name="${NODE_NAME}-SS"
-    $JQ -e '.inbounds[]|select(.tag=="hy2")' "$CFG" >/dev/null 2>&1 && sb_hy2_name="${NODE_NAME}-SingBox-HY2"
-    $JQ -e '.inbounds[]|select(.tag=="reality")' "$CFG" >/dev/null 2>&1 && sb_reality_name="${NODE_NAME}-SingBox-Reality"
-    $JQ -e '.inbounds[]|select(.tag=="ss")' "$CFG" >/dev/null 2>&1 && sb_ss_name="${NODE_NAME}-SingBox-SS"
-    if [ "$IS_DEFAULT_USER" = "1" ]; then
-        # 共享节点 — 仅 default 用户. 直接读 conf 变量, 不 jq 查 config.json
-        sb_hy2_hop=""
-        [ "${SB_HY2_HOP_ENABLE:-false}" = "true" ] && sb_hy2_hop="&mport=${SB_HY2_HOP_START}-${SB_HY2_HOP_END}"
-        if [ "${SB_HY2_ENABLE:-false}" = "true" ] && [ -n "${SB_HY2_PORT:-}" ] && [ -n "${SB_HY2_PSK:-}" ]; then
-            sb_hy2_pin="$sb_hy2_tls"
-            sb_hy2_pin+="$(client_hy2_bandwidth SB_HY2)"
-            links+="hy2://$(uri_encode "$SB_HY2_PSK")@${ip_host}:${SB_HY2_PORT}?sni=${SB_HY2_SNI:-$SB_SNI}&alpn=h3${sb_hy2_hop}${sb_hy2_pin}#$(uri_encode "$sb_hy2_name")"$'\n'
-        fi
-        if [ "${SB_TUIC_ENABLE:-false}" = "true" ] && [ -n "${SB_TUIC_PORT:-}" ] && [ -n "${SB_TUIC_UUID:-}" ]; then
-            links+="tuic://${SB_TUIC_UUID}:$(uri_encode "$SB_TUIC_PSK")@${ip_host}:${SB_TUIC_PORT}?congestion_control=bbr&alpn=h3&sni=${SB_TUIC_SNI:-$SB_SNI}${sb_tuic_tls}#$(uri_encode "${NODE_NAME}-TUIC")"$'\n'
-        fi
-        if [ "${SB_ANYTLS_ENABLE:-false}" = "true" ] && [ -n "${SB_ANYTLS_PORT:-}" ] && [ -n "${SB_ANYTLS_PSK:-}" ]; then
-            links+="anytls://$(uri_encode "$SB_ANYTLS_PSK")@${ip_host}:${SB_ANYTLS_PORT}?security=reality&sni=${SB_ANYTLS_SNI:-$SB_SNI}&fp=chrome&pbk=${SB_REALITY_PUB:-}&sid=${SB_REALITY_SID:-}#$(uri_encode "${NODE_NAME}-AnyTLS")"$'\n'
-        fi
-        if [ "${SB_REALITY_ENABLE:-false}" = "true" ] && [ -n "${SB_REALITY_PORT:-}" ]; then
-            links+="vless://${uuid}@${ip_host}:${SB_REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SB_REALITY_SNI:-$SB_SNI}&pbk=${SB_REALITY_PUB:-}&fp=chrome&sid=${SB_REALITY_SID:-}#$(uri_encode "$sb_reality_name")"$'\n'
-        fi
-        if [ "${SB_SS_ENABLE:-false}" = "true" ] && [ -n "${SB_SS_PORT:-}" ] && [ -n "${SB_SS_PSK:-}" ]; then
-            sb_ss_b64=$(printf '%s' "${SB_SS_METHOD:-${SS_METHOD:-aes-256-gcm}}:${SB_SS_PSK}" | base64 -w0 2>/dev/null || printf '%s' "${SB_SS_METHOD:-${SS_METHOD:-aes-256-gcm}}:${SB_SS_PSK}" | base64 | tr -d '\n')
-            links+="ss://${sb_ss_b64}@${ip_host}:${SB_SS_PORT}#$(uri_encode "$sb_ss_name")"$'\n'
-        fi
-    else
-    # v2: 限额用户获取自己专属的 Sing-box 节点 (独立端口+密码, 可追踪流量)
-        sb_ports=$(printf '%s' "$USER_JSON" | $JQ -c '.sb_ports // {}' 2>/dev/null)
-        sb_creds=$(printf '%s' "$USER_JSON" | $JQ -c '.sb_creds // {}' 2>/dev/null)
-        # HY2 不走限额用户 — 跳变兼容性问题
-        # TUIC per-user
-        tuic_up=$(echo "$sb_ports" | $JQ -r '.tuic // 0')
-        if [ "${SB_TUIC_ENABLE:-false}" = true ] && [ "$tuic_up" -gt 0 ]; then
-            t_uuid=$(echo "$sb_creds" | $JQ -r '.tuic_uuid // ""')
-            t_pass=$(echo "$sb_creds" | $JQ -r '.tuic_pass // ""')
-            [ -n "$t_uuid" ] && links+="tuic://${t_uuid}:$(uri_encode "$t_pass")@${ip_host}:${tuic_up}?congestion_control=bbr&alpn=h3&sni=${SB_TUIC_SNI:-$SB_SNI}${sb_tuic_tls}#$(uri_encode "${NODE_NAME}-TUIC")"$'\n'
-        fi
-        # AnyTLS per-user
-        anytls_up=$(echo "$sb_ports" | $JQ -r '.anytls // 0')
-        if [ "${SB_ANYTLS_ENABLE:-false}" = true ] && [ "$anytls_up" -gt 0 ]; then
-            a_pass=$(echo "$sb_creds" | $JQ -r '.anytls_pass // ""')
-            [ -n "$a_pass" ] && links+="anytls://$(uri_encode "$a_pass")@${ip_host}:${anytls_up}?security=reality&sni=${SB_ANYTLS_SNI:-$SB_SNI}&fp=chrome&pbk=${SB_REALITY_PUB:-}&sid=${SB_REALITY_SID:-}#$(uri_encode "${NODE_NAME}-AnyTLS")"$'\n'
-        fi
-        # Reality per-user
-        reality_up=$(echo "$sb_ports" | $JQ -r '.reality // 0')
-        if [ "${SB_REALITY_ENABLE:-false}" = true ] && [ "$reality_up" -gt 0 ]; then
-            links+="vless://${uuid}@${ip_host}:${reality_up}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SB_REALITY_SNI:-$SB_SNI}&pbk=${SB_REALITY_PUB:-}&fp=chrome&sid=${SB_REALITY_SID:-}#$(uri_encode "$sb_reality_name")"$'\n'
-        fi
-        # SS per-user
-        ss_up=$(echo "$sb_ports" | $JQ -r '.ss // 0')
-        if [ "${SB_SS_ENABLE:-false}" = true ] && [ "$ss_up" -gt 0 ]; then
-            ss_pass=$(echo "$sb_creds" | $JQ -r '.ss_pass // ""')
-            ss_m="${SB_SS_METHOD:-${SS_METHOD:-aes-256-gcm}}"
-            [ -n "$ss_pass" ] && { ss_b64=$(printf '%s' "${ss_m}:${ss_pass}" | base64 -w0 2>/dev/null || printf '%s' "${ss_m}:${ss_pass}" | base64 | tr -d '\n'); links+="ss://${ss_b64}@${ip_host}:${ss_up}#$(uri_encode "$sb_ss_name")"$'\n'; }
-        fi
-    fi   # close else (IS_DEFAULT_USER != 1)
-fi   # close SB_ENABLE check
-out=$(printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n')
-[ "$IS_DEFAULT_USER" = "1" ] && printf '%s' "$out" > /etc/xray/sub.txt
-
-if [ "$IS_DEFAULT_USER" != "1" ]; then
-    quota=$(printf '%s' "$USER_JSON" | $JQ -r '.quota_bytes//0')
-    used_up=$(printf '%s' "$USER_JSON" | $JQ -r '.used_up//0')
-    used_down=$(printf '%s' "$USER_JSON" | $JQ -r '.used_down//0')
-    reset_day=$(printf '%s' "$USER_JSON" | $JQ -r '.reset_day//0')
-    
-    used_total=$((used_up + used_down))
-    
-    format_bytes() {
-        local b=$1
-        if [ -z "$b" ] || [ "$b" -eq 0 ]; then echo "0 B"; return; fi
-        if [ "$b" -ge 1073741824 ]; then awk "BEGIN {printf \"%.2f GB\", $b/1073741824}"; return; fi
-        if [ "$b" -ge 1048576 ]; then awk "BEGIN {printf \"%.2f MB\", $b/1048576}"; return; fi
-        if [ "$b" -ge 1024 ]; then awk "BEGIN {printf \"%.2f KB\", $b/1024}"; return; fi
-        echo "${b} B"
-    }
-    
-    if [ "$quota" -gt 0 ]; then
-        rem=$((quota - used_total))
-        [ "$rem" -lt 0 ] && rem=0
-        rem_str=$(format_bytes "$rem")
-    else
-        rem_str="无限"
-    fi
-    
-    fake_nodes="vless://00000000-0000-0000-0000-000000000000@127.0.0.1:443?encryption=none&security=tls&type=ws#🎯剩余流量: ${rem_str}"$'\n'
-    
-    if [ "$reset_day" -gt 0 ]; then
-        d=$(date +%d | sed 's/^0*//')
-        if [ "$d" -le "$reset_day" ]; then
-            days=$((reset_day - d))
-        else
-            days=$((30 - d + reset_day))
-        fi
-        fake_nodes+="vless://00000000-0000-0000-0000-000000000000@127.0.0.1:443?encryption=none&security=tls&type=ws#距离下次重置剩余: ${days} 天"$'\n'
-    fi
-    
-    links="${fake_nodes}${links}"
-    out=$(printf '%s' "$links" | base64 -w0 2>/dev/null || printf '%s' "$links" | base64 | tr -d '\n')
-fi
-
-printf '%s' "$out"
-SUBEOF
+    # 生成器已在停止订阅服务之前原子更新。
     chmod +x "${WORK_DIR}/sub_gen.sh"
     bash "${WORK_DIR}/sub_gen.sh" "$SUB_TOKEN" >/dev/null 2>&1 || true
 
@@ -3624,13 +3636,8 @@ stop_stats_service() {
 # 状态 & 摘要
 #==============================================================================
 get_status() {
-    if [ "$IS_ALPINE" = 1 ]; then
-        (rc-service xray status 2>/dev/null | grep -qE "started|crashed" || pgrep -x xray &>/dev/null) && { XRAY_ST="${green}● 运行中${re}"; XRAY_RAW="running"; } || { XRAY_ST="${red}○ 已停止${re}"; XRAY_RAW="stopped"; }
-        (rc-service argov-tunnel status 2>/dev/null | grep -qE "started|crashed" || pgrep -f 'argo.*tunnel' &>/dev/null) && { TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"; } || { TUNNEL_ST="${red}○ 已停止${re}"; TUNNEL_RAW="stopped"; }
-    else
-        systemctl is-active xray 2>/dev/null && { XRAY_ST="${green}● 运行中${re}"; XRAY_RAW="running"; } || { XRAY_ST="${red}○ 已停止${re}"; XRAY_RAW="stopped"; }
-        systemctl is-active argov-tunnel 2>/dev/null && { TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"; } || { TUNNEL_ST="${red}○ 已停止${re}"; TUNNEL_RAW="stopped"; }
-    fi
+    systemctl is-active xray 2>/dev/null && { XRAY_ST="${green}● 运行中${re}"; XRAY_RAW="running"; } || { XRAY_ST="${red}○ 已停止${re}"; XRAY_RAW="stopped"; }
+    systemctl is-active argov-tunnel 2>/dev/null && { TUNNEL_ST="${green}● 运行中${re}"; TUNNEL_RAW="running"; } || { TUNNEL_ST="${red}○ 已停止${re}"; TUNNEL_RAW="stopped"; }
     # Sing-box 状态
     if [ "${SB_ENABLE:-false}" = "true" ]; then
         sb_status && { SB_ST="${green}● 运行中${re}"; SB_RAW="running"; } || { SB_ST="${red}○ 已停止${re}"; SB_RAW="stopped"; }
@@ -3639,7 +3646,9 @@ get_status() {
     fi
 }
 get_proto_summary() {
-    local s="VL-Argo VM-Argo"
+    local s=""
+    argo_protocol_present vless-ws && s="VL-Argo"
+    argo_protocol_present vmess-ws && s="${s:+$s }VM-Argo"
     jq -e '.inbounds[]|select(.protocol=="shadowsocks")' "$CONFIG_FILE" >/dev/null 2>&1 && s="$s SS"
     jq -e '.inbounds[]|select(.tag=="reality")' "$CONFIG_FILE" >/dev/null 2>&1 && s="$s Reality"
     jq -e '.inbounds[]|select(.tag=="hy2")' "$CONFIG_FILE" >/dev/null 2>&1 && s="$s Hy2"
@@ -3653,9 +3662,11 @@ show_node() {
     clear; load_conf
     [ ! -f "$CONFIG_FILE" ] && { red_msg "未检测到安装！"; return; }
     local uuid hd cd cp ip
-    uuid=$(get_uuid); hd=$(get_argo_domain); cd=$(get_cdn); cp=$(get_cdn_port); ip=$(get_ip)
-    [ -z "$hd" ] && [ "$ARGO_MODE" != "fixed-token" ] && { yellow_msg "  ⚠ 正在获取 Argo 域名..."; sleep 3; hd=$(get_argo_domain); }
-    [ "$ARGO_MODE" = "fixed-token" ] && hd="$ARGO_FIXED_DOMAIN"
+    uuid=$(get_uuid); hd=""; cd=$(get_cdn); cp=$(get_cdn_port); ip=$(get_ip)
+    if argo_enabled; then
+        [ "$ARGO_MODE" = fixed-token ] && hd="$ARGO_FIXED_DOMAIN" || hd=$(get_argo_domain)
+        [ -z "$hd" ] && { yellow_msg "  ⚠ 正在获取 Argo 域名..."; sleep 3; hd=$(get_argo_domain); }
+    fi
 
     echo ""
     echo -e "${purple}╔══════════════════════════════════════════════════╗${re}"
@@ -3670,10 +3681,12 @@ show_node() {
     if [ -n "$hd" ]; then
         echo -e "  ${white}── Argo 隧道 (无需开放端口) ──${re}"
         echo ""
-        echo -e "  ${yellow}① VLESS${re}  ${green}$(gen_vless_link "$uuid" "$hd" "$cd" "$cp")${re}\n"
-        echo -e "  ${yellow}② VMess${re}  ${green}$(gen_vmess_link "$uuid" "$hd" "$cd" "$cp")${re}\n"
+        argo_protocol_present vless-ws && echo -e "  ${yellow}① VLESS${re}  ${green}$(gen_vless_link "$uuid" "$hd" "$cd" "$cp")${re}\n"
+        argo_protocol_present vmess-ws && echo -e "  ${yellow}② VMess${re}  ${green}$(gen_vmess_link "$uuid" "$hd" "$cd" "$cp")${re}\n"
         load_conf 2>/dev/null; local su; su=$(get_sub_url "$ip" 2>/dev/null)
-        show_qr "${su:-$(gen_vless_link "$uuid" "$hd" "$cd" "$cp")}"
+        if [ -n "$su" ]; then show_qr "$su"
+        elif argo_protocol_present vless-ws; then show_qr "$(gen_vless_link "$uuid" "$hd" "$cd" "$cp")"
+        else show_qr "$(gen_vmess_link "$uuid" "$hd" "$cd" "$cp")"; fi
     fi
 
     if jq -e '.inbounds[]|select(.tag=="reality")' "$CONFIG_FILE" >/dev/null 2>&1 && [ -n "$ip" ]; then
@@ -3771,51 +3784,54 @@ show_node() {
 # 服务控制
 #==============================================================================
 # MODULE: service lifecycle
+control_runtime_services() {
+    local action="$1" result=0
+    case "$action" in start|stop|restart) ;; *) return 2 ;; esac
+    local services=(xray argov-stats argov-sb-stats)
+    systemctl "$action" "${services[@]}" || result=1
+    if [ "$SKIP_ARGO" != 1 ]; then
+        systemctl "$action" argov-tunnel || result=1
+    fi
+    if [ "${SB_ENABLE:-false}" = true ]; then
+        case "$action" in
+            start) sb_start || result=1 ;;
+            stop) sb_stop || result=1 ;;
+            restart) sb_restart || result=1 ;;
+        esac
+    fi
+    return "$result"
+}
+show_runtime_status() {
+    get_status
+    echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"
+    [ -n "$SB_ST" ] && echo -e "  Sing-box: ${SB_ST}"
+    return 0
+}
 start_services() {
     yellow_msg "Starting..."
-    systemctl start xray argov-stats argov-sb-stats 2>/dev/null || true
-    [ "$SKIP_ARGO" != "1" ] && systemctl start argov-tunnel 2>/dev/null || true
-    rc-service xray start 2>/dev/null || true
-    [ "$SKIP_ARGO" != "1" ] && rc-service argov-tunnel start 2>/dev/null || true
-    rc-service argov-stats start 2>/dev/null || true
-    rc-service argov-sb-stats start 2>/dev/null || true
-    [ "${SB_ENABLE:-false}" = "true" ] && { sb_start; }
+    control_runtime_services start 2>/dev/null || true
     setup_traffic_counters 2>/dev/null || true
-    sleep 2; get_status
-    echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"
-    [ -n "$SB_ST" ] && echo -e "  Sing-box: ${SB_ST}"
+    sleep 2; show_runtime_status
     green_msg "Done"
 }
-stop_services()  {
+stop_services() {
     yellow_msg "Stopping..."
-    systemctl stop xray argov-stats argov-sb-stats 2>/dev/null || true
-    [ "$SKIP_ARGO" != "1" ] && systemctl stop argov-tunnel 2>/dev/null || true
-    rc-service xray stop 2>/dev/null || true
-    [ "$SKIP_ARGO" != "1" ] && rc-service argov-tunnel stop 2>/dev/null || true
-    rc-service argov-stats stop 2>/dev/null || true
-    rc-service argov-sb-stats stop 2>/dev/null || true
-    [ "${SB_ENABLE:-false}" = "true" ] && { sb_stop; }
-    sleep 1; get_status
-    echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"
-    [ -n "$SB_ST" ] && echo -e "  Sing-box: ${SB_ST}"
+    control_runtime_services stop 2>/dev/null || true
+    sleep 1; show_runtime_status
     red_msg "Stopped"
 }
 restart_services() {
     yellow_msg "Restarting..."
     rm -f "$TUNNEL_LOG"
-    systemctl restart xray argov-stats argov-sb-stats 2>/dev/null || true
-    [ "$SKIP_ARGO" != "1" ] && systemctl restart argov-tunnel 2>/dev/null || true
-    rc-service xray restart 2>/dev/null || true
-    [ "$SKIP_ARGO" != "1" ] && rc-service argov-tunnel restart 2>/dev/null || true
-    rc-service argov-stats restart 2>/dev/null || true
-    rc-service argov-sb-stats restart 2>/dev/null || true
-    [ "${SB_ENABLE:-false}" = "true" ] && { sb_restart; }
-    sleep 3; get_status
-    local d; d=$(get_argo_domain)
-    echo -e "  Xray: ${XRAY_ST}  Argo: ${TUNNEL_ST}"
-    [ -n "$SB_ST" ] && echo -e "  Sing-box: ${SB_ST}"
+    control_runtime_services restart 2>/dev/null || true
+    sleep 3; show_runtime_status
+    local d=""
+    if argo_enabled; then
+        [ "$ARGO_MODE" = fixed-token ] && d="$ARGO_FIXED_DOMAIN" || d=$(get_argo_domain)
+    fi
     green_msg "Done"
     [ -n "$d" ] && { echo -e "  Domain: ${purple}${d}${re}"; LAST_ARGO_DOMAIN="$d"; save_conf; }
+    return 0
 }
 
 #==============================================================================
@@ -3885,7 +3901,7 @@ change_config() {
             1) echo -ne "  新名称 [${NODE_NAME}]: "; read n ; [ -n "$n" ] && NODE_NAME="$n"; save_conf; green_msg "已更新: ${NODE_NAME}" ;;
             2) local nu; echo -ne "  新 UUID (回车生成): "; read nu ; [ -z "$nu" ] && nu=$(cat /proc/sys/kernel/random/uuid)
                jq --arg u "$nu" '(.inbounds[].settings.clients[]?|select(.id)|.id)|=$u' "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-               UUID_CUSTOM="$nu"; save_conf; ensure_users_file; sync_xray_users; systemctl restart xray 2>/dev/null; rc-service xray restart 2>/dev/null || true; green_msg "UUID 已更新！${nu}" ;;
+               UUID_CUSTOM="$nu"; save_conf; ensure_users_file; sync_xray_users; systemctl restart xray 2>/dev/null || true; green_msg "UUID 已更新！${nu}" ;;
             3) switch_argo_tunnel ;;
             4) edit_protocol ss "Shadowsocks" ;;
             5) edit_protocol reality "VLESS Reality" ;;
@@ -4016,16 +4032,7 @@ EOF
 
 switch_argo_tunnel() {
     load_conf; clear
-
-    # 如果之前跳过了 Argo, 先下载 cloudflared
-    if [ "$ARGO_MODE" = "skip" ]; then
-        echo -e "  ${yellow}Argo 隧道未安装, 正在下载 cloudflared...${re}"
-        local cf_arch; cf_arch=$(cf_arch)
-        download_cloudflared_checked "$cf_arch" "${WORK_DIR}/argo" || { red_msg "cloudflared 下载失败"; return; }
-        chmod +x "${WORK_DIR}/argo"
-        ARGO_MODE="temp"
-        SKIP_ARGO=0
-    fi
+    if ! argo_enabled; then add_argo_protocol; return $?; fi
 
     echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
     echo -e " ${purple}║${re}       ${white}切换 Argo 隧道${re}                       ${purple}║${re}"
@@ -4119,13 +4126,16 @@ EOF
 restart_protocol_runtime() {
     local service="$1"
     [ "$service" = singbox ] && service=sing-box
-    if [ "${IS_ALPINE:-0}" = 1 ]; then rc-service "$service" restart; else systemctl restart "$service"; fi
+    systemctl restart "$service"
 }
 begin_protocol_edit() {
     EDIT_CORE="$1"; EDIT_COMMITTED=0
     EDIT_SNAPSHOT_DIR=$(mktemp -d -t argov-edit.XXXXXX) || return 1
     EDIT_FILES=("$USER_CONF" "$CONFIG_FILE" "$SB_CONFIG_FILE" "$ARGOV_USERS_FILE" \
         "$HY2_CERT_FILE" "$HY2_KEY_FILE" "$SB_CERT_FILE" "$SB_KEY_FILE" "$SB_HY2_CERT_FILE" "$SB_HY2_KEY_FILE")
+    if [ "${2:-}" = argo ]; then
+        EDIT_FILES+=("${WORK_DIR}/argov-tunnel.sh" /etc/init.d/argov-tunnel /etc/systemd/system/argov-tunnel.service)
+    fi
     local i
     for i in "${!EDIT_FILES[@]}"; do
         if [ -f "${EDIT_FILES[$i]}" ]; then
@@ -4160,7 +4170,7 @@ commit_xray_candidate() {
     local candidate="$1" check_result
     jq empty "$candidate" >/dev/null 2>&1 || { rm -f "$candidate"; red_msg "配置 JSON 无效，未替换原文件。"; return 1; }
     if [ -x "${WORK_DIR}/xray" ]; then
-        check_result=$("${WORK_DIR}/xray" run -test -config "$candidate" 2>&1) || {
+        check_result=$("${WORK_DIR}/xray" run -test -format json -config "$candidate" 2>&1) || {
             printf '%s\n' "$check_result"; rm -f "$candidate"; red_msg "Xray 配置验证失败。"; return 1
         }
     fi
@@ -4305,7 +4315,9 @@ configure_sb_protocol() {
 select_protocols() {
     while true; do
         clear
-        local sum=""; [ "$ARGO_MODE" != skip ] && sum="VLESS-Argo + VMess-Argo"
+        local sum=""
+        [ "$ARGO_MODE" != skip ] && [ "$ENABLE_VLESS_ARGO" = 1 ] && sum="VLESS-Argo"
+        [ "$ARGO_MODE" != skip ] && [ "$ENABLE_VMESS_ARGO" = 1 ] && sum="${sum:+$sum + }VMess-Argo"
         [ "$ENABLE_REALITY" = 1 ] && sum="$sum + Reality"
         [ "$ENABLE_HY2" = 1 ] && sum="$sum + Hysteria2"
         [ "$ENABLE_SS" = 1 ] && sum="$sum + Shadowsocks"
@@ -4313,7 +4325,12 @@ select_protocols() {
         echo -e " ${purple}║${re}     ${white}选择额外协议（可选）${re}                    ${purple}║${re}"
         echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
         echo ""
-        [ "$ARGO_MODE" != skip ] && echo -e "  ${white}已启用：VLESS-Argo + VMess-Argo${re}" || echo "  Argo 已跳过，请选择 Xray 直连协议；Sing-box 节点可在安装后增配。"
+        if [ "$ARGO_MODE" != skip ]; then
+            echo -e "  ${green}4${re}. VLESS + Argo [$([ "$ENABLE_VLESS_ARGO" = 1 ] && echo 已选 || echo 未选)]"
+            echo -e "  ${green}5${re}. VMess + Argo [$([ "$ENABLE_VMESS_ARGO" = 1 ] && echo 已选 || echo 未选)]"
+        else
+            echo "  Argo 已跳过，请选择 Xray 直连协议；Sing-box 节点可在安装后增配。"
+        fi
         echo ""
         echo -e "  ${green}1${re}. VLESS Reality ${cyan}[$( [ "$ENABLE_REALITY" = 1 ] && echo "●● 已选" || echo "○○" )]${re}"
         echo -e "     XTLS Vision + Reality，需开放端口，抗封锁"
@@ -4325,15 +4342,21 @@ select_protocols() {
         echo -e "     AEAD/2022 加密，需开放端口，轻量高速"
         echo ""
         echo -e "  ${yellow}📋 当前: ${green}${sum}${re}"
-        echo -e "  ${yellow}💡 输 1/2/3 切换勾选，输 0 进入端口配置${re}"
+        echo -e "  ${yellow}💡 输 1/2/3 切换直连协议，4/5 切换 Argo 协议，0 进入端口配置${re}"
         echo -e " ${purple}────────────────────────────────────────${re}"
-        echo -ne "  (1/2/3=切换 / 0=下一步 / cancel=取消): "; IFS= read -r c || return 1
+        echo -ne "  (1–5=切换 / 0=下一步 / cancel=取消): "; IFS= read -r c || return 1
         case "$c" in
             cancel|CANCEL) return 1 ;;
             1) ENABLE_REALITY=$((1-ENABLE_REALITY)); continue ;;
             2) ENABLE_HY2=$((1-ENABLE_HY2)); continue ;;
             3) ENABLE_SS=$((1-ENABLE_SS)); continue ;;
+            4) [ "$ARGO_MODE" != skip ] && ENABLE_VLESS_ARGO=$((1-ENABLE_VLESS_ARGO)); continue ;;
+            5) [ "$ARGO_MODE" != skip ] && ENABLE_VMESS_ARGO=$((1-ENABLE_VMESS_ARGO)); continue ;;
             0)
+                if [ "$ARGO_MODE" != skip ] && ! argo_enabled; then
+                    red_msg "请至少选择一种 Argo 协议；不使用 Argo 可在安装向导中选择跳过。"
+                    continue
+                fi
                 echo ""
 
                 if [ "$ENABLE_REALITY" = 1 ]; then
@@ -4349,7 +4372,7 @@ select_protocols() {
                 fi
                 echo ""
                 echo -e "  ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
-                echo -e "  ${white}即将安装:${re}$([ "$ARGO_MODE" != "skip" ] && echo "  Argo: VLESS+VMess")"
+                echo -e "  ${white}即将安装:${re} ${sum}"
                 [ "$ENABLE_REALITY" = 1 ] && echo -e "  Reality: 端口 ${green}${REALITY_PORT}${re}  (SNI ${REALITY_SNI}；UUID/密钥 自动生成)"
                 [ "$ENABLE_HY2" = 1 ] && echo -e "  Hysteria2: 端口 ${green}${HY2_PORT}${re}  (SNI ${HY2_SNI}；算法 ${HY2_CONGESTION}；证书 自动生成)"
                 [ "$ENABLE_HY2" = 1 ] && [ -n "$HY2_MPORT" ] && echo -e "  Hysteria2 跳跃: ${green}${HY2_MPORT}${re}  (UDP 转发到 ${HY2_PORT})"
@@ -4515,11 +4538,11 @@ do_install() {
 
     yellow_msg "[3/6] 下载..."
     download_xray_zip_checked "$ARCH_ARG" "${WORK_DIR}/xray.zip" || { red_msg "Xray 下载失败，请检查网络或校验配置！"; exit 1; }
-    if [ "$ARGO_MODE" != "skip" ]; then
+    if argo_enabled; then
         download_cloudflared_checked "$CF_ARCH" "${WORK_DIR}/argo" || { red_msg "cloudflared 下载失败，请检查网络或校验配置！"; exit 1; }
     fi
     unzip -o "${WORK_DIR}/xray.zip" -d "$WORK_DIR">/dev/null 2>&1; chmod +x "${WORK_DIR}/xray"; rm -f "${WORK_DIR}/xray.zip"
-    [ "$ARGO_MODE" != "skip" ] && chmod +x "${WORK_DIR}/argo"
+    argo_enabled && chmod +x "${WORK_DIR}/argo"
     install_qrencode; green_msg "  完成"
 
     yellow_msg "[4/6] 端口检测..."
@@ -4612,13 +4635,13 @@ Restart=on-failure
 WantedBy=multi-user.target
 EOF
     fi
-    if [ "$ARGO_MODE" != "skip" ]; then
+    if argo_enabled; then
         rebuild_tunnel "$ARGO_MODE"; rm -f "$TUNNEL_LOG"
         systemctl enable argov-tunnel 2>/dev/null
     fi
     systemctl daemon-reload
     systemctl enable xray 2>/dev/null
-    if [ "$ARGO_MODE" != "skip" ]; then
+    if argo_enabled; then
         systemctl restart xray argov-tunnel
     else
         systemctl restart xray
@@ -4641,8 +4664,11 @@ EOF
     fi
     save_conf
 
-    local hd ip; [ "$ARGO_MODE" = "fixed-token" ] && hd="$ARGO_FIXED_DOMAIN" || hd=$(get_argo_domain)
-    [ -z "$hd" ] && [ "$ARGO_MODE" != "fixed-token" ] && { sleep 3; hd=$(get_argo_domain); }
+    local hd="" ip
+    if argo_enabled; then
+        [ "$ARGO_MODE" = fixed-token ] && hd="$ARGO_FIXED_DOMAIN" || hd=$(get_argo_domain)
+        [ -z "$hd" ] && { sleep 3; hd=$(get_argo_domain); }
+    fi
     [ -n "$hd" ] && LAST_ARGO_DOMAIN="$hd" && save_conf; ip=$(get_ip)
     # 恢复 relay / WARP (重装后重建 outbound + routing)
     [ "$RELAY_ENABLED" = "1" ] && relay_apply "restore"
@@ -4663,10 +4689,12 @@ EOF
 
     if [ -n "$hd" ]; then
         echo -e "  ${white}── Argo (无需开放端口) ──${re}\n"
-        echo -e "  ${yellow}VLESS${re} ${green}$(gen_vless_link "$UUID" "$hd" "$CDN_DOMAIN" "$CDN_PORT")${re}\n"
-        echo -e "  ${yellow}VMess${re} ${green}$(gen_vmess_link "$UUID" "$hd" "$CDN_DOMAIN" "$CDN_PORT")${re}\n"
+        argo_protocol_present vless-ws && echo -e "  ${yellow}VLESS${re} ${green}$(gen_vless_link "$UUID" "$hd" "$CDN_DOMAIN" "$CDN_PORT")${re}\n"
+        argo_protocol_present vmess-ws && echo -e "  ${yellow}VMess${re} ${green}$(gen_vmess_link "$UUID" "$hd" "$CDN_DOMAIN" "$CDN_PORT")${re}\n"
         local su=""; [ -n "$SUB_PORT" ] && [ "$SUB_PORT" != "0" ] && [ -n "$ip" ] && su="$(get_sub_url "$ip")"
-        show_qr "${su:-$(gen_vless_link "$UUID" "$hd" "$CDN_DOMAIN" "$CDN_PORT")}"
+        if [ -n "$su" ]; then show_qr "$su"
+        elif argo_protocol_present vless-ws; then show_qr "$(gen_vless_link "$UUID" "$hd" "$CDN_DOMAIN" "$CDN_PORT")"
+        else show_qr "$(gen_vmess_link "$UUID" "$hd" "$CDN_DOMAIN" "$CDN_PORT")"; fi
     fi
     if [ "$ENABLE_REALITY" = 1 ] && [ -n "$ip" ]; then
         echo -e "  ${white}── Reality (端口 ${REALITY_PORT}) ──${re}\n"
@@ -4686,17 +4714,37 @@ EOF
 #==============================================================================
 # 构建 config.json
 #==============================================================================
+build_argo_inbounds() {
+    argo_enabled || { echo '[]'; return 0; }
+    jq -nc --arg uuid "$1" --arg argo "$ARGO_PORT" \
+        --arg vl "$ENABLE_VLESS_ARGO" --arg vm "$ENABLE_VMESS_ARGO" \
+        --arg vlport "$VLESS_WS_PORT" --arg vmport "$VMESS_WS_PORT" \
+        --arg vlpath "$VLESS_WS_PATH" --arg vmpath "$VMESS_WS_PATH" '
+        {enabled:true,destOverride:["http","tls","quic"],routeOnly:true} as $sniff |
+        {id:$uuid,email:"argov-default"} as $client |
+        [if $vl=="1" then {tag:"vless-ws",protocol:"vless",port:($vlport|tonumber),settings:{clients:[$client],decryption:"none"},streamSettings:{network:"ws",security:"none",wsSettings:{path:$vlpath}}} else empty end,
+         if $vm=="1" then {tag:"vmess-ws",protocol:"vmess",port:($vmport|tonumber),settings:{clients:[$client+{alterId:0}]},streamSettings:{network:"ws",security:"none",wsSettings:{path:$vmpath}}} else empty end] |
+        map(.+{listen:"127.0.0.1",sniffing:$sniff}) as $ws |
+        [{tag:"argo-in",protocol:"vless",port:($argo|tonumber),listen:"127.0.0.1",
+          settings:{clients:[$client+{flow:"xtls-rprx-vision"}],decryption:"none",
+                    fallbacks:([$ws[]|{path:.streamSettings.wsSettings.path,dest:.port}]+[{dest:$ws[0].port}])},
+          streamSettings:{network:"tcp"},sniffing:$sniff}] + $ws'
+}
+sync_argo_fallbacks() {
+    local candidate="$1" tmp
+    tmp=$(mktemp "${candidate}.fallbacks.XXXXXX") || return 1
+    if ! jq '
+        [.inbounds[]?|select(.tag=="vless-ws" or .tag=="vmess-ws")] as $ws |
+        if ($ws|length)==0 then .inbounds |= map(select(.tag!="argo-in"))
+        else (.inbounds[]|select(.tag=="argo-in")|.settings.fallbacks) =
+             ([$ws[]|{path:.streamSettings.wsSettings.path,dest:.port}]+[{dest:$ws[0].port}]) end
+        ' "$candidate" > "$tmp"; then rm -f "$tmp"; return 1; fi
+    mv -f "$tmp" "$candidate"
+}
 build_xray_config() {
-    local uuid="$1" ss_pass="$2" inbounds fallbacks
-    inbounds='['
-    fallbacks='{"path":"/vmess-argo","dest":'"${VMESS_WS_PORT}"'},{"path":"/vless-argo","dest":'"${VLESS_WS_PORT}"'},{"dest":'"${VLESS_WS_PORT}"'}'
-
-    # 1. Argo 路由入口
-    inbounds+='{"port":'"${ARGO_PORT}"',"listen":"127.0.0.1","protocol":"vless","tag":"argo-in","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision","email":"argov-default"}],"decryption":"none","fallbacks":['"${fallbacks}"']},"streamSettings":{"network":"tcp"},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
-    # 2. VLESS WS
-    inbounds+=',{"port":'"${VLESS_WS_PORT}"',"listen":"127.0.0.1","protocol":"vless","tag":"vless-ws","settings":{"clients":[{"id":"'"${uuid}"'","email":"argov-default"}],"decryption":"none"},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vless-argo"}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
-    # 3. VMess WS
-    inbounds+=',{"port":'"${VMESS_WS_PORT}"',"listen":"127.0.0.1","protocol":"vmess","tag":"vmess-ws","settings":{"clients":[{"id":"'"${uuid}"'","alterId":0,"email":"argov-default"}]},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vmess-argo"}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
+    local uuid="$1" ss_pass="$2" inbounds
+    inbounds=$(build_argo_inbounds "$uuid") || return 1
+    inbounds="${inbounds%]}"
     # 4. Reality (opt)
     [ "$ENABLE_REALITY" = 1 ] && inbounds+=',{"port":'"${REALITY_PORT}"',"listen":"0.0.0.0","protocol":"vless","tag":"reality","settings":{"clients":[{"id":"'"${uuid}"'","flow":"xtls-rprx-vision","email":"argov-default"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"target":"'"${REALITY_SNI}"':443","serverNames":["'"${REALITY_SNI}"'",""],"privateKey":"'"${REALITY_PRIV}"'","shortIds":["'"${REALITY_SHORTID}"'"]}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
     # 5. Hysteria2 (opt)
@@ -4708,6 +4756,8 @@ build_xray_config() {
     # 6. SS (opt)
     [ "$ENABLE_SS" = 1 ] && inbounds+=',{"port":'"${SS_PORT}"',"listen":"0.0.0.0","protocol":"shadowsocks","tag":"ss","settings":{"method":"'"${SS_METHOD}"'","password":"'"${ss_pass}"'","network":"tcp,udp"},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true}}'
     inbounds+=']'
+    # 无 Argo 入站时，可选协议前不需要逗号。
+    case "$inbounds" in '[,'*) inbounds="[${inbounds:2}" ;; esac
 
     cat > "$CONFIG_FILE" << XRAYCONF
 {
@@ -4764,138 +4814,13 @@ edit_hy2_protocol() {
     )
 }
 
-legacy_manage_protocols_unused() {
-    load_conf
-    [ ! -f "$CONFIG_FILE" ] && { red_msg "请先安装！"; return; }
-
-    local has_reality=0 has_ss=0
-    grep -qE '"tag"[[:space:]]*:[[:space:]]*"reality"' "$CONFIG_FILE" 2>/dev/null && has_reality=1
-    grep -q '"shadowsocks"' "$CONFIG_FILE" 2>/dev/null && has_ss=1
-
-    while true; do
-        clear
-        echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
-        echo -e " ${purple}║${re}         ${white}管理节点${re}                          ${purple}║${re}"
-        echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
-        echo ""
-
-        # Argo 隧道节点（始终存在）
-        local vl_port vm_port ar_port
-        vl_port=$(jq -r '.inbounds[]|select(.tag=="vless-ws")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
-        vm_port=$(jq -r '.inbounds[]|select(.tag=="vmess-ws")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
-        ar_port=$(jq -r '.inbounds[]|select(.tag=="argo-in")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
-        echo -e "  ${white}── Argo 隧道 ──${re}"
-        echo ""
-        echo -e "  ${green}e1${re}. VLESS + Argo    端口 ${cyan}${vl_port}${re}  路径 ${cyan}/vless-argo${re}"
-        echo -e "  ${green}e2${re}. VMess + Argo    端口 ${cyan}${vm_port}${re}  路径 ${cyan}/vmess-argo${re}"
-        echo ""
-
-        # 可选协议
-        [ "$has_reality" = 1 ] || [ "$has_ss" = 1 ] && echo -e "  ${white}── 可选协议 · 可编辑 ──${re}" && echo ""
-        local er=1 es=1  # e1/e2 are taken by Argo, start at e3
-        if [ "$has_reality" = 1 ]; then
-            local rp rs; rp=$(jq -r '.inbounds[]|select(.tag=="reality")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
-            rs=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames[0]//empty' "$CONFIG_FILE" 2>/dev/null)
-            echo -e "  ${green}e3${re}. VLESS Reality    ${cyan}${rs}${re}  端口 ${cyan}${rp}${re}"
-        fi
-        if [ "$has_ss" = 1 ]; then
-            local sp sm; sp=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
-            sm=$(jq -r '.inbounds[]|select(.protocol=="shadowsocks")|.settings.method//empty' "$CONFIG_FILE" 2>/dev/null)
-            local en; [ "$has_reality" = 1 ] && en="e4" || en="e3"
-            echo -e "  ${green}${en}${re}. Shadowsocks       ${cyan}${sm}${re}  端口 ${cyan}${sp}${re}"
-        fi
-
-        # 可添加
-        [ "$has_reality" = 0 ] || [ "$has_ss" = 0 ] && echo "" && echo -e "  ${white}── 可添加 ──${re}" && echo ""
-        local aa=0
-        if [ "$has_reality" = 0 ]; then aa=$((aa+1)); echo -e "  ${cyan}a${aa}${re}. VLESS Reality"; fi
-        if [ "$has_ss" = 0 ]; then aa=$((aa+1)); echo -e "  ${cyan}a${aa}${re}. Shadowsocks"; fi
-
-        # 自定义节点
-        echo ""; echo -e "  ${white}── 自定义节点 (自添加) ──${re}"; echo ""
-        local custom_count=0
-        [ -f "${WORK_DIR}/custom_links.txt" ] && custom_count=$(grep -c '[^[:space:]]' "${WORK_DIR}/custom_links.txt" 2>/dev/null || echo 0)
-        [ -z "$custom_count" ] && custom_count=0
-        echo -e "  已有 ${cyan}${custom_count}${re} 个自定义链接"
-        echo ""
-        echo -e "  ${cyan}c1${re}. 添加自定义链接    ${cyan}c2${re}. 查看/删除自定义链接"
-        echo ""
-        echo -e "  ${purple}💡 Hysteria2 节点搭建建议${re}"
-        echo -e "  鉴于 Xray 内核对 Hy2 支持尚不完善 (sing-box 适配更佳)，推荐使用以下专属脚本搭建。"
-        echo -e "  搭建后，将节点链接使用上方 ${cyan}c1${re} 选项贴入，即可实现订阅聚合下发！"
-        echo -e "  ${white}安装命令: ${green}bash <(curl -fsSL https://git.io/hysteria.sh)${re}"
-
-        [ "$has_reality" = 1 ] || [ "$has_ss" = 1 ] && echo "" && echo -e "  ${red}d${re}. 删除可选节点"
-        echo ""; echo -e "  ${red}0${re}. 返回"
-        echo -e " ${purple}────────────────────────────────────────${re}"
-        echo -ne "  请输入: "; read ac; [ "$ac" = "0" ] && return
-
-        case "$ac" in
-            e1) edit_protocol "vless-ws" "VLESS + Argo" ;;
-            e2) edit_protocol "vmess-ws" "VMess + Argo" ;;
-            e3) if [ "$has_reality" = 1 ]; then edit_protocol "reality" "VLESS Reality"
-                elif [ "$has_ss" = 1 ]; then edit_protocol "ss" "Shadowsocks"; fi ;;
-            e4) [ "$has_ss" = 1 ] && [ "$has_reality" = 1 ] && edit_protocol "ss" "Shadowsocks" ;;
-            a1) if [ "$has_reality" = 0 ]; then add_single_protocol "reality"
-                elif [ "$has_ss" = 0 ]; then add_single_protocol "ss"; fi ;;
-            a2) [ "$has_ss" = 0 ] && [ "$has_reality" = 0 ] && add_single_protocol "ss" ;;
-            c1) add_custom_link ;;
-            c2) view_delete_custom_links ;;
-            d|D) delete_protocol ;;
-            *) red_msg "无效"; sleep 1; continue ;;
-        esac
-
-        load_conf
-        has_reality=0; has_ss=0
-        grep -qE '"tag"[[:space:]]*:[[:space:]]*"reality"' "$CONFIG_FILE" 2>/dev/null && has_reality=1
-        grep -q '"shadowsocks"' "$CONFIG_FILE" 2>/dev/null && has_ss=1
-    done
-}
 
 edit_protocol() {
     local tag="$1" label="$2" uuid; uuid=$(get_uuid)
     local cur_port cur_method cur_pass cur_sni cur_path rk=""
 
     case "$tag" in
-        vless-ws|vmess-ws)
-            cur_port=$(jq -r '.inbounds[]|select(.tag=="'"${tag}"'")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
-            cur_path=$(jq -r '.inbounds[]|select(.tag=="'"${tag}"'")|.streamSettings.wsSettings.path//empty' "$CONFIG_FILE" 2>/dev/null)
-            clear
-            echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
-            echo -e " ${purple}║${re}     ${white}编辑 ${label}${re}"
-            echo -e " ${purple}╚══════════════════════════════════════════╝${re}"; echo ""
-
-            echo -e " ${white}━━━ ① 内部端口 ━━━${re}"
-            echo -e "  ${yellow}仅 127.0.0.1，通过 Argo 隧道。当前: ${cyan}${cur_port}${re}"
-            echo -ne "  新端口 [回车保持]: "; read np ; local new_port="${np:-$cur_port}"
-            echo -e "  → ${green}${new_port}${re}\n"
-
-            echo -e " ${white}━━━ ② WS 路径 ━━━${re}"
-            echo -e "  ${yellow}当前: ${cyan}${cur_path}${re}"
-            echo -ne "  新路径 [回车保持]: "; read npt ; local new_path="${npt:-$cur_path}"
-            echo -e "  → ${green}${new_path}${re}\n"
-
-            echo -e " ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"
-            echo -e " ${white}确认：${re}  端口: ${cyan}${cur_port}${re} → ${green}${new_port}${re}"
-            echo -e "  路径: ${cyan}${cur_path}${re} → ${green}${new_path}${re}"
-            echo -e " ${purple}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${re}"; echo ""
-            echo -ne "  ${yellow}确认? (y/n) [y]: ${re}"; read cf
-            [ "$cf" = "n" ] || [ "$cf" = "N" ] && { yellow_msg "已取消。"; return; }
-
-            jq --argjson pt "$new_port" --arg p "$new_path" \
-               '(.inbounds[]|select(.tag=="'"${tag}"'")|.port)=$pt|(.inbounds[]|select(.tag=="'"${tag}"'")|.streamSettings.wsSettings.path)=$p' \
-               "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-            # 同步更新 fallback 路由中的 dest 和 path
-            local fb_path_old fb_path_new fb_tag
-            [ "$tag" = "vless-ws" ] && fb_tag="vless-argo" || fb_tag="vmess-argo"
-            fb_path_old="/${fb_tag}"; fb_path_new="$new_path"
-            jq --arg oldp "$fb_path_old" --arg newp "$fb_path_new" --argjson d "$new_port" \
-               '(.inbounds[]|select(.tag=="argo-in")|.settings.fallbacks)|=map(if .path==$oldp then {path:$newp,dest:$d} else . end)' \
-               "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-            [ "$tag" = "vless-ws" ] && VLESS_WS_PORT="$new_port" || VMESS_WS_PORT="$new_port"
-            save_conf; yellow_msg "重启 Xray..."; systemctl restart xray 2>/dev/null; sleep 2; get_status; green_msg "完成"
-            echo ""; echo -ne "  按回车继续..."; read -r
-            return ;;
+        vless-ws|vmess-ws) configure_argo_protocol edit "$tag"; return $? ;;
         reality)
             cur_port=$(jq -r '.inbounds[]|select(.tag=="reality")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
             cur_sni=$(jq -r '.inbounds[]|select(.tag=="reality")|.streamSettings.realitySettings.serverNames[0]//empty' "$CONFIG_FILE" 2>/dev/null)
@@ -5188,35 +5113,6 @@ add_single_protocol() {
     echo ""; echo -ne "  按回车返回..."; read -r
 }
 
-legacy_delete_protocol_unused() {
-    clear
-    local has_reality=0 has_ss=0
-    grep -qE '"tag"[[:space:]]*:[[:space:]]*"reality"' "$CONFIG_FILE" 2>/dev/null && has_reality=1
-    grep -q '"shadowsocks"' "$CONFIG_FILE" 2>/dev/null && has_ss=1
-    [ $((has_reality+has_ss)) = 0 ] && { echo ""; green_msg "无可删除。"; echo ""; echo -ne "  按回车返回..."; read -r; return; }
-
-    echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
-    echo -e " ${purple}║${re}         ${red}删除节点${re}                          ${purple}║${re}"
-    echo -e " ${purple}╚══════════════════════════════════════════╝${re}"; echo ""
-    local dd=0
-    [ "$has_reality" = 1 ] && dd=$((dd+1)) && echo -e "  ${red}${dd}${re}. VLESS Reality"
-    [ "$has_ss" = 1 ] && dd=$((dd+1)) && echo -e "  ${red}${dd}${re}. Shadowsocks"
-    echo -e "  ${cyan}0${re}. 返回"; echo -e " ${purple}────────────────────────────────────────${re}"
-    echo -ne "  选择: "; read dc ; [ "$dc" = "0" ] && return
-
-    local del_tag=""
-    [ "$dc" = "1" ] && [ "$has_reality" = 1 ] && del_tag="reality"
-    [ "$dc" = "1" ] && [ "$has_reality" = 0 ] && [ "$has_ss" = 1 ] && del_tag="ss"
-    [ "$dc" = "2" ] && [ "$has_ss" = 1 ] && del_tag="ss"
-    [ -z "$del_tag" ] && { red_msg "无效。"; return; }
-
-    echo ""; echo -ne "  ${red}⚠ 确认删除? (y/n): ${re}"; read cf; [ "$cf" != "y" ] && [ "$cf" != "Y" ] && { yellow_msg "已取消。"; return; }
-    jq 'del(.inbounds[]|select(.tag=="'"${del_tag}"'"))' "$CONFIG_FILE">"${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-    [ "$del_tag" = "reality" ] && ENABLE_REALITY=0
-    [ "$del_tag" = "ss" ] && ENABLE_SS=0
-    save_conf; systemctl restart xray 2>/dev/null; sleep 1; green_msg "已删除。"
-    echo ""; echo -ne "  按回车返回..."; read -r
-}
 
 #==============================================================================
 #==============================================================================
@@ -6292,6 +6188,61 @@ warp_view_clear() {
 }
 
 # === 核心：使用 Python3 安全改写 config.json，应用 WARP 分流 ===
+write_warp_routes() {
+    local mode="$1" policy="$2" py candidate domains_json
+    case "$policy:$mode" in
+        preserve-ipv6:socks5|replace:socks5|replace:ipv6|replace:smart) ;;
+        *) red_msg "无效的 WARP 分流模式。"; return 1 ;;
+    esac
+    py=$(py_bin); [ -n "$py" ] || return 1
+    domains_json=$(json_array_from_file "$WARP_DOMAIN_FILE") || return 1
+    if [ "$policy" = preserve-ipv6 ] && [ "$domains_json" = '[]' ]; then
+        yellow_msg "域名列表解析失败。"; return 1
+    fi
+    cp -p "$CONFIG_FILE" "${CONFIG_FILE}.bak" || return 1
+    candidate=$(mktemp "${CONFIG_FILE}.warp.XXXXXX") || return 1
+    if ! "$py" - "$CONFIG_FILE" "$candidate" "$mode" "$policy" "$domains_json" << 'PYEOF'
+import json, sys
+source, target, mode, policy, raw_domains = sys.argv[1:]
+with open(source, encoding='utf-8') as f:
+    config = json.load(f)
+domains = json.loads(raw_domains)
+removed = {'warp-out'} if policy == 'preserve-ipv6' else {'warp-out', 'v6-direct'}
+config['outbounds'] = [o for o in config['outbounds'] if o.get('tag') not in removed]
+rules = config.setdefault('routing', {}).setdefault('rules', [])
+rules = [r for r in rules if r.get('outboundTag') not in removed]
+warp = {'tag': 'warp-out', 'protocol': 'socks', 'settings': {'servers': [{'address': '127.0.0.1', 'port': 40000}]}}
+ipv6 = {'tag': 'v6-direct', 'protocol': 'freedom', 'settings': {'domainStrategy': 'UseIPv6'}}
+if mode == 'smart':
+    google = ['google.com', 'googleapis.com', 'googleusercontent.com', 'gstatic.com', 'ggpht.com', 'google-analytics.com', 'googletagmanager.com', 'googleadservices.com', 'googlesyndication.com', 'google.com.hk', 'google.cn']
+    youtube = ['youtube.com', 'ytimg.com', 'googlevideo.com']
+    config['outbounds'].extend([ipv6, warp])
+    rules[0:0] = [{'type': 'field', 'outboundTag': 'v6-direct', 'domain': google},
+                  {'type': 'field', 'outboundTag': 'warp-out', 'domain': youtube}]
+else:
+    outbound = warp if mode == 'socks5' else ipv6
+    config['outbounds'].append(outbound)
+    rules.insert(0, {'type': 'field', 'outboundTag': outbound['tag'], 'domain': domains})
+config['routing']['rules'] = rules
+with open(target, 'w', encoding='utf-8') as f:
+    json.dump(config, f, indent=2, ensure_ascii=False)
+PYEOF
+    then rm -f "$candidate"; return 1; fi
+    commit_xray_candidate "$candidate"
+}
+restart_warp_runtime() {
+    if restart_protocol_runtime xray; then
+        sleep 2
+        if systemctl is-active xray; then get_status; return 0; fi
+    fi
+    red_msg "Xray 启动失败，正在恢复分流前的配置。"
+    cp -p "${CONFIG_FILE}.bak" "$CONFIG_FILE" || {
+        red_msg "恢复失败，备份保留在 ${CONFIG_FILE}.bak，请检查磁盘和权限。"; return 1
+    }
+    restart_protocol_runtime xray || yellow_msg "原服务未能重新启动，请检查服务日志。"
+    sleep 2; get_status
+    return 1
+}
 warp_apply_routing() {
     [ ! -f "$WARP_DOMAIN_FILE" ] || [ ! -s "$WARP_DOMAIN_FILE" ] && { yellow_msg "分流域名列表为空，请先添加域名。"; echo ""; echo -ne "  按回车返回..."; read -r; return; }
     # 自动安装 WARP（如未安装）
@@ -6310,73 +6261,14 @@ warp_apply_routing() {
         echo ""; echo -ne "  按回车返回..."; read -r; return
     fi
 
-    # 读取域名列表
-    local domains_json; domains_json=$(json_array_from_file "$WARP_DOMAIN_FILE")
-    [ "$domains_json" = "[]" ] && { yellow_msg "域名列表解析失败。"; return; }
-
-    # 备份 config.json
-    cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
-    green_msg "已备份: ${CONFIG_FILE}.bak"
-
-    # 使用 Python3 安全改写 JSON
     yellow_msg "正在注入 WARP 出站与路由规则..."
-    python3 << PYEOF
-import json, sys
-
-CONFIG = '${CONFIG_FILE}'
-DOMAINS = ${domains_json}
-
-# 读取配置
-with open(CONFIG, 'r') as f:
-    config = json.load(f)
-
-# 1. 清理已有 warp-out 出站，重新注入
-config['outbounds'] = [o for o in config['outbounds'] if o.get('tag') != 'warp-out']
-warp_out = {
-    "tag": "warp-out",
-    "protocol": "socks",
-    "settings": {"servers": [{"address": "127.0.0.1", "port": 40000}]}
-}
-config['outbounds'].append(warp_out)
-
-# 2. 确保 routing 存在
-if 'routing' not in config:
-    config['routing'] = {'rules': []}
-if 'rules' not in config['routing']:
-    config['routing']['rules'] = []
-
-# 3. 移除已有 WARP 分流规则
-config['routing']['rules'] = [r for r in config['routing']['rules'] if r.get('outboundTag') != 'warp-out']
-
-# 4. 构造新分流规则并插入最顶部（最高优先级）
-warp_rule = {
-    "type": "field",
-    "outboundTag": "warp-out",
-    "domain": DOMAINS
-}
-config['routing']['rules'].insert(0, warp_rule)
-
-# 5. 格式化写回
-with open(CONFIG, 'w') as f:
-    json.dump(config, f, indent=2, ensure_ascii=False)
-
-print('CONFIG_OK')
-PYEOF
-
-    if python3 -c "import json; json.load(open('${CONFIG_FILE}'))" 2>/dev/null; then
-        green_msg "规则注入成功，重启 Xray..."
-        systemctl restart xray 2>/dev/null; sleep 2
-        if systemctl is-active xray; then
-            get_status; green_msg "WARP 分流已生效"
-            echo ""; echo -e "  ${cyan}分流域名:${re} ${white}$(tr '\n' ' ' < "$WARP_DOMAIN_FILE")${re}"
-        else
-            red_msg "Xray 启动失败！自动回滚备份。"
-            cp "${CONFIG_FILE}.bak" "$CONFIG_FILE"
-            systemctl restart xray 2>/dev/null; sleep 2; get_status
-        fi
+    write_warp_routes socks5 preserve-ipv6 || { red_msg "分流配置验证失败，原配置已保留。"; return 1; }
+    green_msg "已备份: ${CONFIG_FILE}.bak"
+    if restart_warp_runtime; then
+        green_msg "WARP 分流已生效"
+        echo ""; echo -e "  ${cyan}分流域名:${re} ${white}$(tr '\n' ' ' < "$WARP_DOMAIN_FILE")${re}"
     else
-        red_msg "JSON 写入不合法！自动回滚备份。"
-        cp "${CONFIG_FILE}.bak" "$CONFIG_FILE"
+        return 1
     fi
     echo ""; echo -ne "  按回车返回..."; read -r
 }
@@ -6418,9 +6310,6 @@ warp_switch_mode() {
     # 确保有域名列表
     [ ! -f "$WARP_DOMAIN_FILE" ] || [ ! -s "$WARP_DOMAIN_FILE" ] && { warp_add_defaults; }
 
-    # 备份
-    cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
-
     case "${mc:-1}" in
         1|2|3)
             # 安装所需 WARP 组件
@@ -6448,83 +6337,24 @@ warp_switch_mode() {
 
 # === Python3 分流写入（统一入口）===
 warp_py_apply() {
-    local mode="$1"
-
-    # 构建域名列表 (JSON-safe via json_array_from_file)
-    local all_domains; all_domains=$(json_array_from_file "$WARP_DOMAIN_FILE")
-    local google_list yt_list
-    google_list='["google.com","googleapis.com","googleusercontent.com","gstatic.com","ggpht.com","google-analytics.com","googletagmanager.com","googleadservices.com","googlesyndication.com","google.com.hk","google.cn"]'
-    yt_list='["youtube.com","ytimg.com","googlevideo.com"]'
-
-    local label
+    local mode="$1" label
     case "$mode" in
         socks5) label="SOCKS5 (全部域名 → warp-out)" ;;
-        ipv6)   label="IPv6 (全部域名 → v6-direct)" ;;
-        smart)  label="智能分流 (Google→IPv6, YouTube→SOCKS5)" ;;
+        ipv6) label="IPv6 (全部域名 → v6-direct)" ;;
+        smart) label="智能分流 (Google→IPv6, YouTube→SOCKS5)" ;;
+        *) red_msg "无效的 WARP 分流模式。"; return 1 ;;
     esac
     yellow_msg "应用: ${label}..."
-
-    python3 << PYEOF
-import json
-
-with open('${CONFIG_FILE}', 'r') as f:
-    config = json.load(f)
-
-# 清理旧出站和规则
-config['outbounds'] = [o for o in config['outbounds'] if o.get('tag') not in ('warp-out', 'v6-direct')]
-config.setdefault('routing', {}).setdefault('rules', [])
-config['routing']['rules'] = [r for r in config['routing']['rules']
-                              if r.get('outboundTag') not in ('warp-out', 'v6-direct')]
-
-mode = '${mode}'
-
-if mode == 'socks5':
-    # SOCKS5 — 全部走 warp-out
-    config['outbounds'].append({"tag":"warp-out","protocol":"socks","settings":{"servers":[{"address":"127.0.0.1","port":40000}]}})
-    config['routing']['rules'].insert(0, {"type":"field","outboundTag":"warp-out","domain":${all_domains}})
-
-elif mode == 'ipv6':
-    # IPv6 — 全部走 v6-direct
-    config['outbounds'].append({"tag":"v6-direct","protocol":"freedom","settings":{"domainStrategy":"UseIPv6"}})
-    config['routing']['rules'].insert(0, {"type":"field","outboundTag":"v6-direct","domain":${all_domains}})
-
-elif mode == 'smart':
-    # 智能分流：Google → IPv6, YouTube → SOCKS5
-    config['outbounds'].append({"tag":"v6-direct","protocol":"freedom","settings":{"domainStrategy":"UseIPv6"}})
-    config['outbounds'].append({"tag":"warp-out","protocol":"socks","settings":{"servers":[{"address":"127.0.0.1","port":40000}]}})
-    # Google → v6-direct (最高优先级)
-    config['routing']['rules'].insert(0, {"type":"field","outboundTag":"v6-direct","domain":${google_list}})
-    # YouTube → warp-out
-    config['routing']['rules'].insert(1, {"type":"field","outboundTag":"warp-out","domain":${yt_list}})
-
-with open('${CONFIG_FILE}', 'w') as f:
-    json.dump(config, f, indent=2, ensure_ascii=False)
-print('APPLY_OK')
-PYEOF
-
-    # 校验 JSON 合法性
-    if python3 -c "import json; json.load(open('${CONFIG_FILE}'))" 2>/dev/null; then
-        green_msg "规则注入成功，重启 Xray..."
-        systemctl restart xray 2>/dev/null; sleep 2
-        if systemctl is-active xray; then
-            get_status; green_msg "Xray 运行正常！"
-            echo ""
-            case "$mode" in
-                socks5) echo -e "  ${cyan}全部域名${re} → ${green}WARP SOCKS5${re}" ;;
-                ipv6)   echo -e "  ${cyan}全部域名${re} → ${green}WARP IPv6 直连${re}" ;;
-                smart)  echo -e "  ${cyan}Google${re}  → ${green}IPv6 直连${re} (免验证码)"
-                        echo -e "  ${cyan}YouTube${re} → ${purple}WARP SOCKS5${re} (防弹窗)" ;;
-            esac
-        else
-            red_msg "Xray 启动失败！JSON 虽然合法但配置有误，自动回滚备份。"
-            cp "${CONFIG_FILE}.bak" "$CONFIG_FILE"
-            systemctl restart xray 2>/dev/null; sleep 2
-            get_status
-        fi
-    else
-        red_msg "JSON 写入不合法！自动回滚备份。"
-        cp "${CONFIG_FILE}.bak" "$CONFIG_FILE"
-    fi
+    write_warp_routes "$mode" replace || { red_msg "分流配置验证失败，原配置已保留。"; return 1; }
+    restart_warp_runtime || return 1
+    green_msg "Xray 运行正常！"
+    echo ""
+    case "$mode" in
+        socks5) echo -e "  ${cyan}全部域名${re} → ${green}WARP SOCKS5${re}" ;;
+        ipv6) echo -e "  ${cyan}全部域名${re} → ${green}WARP IPv6 直连${re}" ;;
+        smart) echo -e "  ${cyan}Google${re}  → ${green}IPv6 直连${re} (免验证码)"
+               echo -e "  ${cyan}YouTube${re} → ${purple}WARP SOCKS5${re} (防弹窗)" ;;
+    esac
 }
 
 update_xray_core() {
@@ -6551,78 +6381,161 @@ update_xray_core() {
 #==============================================================================
 # 主菜单
 #==============================================================================
-add_argo_protocol() {
-    load_conf; clear
-    echo ""; echo -e " ${purple}╔══════════════════════════════════════════╗${re}"
-    echo -e " ${purple}║${re}    ${white}启用 Argo 隧道 (VLESS/VMess over CF)${re}       ${purple}║${re}"
-    echo -e " ${purple}╚══════════════════════════════════════════╝${re}"
-    echo ""
-
-    # 1. 下载 cloudflared
-    yellow_msg "下载 cloudflared..."
-    local cf_arch; cf_arch=$(cf_arch)
-    download_cloudflared_checked "$cf_arch" "${WORK_DIR}/argo" || { red_msg "下载失败"; return; }
-    chmod +x "${WORK_DIR}/argo"
-    green_msg "cloudflared 就绪"
-
-    # 2. 选择隧道模式
-    echo ""
-    echo -e "  ${yellow}隧道模式:${re}"
-    echo -e "  ${green}1${re}. 临时 (trycloudflare.com)    ${green}2${re}. 固定 Token"
-    echo -ne "  → [1]: "; read tt
-    case "${tt:-1}" in
-        2) echo -ne "  域名: "; read ARGO_FIXED_DOMAIN; echo -ne "  Token: "; read ARGO_AUTH
-           [ -n "$ARGO_FIXED_DOMAIN" ] && [ -n "$ARGO_AUTH" ] && ARGO_MODE="fixed-token" || ARGO_MODE="temp" ;;
-        *) ARGO_MODE="temp"; ARGO_AUTH="" ;;
-    esac
-    SKIP_ARGO=0
-
-    # 3. 确保默认端口
-    is_port "$ARGO_PORT" || ARGO_PORT=8080
-    is_port "$VLESS_WS_PORT" || VLESS_WS_PORT=8081
-    is_port "$VMESS_WS_PORT" || VMESS_WS_PORT=8082
-
-    # 4. 构建 Argo inbound (插入现有 Xray config)
-    local uuid; uuid=$(get_uuid)
-    [ -z "$uuid" ] && uuid="${UUID_CUSTOM:-$(rand_uuid)}" && UUID_CUSTOM="$uuid"
-    local argo_inbound json_saved
-    # 检查是否已有 Argo inbound
-    if jq -e '.inbounds[]|select(.tag=="argo-in")' "$CONFIG_FILE" >/dev/null 2>&1; then
-        yellow_msg "Argo 隧道已存在, 跳过 inbound 构建"
-        json_saved="[]"
-    else
-        # 保存现有可选协议
-        json_saved=$(jq -c '[.inbounds[] | select(.tag=="reality" or .tag=="hy2" or .tag=="ss")]' "$CONFIG_FILE" 2>/dev/null)
-        [ -z "$json_saved" ] && json_saved="[]"
-
-        # 用 jq 临时移除可选协议, 调用 build_xray_config 只生成 Argo 部分
-        local tmp_cfg; tmp_cfg=$(mktemp)
-        jq 'del(.inbounds[] | select(.tag=="reality" or .tag=="hy2" or .tag=="ss"))' "$CONFIG_FILE" > "$tmp_cfg" 2>/dev/null || cp "$CONFIG_FILE" "$tmp_cfg"
-        # 强制重置, 让 build_xray_config 生成完整 Argo 部分
-        ENABLE_REALITY=0; ENABLE_HY2=0; ENABLE_SS=0
-        REALITY_PORT=0; HY2_PORT=0; SS_PORT=0
-        cp "$tmp_cfg" "$CONFIG_FILE"
-        build_xray_config "$uuid" ""
-        rm -f "$tmp_cfg"
-    fi
-
-    # 5. 合并回已保存的协议
-    if [ "$json_saved" != "[]" ]; then
-        jq --argjson saved "$json_saved" '.inbounds += $saved' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-    fi
-    normalize_xray_reality_config 2>/dev/null || true
-
-    # 6. 重建隧道 + 启动
-    rebuild_tunnel "$ARGO_MODE"
-    save_conf
-    systemctl daemon-reload
-    systemctl enable xray argov-tunnel 2>/dev/null
-    systemctl restart xray argov-tunnel
-    sleep 3
-
-    green_msg "Argo 隧道已启用！"
-    echo -ne "  按回车..."; read -r
+prompt_argo_path() {
+    local target="$1" current="$2" tag="$3" value
+    while true; do
+        printf '  WS 路径 [%s，0 返回]: ' "$current"
+        IFS= read -r value || return 1
+        [[ "$value" = 0 || "${value,,}" = cancel ]] && return 1
+        value="${value:-$current}"
+        if [[ "$value" != /* || "$value" == *\?* || "$value" == *\#* || "$value" =~ [[:space:][:cntrl:]] ]]; then
+            red_msg "路径须以 / 开头，且不能包含空白、控制字符、? 或 #。"; continue
+        fi
+        if jq -e --arg tag "$tag" --arg path "$value" \
+            'any(.inbounds[]?; (.tag=="vless-ws" or .tag=="vmess-ws") and .tag!=$tag and .streamSettings.wsSettings.path==$path)' "$CONFIG_FILE" >/dev/null; then
+            red_msg "路径已被另一种 Argo 协议使用，请重新输入。"; continue
+        fi
+        printf -v "$target" '%s' "$value"; return 0
+    done
 }
+finish_argo_edit() {
+    local failed=0
+    [ "$EDIT_COMMITTED" != 1 ] && failed=1
+    if [ "$failed" = 1 ] && [ "$ARGO_EDIT_TUNNEL_CHANGED" = 1 ]; then
+        systemctl stop argov-tunnel >/dev/null 2>&1 || true
+        systemctl disable argov-tunnel >/dev/null 2>&1 || true
+    fi
+    finish_protocol_edit || return 1
+    if [ "$failed" = 1 ] && [ "$ARGO_EDIT_TUNNEL_CHANGED" = 1 ]; then
+        systemctl daemon-reload
+        [ "$ARGO_EDIT_TUNNEL_ENABLED" = 1 ] && systemctl enable argov-tunnel
+        [ "$ARGO_EDIT_TUNNEL_ACTIVE" = 1 ] && restart_protocol_runtime argov-tunnel
+    fi
+    return 0
+}
+configure_argo_protocol() {
+    (
+        load_conf
+        local action="$1" tag="$2" label verb port_var path_var
+        case "$tag" in
+            vless-ws) label="VLESS + Argo"; port_var=VLESS_WS_PORT; path_var=VLESS_WS_PATH ;;
+            vmess-ws) label="VMess + Argo"; port_var=VMESS_WS_PORT; path_var=VMESS_WS_PATH ;;
+            *) red_msg "未知 Argo 协议。"; return 1 ;;
+        esac
+        case "$action" in
+            add) verb=添加; argo_protocol_present "$tag" && { yellow_msg "${label} 已存在，可选择编辑。"; return 1; } ;;
+            edit|delete) [ "$action" = edit ] && verb=编辑 || verb=删除
+                argo_protocol_present "$tag" || { red_msg "${label} 未添加。"; return 1; } ;;
+            *) return 1 ;;
+        esac
+        local had_argo=0 reset_argo=false old_shared_port="" new_port="${!port_var}" new_path="${!path_var}" current_port="" candidate uuid argo
+        argo_enabled && had_argo=1
+        if [ "$ARGO_MODE" = skip ]; then
+            reset_argo=true
+            current_port=$(jq -r --arg tag "$tag" '.inbounds[]?|select(.tag==$tag)|.port' "$CONFIG_FILE")
+        fi
+        cyan_msg "${verb} ${label}"
+        if [ "$action" = add ]; then
+            [ "$tag" = vless-ws ] && ENABLE_VLESS_ARGO=1 || ENABLE_VMESS_ARGO=1
+            if [ "$had_argo" = 0 ]; then
+                if [ "$ARGO_MODE" = skip ]; then
+                    prompt_choice ARGO_MODE temp "Argo 隧道模式" temp fixed-token || return 1
+                    if [ "$ARGO_MODE" = fixed-token ]; then
+                        prompt_domain ARGO_FIXED_DOMAIN "$ARGO_FIXED_DOMAIN" "固定隧道域名" || return 1
+                        prompt_password ARGO_AUTH "$ARGO_AUTH" "Cloudflare Tunnel Token" || return 1
+                    fi
+                fi
+                old_shared_port=$(jq -r '.inbounds[]?|select(.tag=="argo-in")|.port' "$CONFIG_FILE")
+                prompt_port ARGO_PORT "$ARGO_PORT" "共享 Argo 内部端口" ARGO_PORT "$old_shared_port" || return 1
+            fi
+            while configured_port_conflict "$new_port" "$port_var" || { [ "$new_port" != "$current_port" ] && port_in_use_any "$new_port"; }; do
+                new_port=$((new_port+1)); is_port "$new_port" || { red_msg "没有可用端口。"; return 1; }
+            done
+        fi
+        if [ "$action" != delete ]; then
+            [ "$action" = edit ] && current_port="${!port_var}"
+            prompt_port new_port "$new_port" "${label} 内部端口（仅本机监听）" "$port_var" "$current_port" || return 1
+            prompt_argo_path new_path "$new_path" "$tag" || return 1
+            printf -v "$port_var" '%s' "$new_port"
+            printf -v "$path_var" '%s' "$new_path"
+            echo "  ${label}: 127.0.0.1:${new_port}  ${new_path}"
+            confirm_changes "保存以上 Argo 节点设置？" || return 1
+        else
+            confirm_changes "删除 ${label}？其他协议会保留" || return 1
+        fi
+
+        begin_protocol_edit xray argo || return 1
+        ARGO_EDIT_TUNNEL_CHANGED=0; ARGO_EDIT_TUNNEL_ACTIVE=0; ARGO_EDIT_TUNNEL_ENABLED=0
+        systemctl is-active argov-tunnel && ARGO_EDIT_TUNNEL_ACTIVE=1
+        if [ "$IS_ALPINE" = 1 ]; then
+            rc-update show default 2>/dev/null | grep -q 'argov-tunnel' && ARGO_EDIT_TUNNEL_ENABLED=1
+        else
+            command systemctl is-enabled --quiet argov-tunnel 2>/dev/null && ARGO_EDIT_TUNNEL_ENABLED=1
+        fi
+        trap finish_argo_edit EXIT
+        candidate=$(mktemp "${CONFIG_FILE}.edit.XXXXXX") || return 1
+        if [ "$action" = add ]; then
+            uuid=$(get_uuid); uuid="${uuid:-${UUID_CUSTOM:-$(rand_uuid)}}"
+            argo=$(build_argo_inbounds "$uuid") || { rm -f "$candidate"; return 1; }
+            jq --arg tag "$tag" --argjson argo "$argo" --argjson reset "$reset_argo" '
+                if $reset then .inbounds |= map(select(.tag!="argo-in" and .tag!="vless-ws" and .tag!="vmess-ws")) else . end |
+                any(.inbounds[]?; .tag=="argo-in") as $shared |
+                .inbounds += [$argo[]|select(.tag==$tag or (.tag=="argo-in" and ($shared|not)))]
+                ' "$CONFIG_FILE" > "$candidate" || { rm -f "$candidate"; return 1; }
+        elif [ "$action" = edit ]; then
+            jq --arg tag "$tag" --arg path "$new_path" --argjson port "$new_port" '
+                (.inbounds[]|select(.tag==$tag)|.port)=$port |
+                (.inbounds[]|select(.tag==$tag)|.streamSettings.wsSettings.path)=$path
+                ' "$CONFIG_FILE" > "$candidate" || { rm -f "$candidate"; return 1; }
+        else
+            jq --arg tag "$tag" '.inbounds |= map(select(.tag!=$tag))' "$CONFIG_FILE" > "$candidate" || { rm -f "$candidate"; return 1; }
+        fi
+        sync_argo_fallbacks "$candidate" || { rm -f "$candidate"; return 1; }
+        commit_xray_candidate "$candidate" || return 1
+        sync_xray_users || return 1
+        load_argo_state
+        save_conf || return 1
+        restart_protocol_runtime xray || { red_msg "Xray 重启失败。"; return 1; }
+        if argo_enabled && [ "$had_argo" = 0 ]; then
+            if [ ! -x "${WORK_DIR}/argo" ]; then
+                download_cloudflared_checked "$(cf_arch)" "${WORK_DIR}/argo" || return 1
+                chmod +x "${WORK_DIR}/argo"
+            fi
+            ARGO_EDIT_TUNNEL_CHANGED=1
+            rebuild_tunnel "$ARGO_MODE" || return 1
+            systemctl enable argov-tunnel || return 1
+            restart_protocol_runtime argov-tunnel || { red_msg "Argo 隧道启动失败。"; return 1; }
+        elif ! argo_enabled && [ "$had_argo" = 1 ]; then
+            ARGO_EDIT_TUNNEL_CHANGED=1
+            systemctl stop argov-tunnel || return 1
+            systemctl disable argov-tunnel || return 1
+        fi
+        EDIT_COMMITTED=1
+        start_sub_server >/dev/null 2>&1 || yellow_msg "节点已更新，订阅服务重建失败，请检查订阅服务日志。"
+        green_msg "${label} 已更新，请刷新客户端订阅。"
+    )
+}
+show_argo_protocol() {
+    load_conf
+    local tag="$1" uuid hd
+    argo_protocol_present "$tag" || { red_msg "此 Argo 协议未添加。"; return 1; }
+    jq -r --arg tag "$tag" '.inbounds[]|select(.tag==$tag)|"内部端口: \(.port)  WS 路径: \(.streamSettings.wsSettings.path)"' "$CONFIG_FILE"
+    [ "$ARGO_MODE" = fixed-token ] && hd="$ARGO_FIXED_DOMAIN" || hd=$(get_argo_domain)
+    [ -n "$hd" ] || { yellow_msg "尚未取得 Argo 域名，请稍后查看。"; return 1; }
+    uuid=$(get_uuid)
+    [ "$tag" = vless-ws ] && gen_vless_link "$uuid" "$hd" || gen_vmess_link "$uuid" "$hd"
+    echo
+}
+add_argo_protocol() {
+    local tag="${1:-}" choice
+    if [ -z "$tag" ]; then
+        echo "  1. VLESS + Argo    2. VMess + Argo    0. 返回"
+        IFS= read -r choice || return 1
+        case "$choice" in 1) tag=vless-ws ;; 2) tag=vmess-ws ;; *) return ;; esac
+    fi
+    configure_argo_protocol add "$tag"
+}
+
 
 add_hy2_protocol() {
     (
@@ -6665,11 +6578,13 @@ delete_protocol() {
 
     clear
     echo ""
-    echo -e " ${purple}Delete optional node${re}"
+    echo -e " ${purple}删除节点${re}"
     echo ""
     [ "$has_reality" = 1 ] && echo -e "  ${green}1${re}. Reality"
     [ "$has_hy2" = 1 ] && echo -e "  ${green}2${re}. Hysteria2"
     [ "$has_ss" = 1 ] && echo -e "  ${green}3${re}. Shadowsocks"
+    argo_protocol_present vless-ws && echo -e "  ${green}4${re}. VLESS + Argo"
+    argo_protocol_present vmess-ws && echo -e "  ${green}5${re}. VMess + Argo"
     echo -e "  ${red}0${re}. Back"
     echo -ne "  Select: "; read choice
 
@@ -6677,6 +6592,8 @@ delete_protocol() {
         1) [ "$has_reality" = 1 ] || return; tag="reality"; label="Reality"; ENABLE_REALITY=0; REALITY_PORT=0 ;;
         2) [ "$has_hy2" = 1 ] || return; tag="hy2"; label="Hysteria2"; ENABLE_HY2=0; HY2_PORT=0; HY2_MPORT="" ;;
         3) [ "$has_ss" = 1 ] || return; tag="ss"; label="Shadowsocks"; ENABLE_SS=0; SS_PORT=0 ;;
+        4) configure_argo_protocol delete vless-ws; return $? ;;
+        5) configure_argo_protocol delete vmess-ws; return $? ;;
         0) return ;;
         *) red_msg "Invalid."; sleep 1; return ;;
     esac
@@ -6702,7 +6619,6 @@ delete_protocol() {
     esac
     save_conf
     systemctl restart xray 2>/dev/null || true
-    rc-service xray restart 2>/dev/null || true
     sleep 1
     green_msg "Deleted."
 }
@@ -6723,18 +6639,28 @@ manage_protocols() {
         echo -e " ${purple}└────────────────────────────────────────┘${re}"
         echo ""
 
-        local vl_port vm_port has_argo=0
+        local vl_port vm_port vl_path vm_path has_argo=0
         vl_port=$(jq -r '.inbounds[]|select(.tag=="vless-ws")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
         vm_port=$(jq -r '.inbounds[]|select(.tag=="vmess-ws")|.port//empty' "$CONFIG_FILE" 2>/dev/null)
+        vl_path=$(jq -r '.inbounds[]|select(.tag=="vless-ws")|.streamSettings.wsSettings.path//empty' "$CONFIG_FILE" 2>/dev/null)
+        vm_path=$(jq -r '.inbounds[]|select(.tag=="vmess-ws")|.streamSettings.wsSettings.path//empty' "$CONFIG_FILE" 2>/dev/null)
+        [ "$ARGO_MODE" = skip ] && { vl_port=""; vm_port=""; }
         [ -n "$vl_port" ] || [ -n "$vm_port" ] && has_argo=1
 
-        if [ "$has_argo" = 1 ]; then
-            echo -e "  ${white}── Argo 隧道 ──${re}"
-            echo ""
-            echo -e "  ${green}e1${re}. VLESS + Argo    端口 ${cyan}${vl_port}${re}  路径 ${cyan}/vless-argo${re}"
-            echo -e "  ${green}e2${re}. VMess + Argo    端口 ${cyan}${vm_port}${re}  路径 ${cyan}/vmess-argo${re}"
-            echo ""
+        echo -e "  ${white}── Argo 隧道 · 独立管理 ──${re}"
+        if [ -n "$vl_port" ]; then
+            echo -e "  VLESS + Argo  端口 ${cyan}${vl_port}${re}  路径 ${cyan}${vl_path}${re}"
+            echo -e "  ${green}e1${re}. 编辑    ${cyan}v1${re}. 查看链接    ${red}d1${re}. 删除"
+        else
+            echo -e "  ${cyan}a4${re}. 添加 VLESS + Argo"
         fi
+        if [ -n "$vm_port" ]; then
+            echo -e "  VMess + Argo  端口 ${cyan}${vm_port}${re}  路径 ${cyan}${vm_path}${re}"
+            echo -e "  ${green}e2${re}. 编辑    ${cyan}v2${re}. 查看链接    ${red}d2${re}. 删除"
+        else
+            echo -e "  ${cyan}a5${re}. 添加 VMess + Argo"
+        fi
+        echo ""
 
         if [ "$has_reality" = 1 ] || [ "$has_hy2" = 1 ] || [ "$has_ss" = 1 ]; then
             echo -e "  ${white}── 可选协议 · 可编辑 ──${re}"
@@ -6760,10 +6686,9 @@ manage_protocols() {
             echo -e "  ${green}e5${re}. Shadowsocks       ${cyan}${sm}${re}  端口 ${cyan}${sp}${re}"
         fi
 
-        if [ "$has_argo" = 0 ] || [ "$has_reality" = 0 ] || [ "$has_hy2" = 0 ] || [ "$has_ss" = 0 ]; then
+        if [ "$has_reality" = 0 ] || [ "$has_hy2" = 0 ] || [ "$has_ss" = 0 ]; then
             echo ""; echo -e "  ${white}── 可添加 ──${re}"; echo ""
         fi
-        [ "$has_argo" = 0 ] && echo -e "  ${cyan}a0${re}. VLESS/VMess Argo (Cloudflare 隧道)"
         [ "$has_reality" = 0 ] && echo -e "  ${cyan}a1${re}. VLESS Reality"
         [ "$has_hy2" = 0 ] && echo -e "  ${cyan}a2${re}. Hysteria2"
         [ "$has_ss" = 0 ] && echo -e "  ${cyan}a3${re}. Shadowsocks"
@@ -6778,13 +6703,18 @@ manage_protocols() {
         echo ""
         echo -e "  ${purple}提示${re}: 内置 Hysteria2 会进入用户统计与限额；端口跳跃会用 UDP 转发到单监听端口。"
 
-        [ "$has_reality" = 1 ] || [ "$has_hy2" = 1 ] || [ "$has_ss" = 1 ] && echo "" && echo -e "  ${red}d${re}. 删除可选节点"
+        [ "$has_argo" = 1 ] || [ "$has_reality" = 1 ] || [ "$has_hy2" = 1 ] || [ "$has_ss" = 1 ] && echo "" && echo -e "  ${red}d${re}. 选择删除节点"
         echo ""; echo -e "  ${red}0${re}. 返回"
         echo -e " ${purple}────────────────────────────────────────${re}"
-        echo -ne "  请输入: "; read ac; [ "$ac" = "0" ] && return
+        echo -ne "  请输入: "; IFS= read -r ac || return; [ "$ac" = "0" ] && return
 
         case "$ac" in
-            e1|e2) [ "$has_argo" = 1 ] && { [ "$ac" = "e1" ] && edit_protocol "vless-ws" "VLESS + Argo" || edit_protocol "vmess-ws" "VMess + Argo"; } ;;
+            e1) [ -n "$vl_port" ] && edit_protocol "vless-ws" "VLESS + Argo" ;;
+            e2) [ -n "$vm_port" ] && edit_protocol "vmess-ws" "VMess + Argo" ;;
+            v1) show_argo_protocol vless-ws; echo -ne "  按回车返回..."; read -r ;;
+            v2) show_argo_protocol vmess-ws; echo -ne "  按回车返回..."; read -r ;;
+            d1) configure_argo_protocol delete vless-ws ;;
+            d2) configure_argo_protocol delete vmess-ws ;;
             e3) [ "$has_reality" = 1 ] && edit_protocol "reality" "VLESS Reality" ;;
             e4) [ "$has_hy2" = 1 ] && edit_hy2_protocol ;;
             e5) [ "$has_ss" = 1 ] && edit_protocol "ss" "Shadowsocks" ;;
@@ -6792,6 +6722,8 @@ manage_protocols() {
             a1) [ "$has_reality" = 0 ] && add_single_protocol "reality" ;;
             a2) [ "$has_hy2" = 0 ] && add_hy2_protocol ;;
             a3) [ "$has_ss" = 0 ] && add_single_protocol "ss" ;;
+            a4) [ -z "$vl_port" ] && add_argo_protocol vless-ws ;;
+            a5) [ -z "$vm_port" ] && add_argo_protocol vmess-ws ;;
             c1) add_custom_link ;;
             c2) view_delete_custom_links ;;
             d|D) delete_protocol ;;
@@ -7112,6 +7044,7 @@ delete_sb_protocol() {
 main_menu() {
     load_conf
     secure_work_dir_permissions
+    refresh_generated_helpers || yellow_msg "辅助脚本更新失败，已保留旧文件，请检查目录权限。"
     # 确保流量计数器已挂载（升级/重启后首次进入 ag 时补装）
     setup_traffic_counters 2>/dev/null || true
     collect_traffic 2>/dev/null || true
@@ -7163,7 +7096,7 @@ main_menu() {
         echo ""
         echo -e " ${purple}──────────────── ✦ 状态运维 ✦ ────────────────${re}"
         echo -e "  ${green}4${re}. ▶️  启动系统         ${red}5${re}. ⏹️  停止系统"
-        echo -e "  ${yellow}6${re}. 🔁 重启 Argo 隧道    ${yellow}7${re}. 🔄 重新安装 (保留数据)"
+        echo -e "  ${yellow}6${re}. 🔁 重启系统服务    ${yellow}7${re}. 🔄 重新安装 (保留数据)"
         echo -e "  ${cyan}8${re}. 🆙 更新管理脚本      ${red}9${re}. 🗑️  彻底卸载系统"
         echo -e "  ${purple}x${re}. 🚀 更新 Xray 内核    ${cyan}0${re}. 🚪 安全退出"
         echo -e " ${purple}───────────────────────────────────────────────${re}"
@@ -7179,9 +7112,12 @@ main_menu() {
                [ "$cf" = "y" ] || [ "$cf" = "Y" ] && { load_conf; do_install; }; echo -ne "  按回车返回..."; read -r ;;
             8) yellow_msg "拉取最新版..."
                local utmp; utmp=$(mktemp /tmp/argov.XXXXXX)
-               download_script_checked "https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh?r=$RANDOM$RANDOM" "$utmp" && bash "$utmp"; rm -f "$utmp"
-               start_sub_server >/dev/null 2>&1 &
-               start_sb_stats_service >/dev/null 2>&1 &
+               if download_script_checked "https://raw.githubusercontent.com/m2dumpling/ArgoV/main/argov.sh?r=$RANDOM$RANDOM" "$utmp"; then
+                   bash "$utmp"
+                   rm -f "$utmp"
+                   return
+               fi
+               rm -f "$utmp"
                clear; continue ;;
             x|X) update_xray_core ;;
             9) echo -ne "  ${red}⚠ 确定卸载? (y/n): ${re}"; read cf
@@ -7210,8 +7146,6 @@ migrate_argox_to_argov() {
         systemctl stop argox-tunnel argox-sub 2>/dev/null
         systemctl disable argox-tunnel argox-sub 2>/dev/null
         rm -f /etc/systemd/system/argox-tunnel.service /etc/systemd/system/argox-sub.service
-        rc-service argox-tunnel stop 2>/dev/null; rc-service argox-sub stop 2>/dev/null
-        rc-update del argox-tunnel default 2>/dev/null; rc-update del argox-sub default 2>/dev/null
         rm -f /etc/init.d/argox-tunnel /etc/init.d/argox-sub
         systemctl daemon-reload 2>/dev/null || true
         mv /etc/xray/argox-tunnel.sh /etc/xray/argov-tunnel.sh 2>/dev/null
@@ -7229,7 +7163,16 @@ migrate_argox_to_argov() {
     fi
 }
 
-migrate_argox_to_argov
-load_conf
-[ ! -f "$CONFIG_FILE" ] && interactive_install
-main_menu
+argov_main() {
+    migrate_argox_to_argov
+    load_conf
+    if [ ! -f "$CONFIG_FILE" ]; then
+        interactive_install || return 1
+    fi
+    main_menu
+}
+
+# 可作为函数库加载；文件执行、进程替换及管道输入仍走正常安装入口。
+if [[ "${BASH_SOURCE[0]:-}" == "$0" || -z "${BASH_SOURCE[0]:-}" ]]; then
+    argov_main "$@"
+fi
