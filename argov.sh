@@ -4169,6 +4169,18 @@ finish_protocol_edit() {
 commit_xray_candidate() {
     local candidate="$1" check_result
     jq empty "$candidate" >/dev/null 2>&1 || { rm -f "$candidate"; red_msg "配置 JSON 无效，未替换原文件。"; return 1; }
+    # 新版外部加载器仍检查文件后缀，-format json 不能代替 .json。
+    # 在原目录重命名，兼容 BusyBox mktemp，并保留相对路径的解析位置。
+    case "$candidate" in
+        *.json) ;;
+        *)
+            if [ -e "${candidate}.json" ]; then
+                rm -f "$candidate"; red_msg "候选配置文件名冲突，原配置未修改。"; return 1
+            fi
+            mv "$candidate" "${candidate}.json" || { rm -f "$candidate"; return 1; }
+            candidate="${candidate}.json"
+            ;;
+    esac
     if [ -x "${WORK_DIR}/xray" ]; then
         check_result=$("${WORK_DIR}/xray" run -test -format json -config "$candidate" 2>&1) || {
             printf '%s\n' "$check_result"; rm -f "$candidate"; red_msg "Xray 配置验证失败。"; return 1
@@ -6729,6 +6741,11 @@ manage_protocols() {
             d|D) delete_protocol ;;
             *) red_msg "无效"; sleep 1; continue ;;
         esac
+        local operation_status=$?
+        if [ "$operation_status" -ne 0 ] && [ -t 0 ]; then
+            echo -ne "  操作未完成或已取消，请查看上方提示；按回车返回..."
+            read -r
+        fi
         load_conf
     done
 }

@@ -81,6 +81,8 @@ seed() {
     mv "$TEST_ROOT/cfg.tmp" "$CONFIG_FILE"
     cat > "$WORK_DIR/xray" <<'BIN'
 #!/bin/sh
+for candidate; do :; done
+case "$candidate" in *.json) ;; *) echo 'unsupported config file extension' >&2; exit 1;; esac
 [ ! -f "$TEST_ROOT/reject-config" ]
 BIN
     chmod +x "$WORK_DIR/xray"
@@ -292,6 +294,28 @@ cmp "$CONFIG_FILE" "$TEST_ROOT/config.before" || exit 2
 cmp "$USER_CONF" "$TEST_ROOT/conf.before" || exit 3
 ''', "n\n")
 
+    def test_candidate_validation_requires_json_suffix_and_cleans_rejected_file(self):
+        self.shell(r'''
+seed
+cp "$CONFIG_FILE" "$TEST_ROOT/config.before"
+candidate=$(mktemp "${CONFIG_FILE}.edit.XXXXXX") || exit 1
+cp "$CONFIG_FILE" "$candidate"
+commit_xray_candidate "$candidate" || exit 7
+[ ! -e "$candidate" ] && [ ! -e "${candidate}.json" ] || exit 8
+candidate=$(mktemp "${CONFIG_FILE}.edit.XXXXXX") || exit 9
+cp "$CONFIG_FILE" "$candidate"
+touch "$TEST_ROOT/reject-config"
+if commit_xray_candidate "$candidate"; then exit 2; fi
+cmp "$CONFIG_FILE" "$TEST_ROOT/config.before" || exit 3
+[ ! -e "$candidate" ] && [ ! -e "${candidate}.json" ] || exit 4
+rm "$TEST_ROOT/reject-config"
+candidate="$TEST_ROOT/already.json"
+cp "$CONFIG_FILE" "$candidate"
+commit_xray_candidate "$candidate" || exit 5
+[ ! -e "$candidate" ] || exit 6
+''')
+        self.assertFalse(list(self.root.glob("config.json.edit.*")))
+
     @unittest.skipUnless(shutil.which("xray"), "Optional Xray binary is not on PATH")
     def test_crud_candidates_pass_real_core_validation(self):
         binary = shlex.quote(shutil.which("xray"))
@@ -347,6 +371,13 @@ configure_argo_protocol delete vless-ws || exit 4
             with self.subTest(vless=vl, vmess=vm):
                 self.shell(f'seed\nENABLE_VLESS_ARGO={vl}; ENABLE_VMESS_ARGO={vm}\nbuild_xray_config "$UUID_CUSTOM" "$UUID_CUSTOM" || exit 1\n')
                 cfg = self.config()
+                cfg["log"] = {"loglevel": "debug"}
+                # Recent Xray blocks private destinations by default. Allow only
+                # this test's loopback HTTP origin in the temporary server config.
+                for outbound in cfg["outbounds"]:
+                    if outbound["protocol"] == "freedom":
+                        outbound["settings"] = {"finalRules": [{"action": "allow", "network": "tcp",
+                                                                  "ip": ["127.0.0.1/32"], "port": origin.server_port}]}
                 ports = set()
                 for inbound in cfg["inbounds"]:
                     port = free_port()
@@ -369,7 +400,7 @@ configure_argo_protocol delete vless-ws || exit 4
                             protocol = inbound["protocol"]
                             socks_port = free_port()
                             user = {"id": UUID, "encryption": "none"} if protocol == "vless" else {"id": UUID, "alterId": 0, "security": "auto"}
-                            client_cfg = {"log": {"loglevel": "warning"}, "inbounds": [{"port": socks_port, "listen": "127.0.0.1", "protocol": "socks", "settings": {"auth": "noauth"}}],
+                            client_cfg = {"log": {"loglevel": "debug"}, "inbounds": [{"port": socks_port, "listen": "127.0.0.1", "protocol": "socks", "settings": {"auth": "noauth"}}],
                                           "outbounds": [{"protocol": protocol, "settings": {"vnext": [{"address": "127.0.0.1", "port": entry["port"], "users": [user]}]},
                                                          "streamSettings": {"network": "ws", "security": "none", "wsSettings": {"path": inbound["streamSettings"]["wsSettings"]["path"]}}}]}
                             client_path = self.root / "real-client.json"
@@ -400,6 +431,10 @@ configure_argo_protocol delete vless-ws || exit 4
                                                 break
                                             response += chunk
                                         self.assertIn(b"argov-fallback-ok", response)
+                                except Exception as error:
+                                    self.fail(f"{protocol} traffic failed: {error}\n"
+                                              f"server:\n{(self.root / 'server.log').read_text()}\n"
+                                              f"client:\n{(self.root / 'client.log').read_text()}")
                                 finally:
                                     stop(client)
                     finally:
